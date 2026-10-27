@@ -244,7 +244,7 @@ function XKeenStep({ onRetry }: { onRetry: () => void }) {
                 footer='Потребуются доступ к роутеру в домашней сети и готовая подписка или ссылка сервера. Не отключайте VPN компьютера, пока агент не проверит альтернативный доступ.'
             >
                 <a
-                    href='https://github.com/Sgadmer/xkeen-panel/blob/v3.0.0-beta.1/docs/installation.md'
+                    href='https://github.com/Sgadmer/xkeen-panel/blob/v3.0.0-beta.2/docs/installation.md'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='flex min-h-12 items-center py-3 text-[15px] text-tint'

@@ -21,7 +21,7 @@ import (
 type object = map[string]interface{}
 
 func Handler(frontend fs.FS) http.Handler {
-	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.0-beta.1", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
+	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.0-beta.2", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
 	servers := []object{{"id": 0, "name": "Нидерланды · основной", "address": "nl.example.com", "port": 443, "protocol": "vless", "active": true, "latency_ms": 48, "country": "NL", "probe_kind": "https"}, {"id": 1, "name": "Германия · резервный", "address": "de.example.com", "port": 443, "protocol": "vless", "active": false, "latency_ms": 61, "country": "DE", "probe_kind": "https"}, {"id": 2, "name": "Финляндия", "address": "fi.example.com", "port": 443, "protocol": "vless", "active": false, "latency_ms": 74, "country": "FI", "probe_kind": "https"}}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -64,7 +64,7 @@ func Handler(frontend fs.FS) http.Handler {
 			case "/api/account/passkey":
 				data = object{"passkeys": []string{}}
 			case "/api/update":
-				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "current": "v3.0.0-beta.1", "supported": true, "available": false, "auto": false, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
+				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "channel": "preview", "current": "v3.0.0-beta.2", "latest": object{"tag": "v3.0.0-beta.2", "prerelease": true, "url": "https://github.com/Sgadmer/xkeen-panel/releases/tag/v3.0.0-beta.2"}, "supported": true, "available": false, "auto": false, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
 			case "/api/setup/state":
 				data = object{"xkeen_installed": true, "xkeen_version": "2.1 Stable", "core": "xray", "core_running": true, "autostart": true, "subscription": true, "servers": 3, "configured": true, "pool_nodes": 2, "router_api": true, "policy_found": true, "devices_in_vpn": 2, "new_devices_vpn": false, "watchdog": true, "complete": true, "routing_mode_configured": true}
 			case "/api/logs":

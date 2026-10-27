@@ -3,6 +3,7 @@ package components
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -61,12 +62,82 @@ func sourceForFilename(name string) (GeoSource, bool) {
 	}
 	return GeoSource{}, false
 }
-func (m *Manager) geodataPath(source GeoSource) string {
+func (m *Manager) logicalGeodataPath(source GeoSource) string {
 	rt := m.runtime()
 	if source.Kind == "GeoIPSET" {
 		return filepath.Join(filepath.Dir(rt.XkeenJSON), "ipset", source.Filename)
 	}
 	return filepath.Join(filepath.Dir(rt.XrayConfDir), "dat", source.Filename)
+}
+
+// These two aliases are created by existing XKeen installations. Keep their
+// native targets in use so an XKeen refresh and a panel refresh update one file.
+// No other symlink is allowed to redirect a component transaction.
+func (m *Manager) nativeGeoAliases() map[string]string {
+	dir := filepath.Join(filepath.Dir(m.runtime().XrayConfDir), "dat")
+	return map[string]string{
+		filepath.Join(dir, "geosite_zkeen.dat"): filepath.Join(dir, "zkeen.dat"),
+		filepath.Join(dir, "geoip_zkeenip.dat"): filepath.Join(dir, "zkeenip.dat"),
+	}
+}
+
+func (m *Manager) nativeGeoLinkTarget(path, link string) (string, bool) {
+	expected, ok := m.nativeGeoAliases()[filepath.Clean(path)]
+	if !ok || link == "" {
+		return "", false
+	}
+	// Accept the native absolute form and a direct basename only. Cleaning
+	// parent segments could disguise a path through an intermediate symlink.
+	if link != expected && link != filepath.Base(expected) {
+		return "", false
+	}
+	return expected, true
+}
+
+func (m *Manager) trustedGeoLink(path string) (string, string, error) {
+	link, err := os.Readlink(path)
+	if err != nil {
+		return "", "", err
+	}
+	target, ok := m.nativeGeoLinkTarget(path, link)
+	if !ok {
+		return "", "", fmt.Errorf("неподдерживаемая ссылка в управляемой геобазе")
+	}
+	// Only a single hop to the exact known filename is supported. A missing
+	// native file may be downloaded, and its previous absence is backed up.
+	if info, err := os.Lstat(target); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", "", fmt.Errorf("неподдерживаемая цель ссылки геобазы")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", "", err
+	}
+	return target, link, nil
+}
+
+func (m *Manager) geodataWritePath(source GeoSource) (string, error) {
+	path := m.logicalGeodataPath(source)
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, _, err := m.trustedGeoLink(path)
+			return target, err
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("необычный файл вместо геобазы")
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	return path, nil
+}
+
+func (m *Manager) geodataPath(source GeoSource) string {
+	path, err := m.geodataWritePath(source)
+	if err != nil {
+		// Planning/capture will reject the original unsafe link before mutation.
+		return m.logicalGeodataPath(source)
+	}
+	return path
 }
 func (m *Manager) SetGeodata(s GeoSettings) error {
 	if e := validateGeo(s); e != nil {

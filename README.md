@@ -131,6 +131,12 @@ GeoIP и GeoSite являются наборами данных, а не авт�
 ветку: получить upstream, разрешить конфликты, выполнить тесты и выпустить
 наш релиз. Роутеры не устанавливают непроверенный код upstream напрямую.
 
+Установленная beta проверяет опубликованные предварительные и стабильные
+версии панели. Стабильная сборка выбирает только стабильные выпуски. Отсутствие
+стабильного релиза само по себе не является ошибкой проверки. Каталоги XKeen/Xray
+загружаются небольшими страницами; штатные ссылки геобаз ZKeen сохраняются при
+создании резервной копии и обновлении их целевых файлов.
+
 ## Как потом открыть панель
 
 После установки агент показывает **ваш фактический адрес**, а раздел
@@ -172,7 +178,7 @@ cd ..
 go test ./...
 python3 -m unittest discover -s installer/tests -v
 python3 scripts/check-public-source.py
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w -X xkeen-panel/internal/version.Version=v3.0.0-beta.1' -o build/xkeen-panel-aarch64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w -X xkeen-panel/internal/version.Version=v3.0.0-beta.2' -o build/xkeen-panel-aarch64 .
 ```
 
 Для демонстрации реального интерфейса с синтетическими данными запустите

@@ -39,6 +39,7 @@ type Settings struct {
 
 type State struct {
 	Repository  string    `json:"repository"`
+	Channel     string    `json:"channel"`
 	Locked      bool      `json:"locked"`
 	Current     string    `json:"current"`
 	Latest      *Release  `json:"latest,omitempty"`
@@ -193,6 +194,7 @@ func (u *Updater) stateLocked() State {
 
 	state := State{
 		Repository:  u.repo,
+		Channel:     u.updateChannel(),
 		Current:     u.current,
 		Latest:      u.latest,
 		Supported:   supported,
@@ -243,7 +245,11 @@ func (u *Updater) Check(ctx context.Context) (State, error) {
 		u.checkErr = err.Error()
 	} else {
 		u.checkErr = ""
-		u.latest = &release
+		if release.Tag == "" {
+			u.latest = nil
+		} else {
+			u.latest = &release
+		}
 	}
 	state := u.stateLocked()
 	u.mu.Unlock()

@@ -116,6 +116,7 @@ export function UpdatePage() {
 
             <Group footer='Здесь обновляется только панель. Версии XKeen, Xray и геобазы управляются в разделе «Компоненты».'>
                 <Row label='Источник обновлений' detail={u.repository ?? 'Sgadmer/xkeen-panel'} />
+                <Row label='Канал обновлений' detail={u.channel === 'preview' ? 'Стабильные и предварительные' : 'Стабильные'} hint={u.channel === 'preview' ? 'Установлена beta: проверяются опубликованные beta и стабильные версии.' : 'Предварительные версии автоматически не выбираются.'} />
             </Group>
 
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
@@ -191,7 +192,7 @@ export function UpdatePage() {
                         </>
                     ) : (
                         <Row
-                            label='Установлена последняя версия'
+                            label={error ? 'Не удалось проверить обновления' : !lastCheck ? 'Проверка ещё не выполнялась' : !u.latest ? 'Совместимых релизов пока нет' : 'Установлена последняя версия'}
                             hint={
                                 lastCheck ? `Проверено ${lastCheck}` : undefined
                             }

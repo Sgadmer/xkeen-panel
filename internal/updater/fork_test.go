@@ -35,6 +35,7 @@ func TestForkUpdatesAreOptInAndStayInOwnRepository(t *testing.T) {
 	}
 	for _, raw := range []string{
 		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases/latest",
+		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases?per_page=100",
 		"https://github.com/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
 	} {
 		if !trustedUpdateURL(raw, DefaultRepo) {
@@ -46,6 +47,8 @@ func TestForkUpdatesAreOptInAndStayInOwnRepository(t *testing.T) {
 		"http://github.com/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
 		"https://github.com.attacker.invalid/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
 		"https://user@github.com/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
+		"https://api.github.com/repos/Dearonski/xkeen-panel/releases?per_page=100",
+		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases?per_page=100&redirect=elsewhere",
 	} {
 		if trustedUpdateURL(raw, DefaultRepo) {
 			t.Fatal("accepted unrelated release")

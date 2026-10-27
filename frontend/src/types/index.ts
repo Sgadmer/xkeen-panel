@@ -168,6 +168,7 @@ export type ApiError = {
 
 export type UpdateState = {
     repository?: string
+    channel?: 'stable' | 'preview'
     current: string
     locked: boolean
     latest?: {

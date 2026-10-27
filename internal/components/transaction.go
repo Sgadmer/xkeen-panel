@@ -35,6 +35,7 @@ type backupEntry struct {
 	Exists    bool              `json:"exists"`
 	Mode      uint32            `json:"mode"`
 	Directory bool              `json:"directory"`
+	Link      string            `json:"link,omitempty"`
 	Hashes    map[string]string `json:"hashes"`
 }
 type backupDocument struct {
@@ -53,7 +54,7 @@ func (m *Manager) managedPaths(component string) []string {
 	switch component {
 	case "geodata":
 		for _, source := range GeoSources() {
-			paths = append(paths, m.geodataPath(source))
+			paths = append(paths, m.logicalGeodataPath(source))
 		}
 	case "xray":
 		paths = append(paths, rt.CoreBin)
@@ -63,7 +64,12 @@ func (m *Manager) managedPaths(component string) []string {
 			paths = append(paths, m.path(p))
 		}
 		for _, source := range GeoSources() {
-			paths = append(paths, m.geodataPath(source))
+			paths = append(paths, m.logicalGeodataPath(source))
+		}
+	}
+	if component == "geodata" || component == "xkeen" || component == "rollback" || component == "settings" {
+		for _, target := range m.nativeGeoAliases() {
+			paths = append(paths, target)
 		}
 	}
 	result := []string{}
@@ -88,7 +94,8 @@ func (m *Manager) snapshotBytes(component string) (int64, error) {
 				return e
 			}
 			if info.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("неподдерживаемая ссылка")
+				_, _, e := m.trustedGeoLink(path)
+				return e
 			}
 			if !info.IsDir() {
 				if !info.Mode().IsRegular() {
@@ -156,6 +163,12 @@ func verifyBackupPayload(path string, entry backupEntry) error {
 	if !entry.Exists {
 		return nil
 	}
+	if entry.Link != "" {
+		if entry.Directory || len(entry.Hashes) != 0 {
+			return fmt.Errorf("повреждена ссылка в резервной копии")
+		}
+		return nil
+	}
 	for relative, wanted := range entry.Hashes {
 		if relative != "." && (!safeRelative(relative) || strings.Contains(relative, ":")) {
 			return fmt.Errorf("повреждена резервная копия")
@@ -199,7 +212,13 @@ func (m *Manager) captureBackup(component, version string) (Backup, error) {
 		}
 		if e == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
-				return b, fmt.Errorf("символьная ссылка вместо управляемого файла")
+				_, entry.Link, e = m.trustedGeoLink(path)
+				if e != nil {
+					return b, e
+				}
+				entry.Exists = true
+				b.Entries = append(b.Entries, entry)
+				continue
 			}
 			entry.Exists = true
 			entry.Mode = uint32(info.Mode().Perm())
@@ -248,6 +267,24 @@ func (m *Manager) readBackup(id string) (Backup, error) {
 			return Backup{}, fmt.Errorf("резервная копия содержит неизвестный путь")
 		}
 		seen[entry.Path] = true
+		if entry.Link != "" {
+			if _, ok := m.nativeGeoLinkTarget(entry.Path, entry.Link); !ok || !entry.Exists || entry.Directory || len(entry.Hashes) != 0 {
+				return Backup{}, fmt.Errorf("резервная копия содержит неизвестную ссылку")
+			}
+		}
+	}
+	for _, entry := range doc.Entries {
+		if entry.Link != "" {
+			target, _ := m.nativeGeoLinkTarget(entry.Path, entry.Link)
+			if !seen[target] {
+				return Backup{}, fmt.Errorf("в резервной копии нет цели ссылки геобазы")
+			}
+			for _, candidate := range doc.Entries {
+				if candidate.Path == target && (candidate.Directory || candidate.Link != "") {
+					return Backup{}, fmt.Errorf("повреждена цель ссылки в резервной копии")
+				}
+			}
+		}
 	}
 	return Backup{ID: doc.ID, Component: doc.Component, Version: doc.Version, Created: doc.Created, Entries: doc.Entries, Kernel: doc.Kernel, Fingerprint: doc.Fingerprint}, nil
 }
@@ -304,9 +341,28 @@ func (m *Manager) restoreBackup(backup Backup) error {
 		if e = verifyBackupPayload(filepath.Join(dir, fmt.Sprint(i)), entry); e != nil {
 			return e
 		}
+		if entry.Link != "" {
+			if info, e := os.Lstat(entry.Path); e == nil && info.IsDir() {
+				return fmt.Errorf("вместо ссылки геобазы появился каталог")
+			} else if e != nil && !os.IsNotExist(e) {
+				return e
+			}
+		}
+		if !entry.Exists {
+			if info, err := os.Lstat(entry.Path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+				link, err := os.Readlink(entry.Path)
+				if _, ok := m.nativeGeoLinkTarget(entry.Path, link); err != nil || !ok {
+					return fmt.Errorf("путь изменился после резервирования")
+				}
+			}
+		}
 	}
 	for i, entry := range validated.Entries {
-		if entry.Directory && entry.Exists {
+		if entry.Link != "" {
+			if e = restoreGeoLink(entry.Path, entry.Link); e != nil {
+				return e
+			}
+		} else if entry.Directory && entry.Exists {
 			if info, e := os.Lstat(entry.Path); e == nil && info.Mode()&os.ModeSymlink != 0 {
 				return fmt.Errorf("путь изменился после резервирования")
 			}
@@ -328,7 +384,12 @@ func (m *Manager) restoreBackup(backup Backup) error {
 		} else {
 			if info, e := os.Lstat(entry.Path); e == nil {
 				if info.Mode()&os.ModeSymlink != 0 {
-					return fmt.Errorf("путь изменился после резервирования")
+					// A post-update may create this exact standard alias. Its
+					// absence is restored by unlinking it, never following it.
+					if e = os.Remove(entry.Path); e != nil {
+						return e
+					}
+					continue
 				}
 				if e = os.RemoveAll(entry.Path); e != nil {
 					return e
@@ -337,6 +398,24 @@ func (m *Manager) restoreBackup(backup Backup) error {
 		}
 	}
 	return m.restoreKernelIPv6(validated.Kernel)
+}
+
+func restoreGeoLink(path, link string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".component-link-")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	_ = temp.Close()
+	_ = os.Remove(name)
+	defer os.Remove(name)
+	if err = os.Symlink(link, name); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 func configFingerprint(rt xkeen.Runtime, settings string) (string, error) {
@@ -557,7 +636,11 @@ func (m *Manager) installPayload(ctx context.Context, plan Plan, work string) er
 			if !ok {
 				return fmt.Errorf("неизвестный файл геобазы")
 			}
-			if e = atomicWrite(m.geodataPath(source), body, 0644); e != nil {
+			target, e := m.geodataWritePath(source)
+			if e != nil {
+				return e
+			}
+			if e = atomicWrite(target, body, 0644); e != nil {
 				return e
 			}
 		}
@@ -604,7 +687,10 @@ func (m *Manager) verifyXkeenPreserved(backup Backup) error {
 	rt := m.runtime()
 	protected := map[string]bool{rt.XrayConfDir: true, filepath.Join(m.opts.DataDir, "pool.json"): true, filepath.Join(m.opts.DataDir, "subscription.json"): true, filepath.Join(m.opts.DataDir, "routing-mode.json"): true, filepath.Join(m.opts.DataDir, "exclusions.json"): true, m.path("/opt/var/spool/cron/crontabs/root"): true}
 	for _, source := range GeoSources() {
-		protected[m.geodataPath(source)] = true
+		protected[m.logicalGeodataPath(source)] = true
+	}
+	for _, target := range m.nativeGeoAliases() {
+		protected[target] = true
 	}
 	for _, entry := range backup.Entries {
 		if !protected[entry.Path] {
@@ -615,6 +701,19 @@ func (m *Manager) verifyXkeenPreserved(backup Backup) error {
 				return fmt.Errorf("регистрация XKeen создала незапрошенные настройки или геобазы")
 			}
 			continue
+		}
+		if entry.Link != "" {
+			link, e := os.Readlink(entry.Path)
+			if e != nil || link != entry.Link {
+				return fmt.Errorf("регистрация XKeen изменила ссылку рабочей геобазы")
+			}
+			if _, _, e := m.trustedGeoLink(entry.Path); e != nil {
+				return e
+			}
+			continue
+		}
+		if info, e := os.Lstat(entry.Path); e != nil || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("регистрация XKeen изменила тип рабочей геобазы или конфигурации")
 		}
 		for relative, wanted := range entry.Hashes {
 			target := entry.Path

@@ -18,7 +18,13 @@ import (
 	"time"
 )
 
-const maxArtifact = 128 << 20
+const (
+	maxArtifact      = 128 << 20
+	catalogPageSize  = 5
+	catalogMaxPages  = 10 // The latest 50 releases, matching the former catalog window.
+	catalogPageLimit = 4 << 20
+	catalogTimeout   = 30 * time.Second
+)
 
 type Asset struct {
 	Name   string `json:"name"`
@@ -63,7 +69,7 @@ func officialRepo(component string) (string, error) {
 	return "", fmt.Errorf("неизвестный компонент")
 }
 
-func (m *Manager) request(ctx context.Context, address string, limit int64) ([]byte, error) {
+func (m *Manager) openRequest(ctx context.Context, address string) (*http.Response, error) {
 	u, err := url.Parse(address)
 	if err != nil || !m.allowedURL(u) {
 		return nil, fmt.Errorf("источник загрузки не разрешён")
@@ -78,13 +84,22 @@ func (m *Manager) request(ctx context.Context, address string, limit int64) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("источник обновления недоступен")
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		if resp.StatusCode == 403 || resp.StatusCode == 429 {
 			return nil, fmt.Errorf("GitHub ограничил запросы; повторите позже")
 		}
 		return nil, fmt.Errorf("источник обновления ответил HTTP %d", resp.StatusCode)
 	}
+	return resp, nil
+}
+
+func (m *Manager) request(ctx context.Context, address string, limit int64) ([]byte, error) {
+	resp, err := m.openRequest(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil || int64(len(b)) > limit {
 		return nil, fmt.Errorf("ответ обновления слишком большой или повреждён")
@@ -109,6 +124,51 @@ func (m *Manager) allowedURL(u *url.URL) bool {
 	return false
 }
 
+// GitHub release objects include notes and every platform's assets. Xray's
+// 50-release response exceeds several MiB. Decode one small page and one object
+// at a time; the list UI does not need to retain asset metadata or release notes.
+// Exact-version lookup below still fetches and verifies the selected assets.
+func decodeCatalogPage(body io.Reader) ([]Release, error) {
+	limited := &io.LimitedReader{R: body, N: catalogPageLimit + 1}
+	decoder := json.NewDecoder(limited)
+	malformed := func() ([]Release, error) {
+		if limited.N == 0 {
+			return nil, fmt.Errorf("страница списка версий слишком большая")
+		}
+		return nil, fmt.Errorf("список версий не разобран")
+	}
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('[') {
+		return malformed()
+	}
+	var result []Release
+	for decoder.More() {
+		var item Release // Assets use json:"-": do not cache platform payload metadata.
+		if err := decoder.Decode(&item); err != nil || len(result) >= catalogPageSize {
+			return malformed()
+		}
+		result = append(result, item)
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim(']') {
+		return malformed()
+	}
+	if err := decoder.Decode(new(interface{})); err != io.EOF || limited.N == 0 {
+		return malformed()
+	}
+	return result, nil
+}
+
+func catalogChannel(releases []Release, channel string) []Release {
+	result := []Release{}
+	for _, r := range releases {
+		if !r.Draft && tagPattern.MatchString(r.Version) && (channel == "all" || channel == "stable" && !r.Prerelease || channel == "prerelease" && r.Prerelease) {
+			result = append(result, r)
+		}
+	}
+	return result
+}
+
 func (m *Manager) Releases(ctx context.Context, component, channel string) ([]Release, error) {
 	repo, err := officialRepo(component)
 	if err != nil {
@@ -122,27 +182,34 @@ func (m *Manager) Releases(ctx context.Context, component, channel string) ([]Re
 	cached, ok := m.catalog[key]
 	m.mu.Unlock()
 	if ok && time.Since(cached.at) < 15*time.Minute {
-		return append([]Release(nil), cached.releases...), nil
+		return append([]Release{}, cached.releases...), nil
 	}
-	b, err := m.request(ctx, m.apiBase+"/repos/"+repo+"/releases?per_page=50", 4<<20)
-	if err != nil {
-		return nil, err
-	}
-	var incoming []githubRelease
-	if json.Unmarshal(b, &incoming) != nil {
-		return nil, fmt.Errorf("список версий не разобран")
-	}
-	var result []Release
-	for _, r := range incoming {
-		if !r.Draft && tagPattern.MatchString(r.Version) && (channel == "all" || channel == "stable" && !r.Prerelease || channel == "prerelease" && r.Prerelease) {
-			result = append(result, r.release())
+	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
+	defer cancel()
+	var incoming []Release
+	for page := 1; page <= catalogMaxPages; page++ {
+		address := fmt.Sprintf("%s/repos/%s/releases?per_page=%d&page=%d", m.apiBase, repo, catalogPageSize, page)
+		resp, err := m.openRequest(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+		batch, err := decodeCatalogPage(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		incoming = append(incoming, batch...)
+		if len(batch) < catalogPageSize {
+			break
 		}
 	}
-	if result == nil {
-		result = []Release{}
-	}
 	m.mu.Lock()
-	m.catalog[key] = catalogCache{time.Now(), result}
+	// A channel switch uses the same fetched window instead of spending another
+	// set of unauthenticated GitHub requests and retaining duplicate asset lists.
+	for _, kind := range []string{"stable", "prerelease", "all"} {
+		m.catalog[component+":"+kind] = catalogCache{time.Now(), catalogChannel(incoming, kind)}
+	}
+	result := append([]Release{}, m.catalog[key].releases...)
 	m.mu.Unlock()
 	return result, nil
 }
