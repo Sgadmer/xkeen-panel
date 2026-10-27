@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { IconLoader2 } from '@tabler/icons-react'
-import { Group, PageTitle, Row } from '@/components/ios'
+import { Group, PageTitle, Row, Switch } from '@/components/ios'
+import { SettingChangeDialog, type SettingChange } from '@/components/settingChangeDialog'
 import { api } from '@/lib/api'
 
 interface Release { tag_name: string; name: string; prerelease: boolean; published_at: string }
@@ -19,7 +20,10 @@ interface ComponentsState {
 interface Preview {
     id: string; component: string; version: string; expires: string; warnings: string[]; required_bytes: number
     artifacts: { name: string; sha256: string; size: number; repository: string; version: string }[]
+    change?: SettingChange
 }
+interface SettingIntent { setting: Setting; desired: boolean; sequence: number }
+interface PendingSetting { setting: Setting; current: boolean; jobId: string }
 
 const field = 'min-h-11 w-full rounded-xl border border-white/10 bg-fill px-3 py-2 text-[16px] outline-none focus:border-tint disabled:opacity-50'
 const button = 'min-h-11 cursor-pointer rounded-xl bg-primary px-4 text-[15px] font-semibold text-primary-foreground disabled:cursor-default disabled:opacity-50'
@@ -28,6 +32,8 @@ const phases: Record<string, string> = {
     apply: 'Применяем изменения', restart: 'Восстанавливаем соединение и выбранный сервер', rollback: 'Восстанавливаем резервную копию', complete: 'Готово', failed: 'Операция не выполнена',
     recovering: 'Восстанавливаем состояние после прерванной операции',
 }
+const componentNames: Record<string, string> = { xkeen: 'XKeen', xray: 'Xray', geodata: 'Геобазы', settings: 'Параметр XKeen' }
+const componentName = (component: string) => componentNames[component] || 'Компонент'
 
 export function ComponentsPage() {
     const qc = useQueryClient()
@@ -36,6 +42,9 @@ export function ComponentsPage() {
     const [geo, setGeo] = useState<GeoSettings>({ sources: [], auto: false, day: -1, hour: 4, minute: 0 })
     const [dirty, setDirty] = useState(false)
     const [notice, setNotice] = useState('')
+    const [settingIntent, setSettingIntent] = useState<SettingIntent | null>(null)
+    const [pendingSetting, setPendingSetting] = useState<PendingSetting | null>(null)
+    const settingSequence = useRef(0)
     useEffect(() => { if (query.data && !dirty) setGeo(query.data.geodata) }, [query.data, dirty])
     const check = useMutation({
         mutationFn: (request: object) => api.post<Preview>('/api/components/preview', request),
@@ -44,6 +53,23 @@ export function ComponentsPage() {
     const apply = useMutation({
         mutationFn: (id: string) => api.post<Job>('/api/components/apply', { plan_id: id }),
         onSuccess: () => { setPreview(null); setNotice('Операция запущена. Дождитесь результата на этой странице.'); qc.invalidateQueries({ queryKey: ['components'] }) },
+    })
+    const settingCheck = useQuery({
+        queryKey: ['setting-preview', settingIntent?.sequence],
+        queryFn: () => api.post<Preview>('/api/components/preview', { component: 'settings', setting: settingIntent!.setting.id, enabled: settingIntent!.desired }),
+        enabled: settingIntent !== null,
+        retry: false,
+        staleTime: Infinity,
+        gcTime: 0,
+    })
+    const settingApply = useMutation({
+        mutationFn: ({ id }: { id: string; setting: Setting; current: boolean }) => api.post<Job>('/api/components/apply', { plan_id: id }),
+        onSuccess: (job, request) => {
+            setPendingSetting({ setting: request.setting, current: request.current, jobId: job.id })
+            setSettingIntent(null)
+            setNotice('Изменение запущено. Переключатель обновится после успешного завершения операции.')
+            qc.invalidateQueries({ queryKey: ['components'] })
+        },
     })
     const rollback = useMutation({
         mutationFn: (id: string) => api.post<Job>('/api/components/rollback', { backup_id: id }),
@@ -55,10 +81,33 @@ export function ComponentsPage() {
     })
     const state = query.data
     const busy = !!state?.job && !state.job.finished
-    const disabled = !state?.supported || busy || check.isPending || apply.isPending || rollback.isPending || saveGeo.isPending
+    const disabled = !state?.supported || busy || check.isPending || apply.isPending || rollback.isPending || saveGeo.isPending || settingApply.isPending || pendingSetting !== null
     const error = check.error ?? apply.error ?? saveGeo.error ?? rollback.error
+    const settingPreview = settingCheck.data
+    const settingReady = !!settingIntent && !!settingPreview?.id && settingPreview.component === 'settings' && settingPreview.change?.setting_id === settingIntent.setting.id && settingPreview.change.desired === settingIntent.desired && Date.parse(settingPreview.expires) > Date.now()
+    const settingError = settingApply.error?.message ?? settingCheck.error?.message ?? (settingPreview && !settingReady ? 'Не удалось подтвердить подробности изменения. Повторите проверку.' : undefined)
+    useEffect(() => {
+        if (!pendingSetting || state?.job?.id !== pendingSetting.jobId || !state.job.finished) return
+        setPendingSetting(null)
+        qc.invalidateQueries({ queryKey: ['components'] })
+        const actual = state.settings.find(setting => setting.id === pendingSetting.setting.id)
+        setNotice(state.job.error || state.job.rolled_back
+            ? `Изменение параметра «${pendingSetting.setting.name}» не выполнено. Проверьте результат последней операции.`
+            : `Параметр «${pendingSetting.setting.name}»: ${actual?.enabled ? 'включено' : 'выключено'}.`)
+    }, [state, pendingSetting, qc])
     function inspect(request: object) { apply.reset(); rollback.reset(); check.reset(); setPreview(null); check.mutate(request) }
     function changeGeo(next: GeoSettings) { setGeo(next); setDirty(true); setPreview(null); setNotice('') }
+    function inspectSetting(setting: Setting, desired: boolean) {
+        settingApply.reset()
+        setPreview(null)
+        setNotice('')
+        setSettingIntent({ setting, desired, sequence: ++settingSequence.current })
+    }
+    function closeSetting() { if (!settingApply.isPending) setSettingIntent(null) }
+    function retrySetting() {
+        settingApply.reset()
+        if (settingIntent) setSettingIntent({ ...settingIntent, sequence: ++settingSequence.current })
+    }
 
     return <>
         <PageTitle title='Компоненты и геобазы' back={{ to: '/settings', label: 'Настройки' }} subtitle='Версии XKeen и Xray, источники геоданных и безопасное применение изменений.' />
@@ -73,7 +122,7 @@ export function ComponentsPage() {
             {state.job && <Group title='Последняя операция'>
                 <div role='status' aria-live='polite' className='flex items-start gap-3 py-4'>
                     {busy && <IconLoader2 className='mt-0.5 size-5 shrink-0 animate-spin text-tint' />}
-                    <div><p className='font-medium'>{phases[state.job.phase] || state.job.phase}</p><p className='mt-1 text-[13px] text-muted-foreground'>{state.job.component} · {state.job.version}</p>
+                    <div><p className='font-medium'>{phases[state.job.phase] || 'Выполняем операцию'}</p><p className='mt-1 text-[13px] text-muted-foreground'>{componentName(state.job.component)} · {state.job.version}</p>
                         {state.job.error && <p role='alert' className='mt-2 text-[14px] text-destructive'>{state.job.error}</p>}
                         {state.job.rolled_back && <p className='mt-1 text-[13px] text-muted-foreground'>Предыдущее состояние восстановлено.</p>}
                     </div>
@@ -105,12 +154,17 @@ export function ComponentsPage() {
                 </div>
             </Group>
             <Group title='Параметры XKeen' footer='Доступность определяется по установленной версии XKeen. Каждое изменение сначала показывается для проверки и применяется с резервной копией.'>
-                {state.settings.map(setting => <Row key={setting.id} label={setting.name} hint={setting.supported ? setting.hint : 'Недоступно в установленной версии XKeen'} detail={setting.enabled ? 'Включено' : 'Выключено'} onClick={setting.supported ? () => inspect({ component: 'settings', setting: setting.id, enabled: !setting.enabled }) : undefined} disabled={disabled || !setting.supported} />)}
+                {state.settings.map(setting => {
+                    const checked = pendingSetting?.setting.id === setting.id ? pendingSetting.current : setting.enabled
+                    const nativeOff = setting.id === 'native_geodata_schedule' && !setting.enabled
+                    const hint = nativeOff ? 'Штатная задача XKeen выключена. Здесь её можно только отключить. Для автоматического обновления выберите расписание в разделе геобаз выше.' : setting.supported ? setting.hint : 'Недоступно в установленной версии XKeen.'
+                    return <Row key={setting.id} label={setting.name} hint={<>{hint}<span className='mt-1 block'>{checked ? 'Включено' : 'Выключено'}{pendingSetting?.setting.id === setting.id ? ' · ожидаем завершения' : ''}</span></>} trailing={<span className='rounded-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-tint'><Switch checked={checked} label={setting.name} onChange={desired => inspectSetting(setting, desired)} disabled={disabled || !setting.supported || nativeOff} /></span>} />
+                })}
                 <Row label='Порты и IP-исключения XKeen' to='/settings/xkeen' />
             </Group>
             {preview && <Group title='Проверка перед применением'>
                 <div className='space-y-3 py-4'>
-                    <p className='font-semibold'>{preview.component} · {preview.version}</p>
+                    <p className='font-semibold'>{componentName(preview.component)} · {preview.version}</p>
                     {preview.artifacts.map(a => <p key={a.name} className='break-all text-[13px] text-muted-foreground'>{a.repository} · {a.name} · {(a.size / 1048576).toFixed(1)} МБ<br />SHA-256: {a.sha256}</p>)}
                     <p className='text-[13px] text-muted-foreground'>Проверено место для загрузки, резервной копии и отката: нужно не менее {Math.ceil(preview.required_bytes / 1048576)} МБ.</p>
                     {preview.warnings.map(warning => <p key={warning} className='text-[14px] text-amber-300'>{warning}</p>)}
@@ -126,6 +180,23 @@ export function ComponentsPage() {
             </Group>}
             <p className='px-4 text-[13px] text-muted-foreground'>Обновления кода панели находятся в разделе <Link className='text-tint' to='/settings/update'>«Обновление панели»</Link>. Подписка обновляется независимо от компонентов.</p>
         </>}
+        {settingIntent && <SettingChangeDialog
+            name={settingIntent.setting.name}
+            current={settingIntent.setting.enabled}
+            desired={settingIntent.desired}
+            change={settingReady ? settingPreview?.change : undefined}
+            warnings={settingPreview?.warnings ?? []}
+            requiredBytes={settingReady ? settingPreview?.required_bytes : undefined}
+            loading={settingCheck.isFetching}
+            error={settingError}
+            applying={settingApply.isPending}
+            ready={settingReady && !busy}
+            onRetry={retrySetting}
+            onCancel={closeSetting}
+            onConfirm={() => {
+                if (settingReady && settingPreview?.change && !busy) settingApply.mutate({ id: settingPreview.id, setting: settingIntent.setting, current: settingPreview.change.current })
+            }}
+        />}
     </>
 }
 
@@ -149,5 +220,5 @@ function VersionChoice({ component, title, disabled, onPreview }: { component: s
 
 function BackupRow({ backup, disabled, onRollback }: { backup: Backup; disabled: boolean; onRollback: (id: string) => void }) {
     const [confirm, setConfirm] = useState(false)
-    return <div className='space-y-2 py-3'><Row label={`${backup.component} · ${backup.version}`} hint={new Date(backup.created).toLocaleString('ru-RU')} detail='Восстановить' onClick={() => setConfirm(v => !v)} disabled={disabled} />{confirm && <><p className='text-[13px] text-muted-foreground'>Восстановить состояние установки из этой копии? VPN кратко перезапустится.</p><button className={`${button} w-full`} disabled={disabled} onClick={() => { onRollback(backup.id); setConfirm(false) }}>Подтвердить восстановление</button></>}</div>
+    return <div className='space-y-2 py-3'><Row label={`${componentName(backup.component)} · ${backup.version}`} hint={new Date(backup.created).toLocaleString('ru-RU')} detail='Восстановить' onClick={() => setConfirm(v => !v)} disabled={disabled} />{confirm && <><p className='text-[13px] text-muted-foreground'>Восстановить состояние установки из этой копии? VPN кратко перезапустится.</p><button className={`${button} w-full`} disabled={disabled} onClick={() => { onRollback(backup.id); setConfirm(false) }}>Подтвердить восстановление</button></>}</div>
 }

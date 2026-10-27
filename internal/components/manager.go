@@ -57,13 +57,14 @@ type PlanRequest struct {
 }
 
 type Plan struct {
-	ID            string     `json:"id"`
-	Component     string     `json:"component"`
-	Version       string     `json:"version"`
-	Expires       time.Time  `json:"expires"`
-	Artifacts     []Artifact `json:"artifacts"`
-	Warnings      []string   `json:"warnings"`
-	RequiredBytes int64      `json:"required_bytes"`
+	ID            string         `json:"id"`
+	Component     string         `json:"component"`
+	Version       string         `json:"version"`
+	Expires       time.Time      `json:"expires"`
+	Artifacts     []Artifact     `json:"artifacts"`
+	Warnings      []string       `json:"warnings"`
+	RequiredBytes int64          `json:"required_bytes"`
+	Change        *SettingChange `json:"change,omitempty"`
 	fingerprint   string
 	setting       string
 	enabled       bool
@@ -266,7 +267,7 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 	if busy {
 		return Plan{}, fmt.Errorf("другая операция ещё выполняется")
 	}
-	plan := Plan{ID: randomID(), Component: req.Component, Version: req.Version, Expires: time.Now().Add(10 * time.Minute), Artifacts: []Artifact{}, Warnings: []string{"VPN кратко перезапустится. Выбранный сервер и правила будут восстановлены."}}
+	plan := Plan{ID: randomID(), Component: req.Component, Version: req.Version, Expires: time.Now().Add(10 * time.Minute), Artifacts: []Artifact{}, Warnings: []string{"Если VPN запущен, он кратко перезапустится. Выбранный сервер и правила будут восстановлены."}}
 	if plan.ID == "" {
 		return Plan{}, fmt.Errorf("не удалось подготовить операцию")
 	}
@@ -275,6 +276,9 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 			return Plan{}, fmt.Errorf("укажите новое состояние")
 		}
 		setting, ok := m.setting(req.Setting)
+		if ok && setting.ID == "native_geodata_schedule" && *req.Enabled {
+			return Plan{}, fmt.Errorf("через панель можно только отключить штатное расписание XKeen; для автообновления используйте расписание геобаз панели")
+		}
 		if !ok || !setting.Supported {
 			return Plan{}, fmt.Errorf("параметр не поддерживается этой версией XKeen")
 		}
@@ -286,6 +290,8 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 		}
 		plan.setting = req.Setting
 		plan.enabled = *req.Enabled
+		change := DescribeSettingChange(setting, *req.Enabled)
+		plan.Change = &change
 		if req.Setting == "ipv6" {
 			plan.Warnings = append(plan.Warnings, "IPv6 изменится для всего роутера. Это может повлиять на другие устройства домашней сети.")
 		}

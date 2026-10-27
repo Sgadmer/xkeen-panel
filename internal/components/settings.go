@@ -17,14 +17,71 @@ type Setting struct {
 	variable  string
 }
 
+type SettingChange struct {
+	SettingID string   `json:"setting_id"`
+	Name      string   `json:"name"`
+	Current   bool     `json:"current"`
+	Desired   bool     `json:"desired"`
+	Effects   []string `json:"effects"`
+}
+
+// DescribeSettingChange describes a setting without reading or changing the
+// router. Callers must still check support and allowed directions before apply.
+func DescribeSettingChange(setting Setting, desired bool) SettingChange {
+	change := SettingChange{SettingID: setting.ID, Name: setting.Name, Current: setting.Enabled, Desired: desired, Effects: []string{}}
+	switch setting.ID {
+	case "autostart":
+		if desired {
+			change.Effects = []string{"После перезагрузки роутера XKeen будет запускаться автоматически."}
+		} else {
+			change.Effects = []string{"Автоматический запуск XKeen после перезагрузки роутера будет отключён.", "После перезагрузки XKeen потребуется запустить вручную, когда он понадобится."}
+		}
+	case "dns":
+		if desired {
+			change.Effects = []string{"XKeen начнёт перехватывать обычные DNS-запросы и направлять их в Xray своим старым механизмом.", "Шифрование DNS само по себе не включается; оно зависит от настроек Xray, роутера и устройств."}
+		} else {
+			change.Effects = []string{"XKeen перестанет перехватывать обычные DNS-запросы этим механизмом.", "Дальнейшая обработка DNS-запросов зависит от настроек роутера и устройств."}
+		}
+	case "router_proxy":
+		if desired {
+			change.Effects = []string{"Соединения программ на самом роутере, включая Entware, будут перехватываться и поступать в Xray.", "Дальше путь этих соединений определяют правила Xray и настройки маршрутизации роутера."}
+		} else {
+			change.Effects = []string{"XKeen прекратит этот перехват соединений программ на самом роутере.", "Их маршрут будет зависеть от остальных настроек роутера."}
+		}
+	case "ipv6":
+		if desired {
+			change.Effects = []string{"XKeen включит IPv6 на всём роутере. Это затронет и устройства домашней сети.", "Доступ по IPv6 зависит от провайдера и остальных настроек сети."}
+		} else {
+			change.Effects = []string{"XKeen отключит IPv6 на всём роутере. Это затронет и устройства домашней сети.", "Соединения по IPv6 могут прерваться. Доступ по IPv4 зависит от его наличия и настроек сети."}
+		}
+	case "verbose":
+		if desired {
+			change.Effects = []string{"При запуске XKeen будет выводить более подробные служебные сообщения."}
+		} else {
+			change.Effects = []string{"При запуске XKeen вернётся к обычному объёму служебных сообщений."}
+		}
+	case "backup":
+		if desired {
+			change.Effects = []string{"При обновлении XKeen будет создавать резервную копию файлов XKeen.", "Панель также продолжит создавать свои резервные копии перед изменениями."}
+		} else {
+			change.Effects = []string{"Штатное создание копии файлов XKeen при его обновлении будет отключено.", "Панель продолжит создавать свои резервные копии перед изменениями."}
+		}
+	case "native_geodata_schedule":
+		if !desired {
+			change.Effects = []string{"Штатное расписание обновления геобаз XKeen будет отключено.", "Установленные геобазы останутся на месте.", "Вернуть это штатное расписание через этот переключатель нельзя. Расписание геобаз панели можно включить отдельно."}
+		}
+	}
+	return change
+}
+
 func (m *Manager) Settings() []Setting {
 	result := []Setting{
-		{ID: "autostart", Name: "Запускать XKeen вместе с роутером", Hint: "Сохраняет автозапуск после перезагрузки.", flag: "-auto", variable: "start_auto"},
-		{ID: "dns", Name: "Направлять DNS через Xray", Hint: "Использует настроенный DNS-маршрут ядра.", flag: "-dns", variable: "proxy_dns"},
-		{ID: "router_proxy", Name: "VPN для программ Entware", Hint: "Для реальных outbound нужны корректные sockopt.mark; пользовательские WAN/PBR-политики проверяются отдельно.", flag: "-pr", variable: "proxy_router"},
-		{ID: "ipv6", Name: "Поддержка IPv6", Hint: "Меняет IPv6 для всего роутера. Возможна краткая потеря соединений.", flag: "-ipv6", variable: "ipv6_support"},
-		{ID: "verbose", Name: "Подробные сообщения запуска", Hint: "Расширенные сообщения XKeen при запуске.", flag: "-extmsg", variable: "extended_msg"},
-		{ID: "backup", Name: "Резервная копия при обновлении XKeen", Hint: "Дополняет резервные копии, которые создаёт панель.", flag: "-cbk", variable: "backup"},
+		{ID: "autostart", Name: "Запускать XKeen вместе с роутером", Hint: "После перезагрузки роутера запускает XKeen без ручного нажатия кнопки запуска.", flag: "-auto", variable: "start_auto"},
+		{ID: "dns", Name: "Направлять DNS через Xray", Hint: "Старый механизм XKeen для перехвата обычных DNS-запросов. Сам по себе не включает шифрование DNS; обработка зависит от настроек Xray, роутера и устройств.", flag: "-dns", variable: "proxy_dns"},
+		{ID: "router_proxy", Name: "Направлять соединения программ роутера в Xray", Hint: "Перехватывает соединения программ на самом роутере, включая Entware, и передаёт их в Xray. Дальше действуют правила Xray и маршрутизации роутера.", flag: "-pr", variable: "proxy_router"},
+		{ID: "ipv6", Name: "Поддержка IPv6", Hint: "Включает или отключает IPv6 для всего роутера и домашней сети. Соединения по IPv6 могут прерваться; доступность IPv6 зависит от провайдера.", flag: "-ipv6", variable: "ipv6_support"},
+		{ID: "verbose", Name: "Подробные сообщения запуска", Hint: "Показывает больше служебных сообщений при запуске XKeen. Полезно при поиске причины ошибки запуска.", flag: "-extmsg", variable: "extended_msg"},
+		{ID: "backup", Name: "Резервная копия при обновлении XKeen", Hint: "Включает копию файлов XKeen при его обновлении. Панель отдельно сохраняет копию перед своими изменениями.", flag: "-cbk", variable: "backup"},
 	}
 	rt := m.runtime()
 	dispatcher, _ := os.ReadFile(rt.Dispatcher)
@@ -46,7 +103,12 @@ func (m *Manager) Settings() []Setting {
 		}
 	}
 	if regexp.MustCompile(`(?m)^\s*-dgc\)`).Match(dispatcher) {
-		result = append(result, Setting{ID: "native_geodata_schedule", Name: "Штатное расписание геобаз XKeen", Hint: "Отключите перед включением расписания панели, чтобы два обновления не записывали одни файлы одновременно.", Enabled: m.externalGeoSchedule(), Supported: m.externalGeoSchedule(), flag: "-dgc"})
+		enabled := m.externalGeoSchedule()
+		hint := "Здесь можно только отключить штатное расписание XKeen. Сделайте это перед включением расписания панели, чтобы два обновления не записывали одни файлы одновременно."
+		if !enabled {
+			hint = "Штатное расписание XKeen уже отключено, поэтому переключатель недоступен. Здесь доступно только отключение; для автообновления используйте расписание геобаз панели."
+		}
+		result = append(result, Setting{ID: "native_geodata_schedule", Name: "Штатное расписание геобаз XKeen", Hint: hint, Enabled: enabled, Supported: enabled, flag: "-dgc"})
 	}
 	return result
 }
