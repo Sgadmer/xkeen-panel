@@ -3,6 +3,7 @@ import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import {
     IconActivity,
+    IconRouteOff,
     IconDeviceDesktop,
     IconDeviceDesktopFilled,
     IconLoader2,
@@ -31,6 +32,12 @@ const TABS: { to: string; label: string; icon: Icon; active: Icon }[] = [
         label: 'Устройства',
         icon: IconDeviceDesktop,
         active: IconDeviceDesktopFilled,
+    },
+    {
+        to: '/exclusions',
+        label: 'Исключения',
+        icon: IconRouteOff,
+        active: IconRouteOff,
     },
     {
         to: '/settings',
@@ -164,7 +171,7 @@ export function AppShell() {
                     <nav
                         ref={tabbarRef}
                         aria-label='Разделы'
-                        className='relative grid h-16 grid-cols-4 p-1.5'
+                        className='relative grid h-16 grid-cols-5 p-1.5'
                     >
                         <span
                             aria-hidden

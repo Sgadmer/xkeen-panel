@@ -62,9 +62,9 @@ func TestPoolMatchesSubscriptionStillSeesRealChange(t *testing.T) {
 // makes every tag mean a different server — including the pinned one.
 func TestAssignTagsKeepsExistingTags(t *testing.T) {
 	existing := PoolLayout{
-		"sub-1": {Address: "a.example", Port: 443, UUID: "11111111-2222-3333-4444-555555555555"},
-		"sub-2": {Address: "b.example", Port: 443, UUID: "11111111-2222-3333-4444-555555555555"},
-		"sub-3": {Address: "c.example", Port: 443, UUID: "11111111-2222-3333-4444-555555555555"},
+		"sub-1": testEndpoint(t, serverAt("a.example")),
+		"sub-2": testEndpoint(t, serverAt("b.example")),
+		"sub-3": testEndpoint(t, serverAt("c.example")),
 	}
 
 	// Same three servers, latency put them in a different order this time
@@ -83,8 +83,8 @@ func TestAssignTagsKeepsExistingTags(t *testing.T) {
 // A newcomer takes the slot the departing server left behind.
 func TestAssignTagsFillsFreedSlot(t *testing.T) {
 	existing := PoolLayout{
-		"sub-1": {Address: "a.example", Port: 443, UUID: "11111111-2222-3333-4444-555555555555"},
-		"sub-2": {Address: "b.example", Port: 443, UUID: "11111111-2222-3333-4444-555555555555"},
+		"sub-1": testEndpoint(t, serverAt("a.example")),
+		"sub-2": testEndpoint(t, serverAt("b.example")),
 	}
 
 	servers := []models.Server{serverAt("a.example"), serverAt("z.example")}

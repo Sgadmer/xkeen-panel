@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	setupHandler := api.NewSetupHandler(s.detector, s.subscription, s.watchdog, devicesHandler)
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool, s.geoip)
+	componentsHandler := api.NewComponentsHandler(handlers)
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
@@ -89,15 +90,28 @@ func (s *Server) Handler() http.Handler {
 			r.Use(api.AuthMiddleware(s.userManager))
 
 			r.Get("/events", sse.HandleEvents(s.eventBus, s.watchdog))
-			r.Get("/servers/check", sse.HandleStreamLatency(s.subscription, s.config.ProbeConcurrency, time.Duration(s.config.ProbeTimeoutMs)*time.Millisecond))
+			r.Get("/servers/check", sse.HandleStreamHTTPSLatency(s.subscription, s.detector, s.config.DataDir, s.config.ProbeConcurrency, time.Duration(s.config.ProbeTimeoutMs)*time.Millisecond))
 		})
 
 		// Protected REST routes: JWT and a timeout
 		r.Group(func(r chi.Router) {
 			r.Use(api.AuthMiddleware(s.userManager))
-			r.Use(middleware.Timeout(30 * time.Second))
+			r.Use(middleware.Timeout(120 * time.Second))
 
 			r.Get("/status", handlers.HandleStatus)
+			r.Get("/access", handlers.HandlePanelAccess)
+			r.Post("/sources/import", handlers.HandleImportSource)
+			r.Get("/routing-mode", handlers.HandleGetRoutingPolicy)
+			r.Put("/routing-mode", handlers.HandlePutRoutingPolicy)
+			r.Get("/components", componentsHandler.HandleState)
+			r.Get("/components/releases", componentsHandler.HandleReleases)
+			r.Post("/components/preview", componentsHandler.HandlePreview)
+			r.Post("/components/apply", componentsHandler.HandleApply)
+			r.Post("/components/rollback", componentsHandler.HandleRollback)
+			r.Put("/components/geodata", componentsHandler.HandleGeodata)
+			r.Get("/exclusions", handlers.HandleGetExclusions)
+			r.Post("/exclusions", handlers.HandleCreateExclusion)
+			r.Delete("/exclusions/{id}", handlers.HandleDeleteExclusion)
 
 			r.Get("/subscription", handlers.HandleGetSubscription)
 			r.Post("/subscription", handlers.HandleUpdateSubscription)

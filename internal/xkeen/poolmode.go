@@ -59,7 +59,7 @@ func EnablePool(rt Runtime, outboundsPath string, servers []models.Server, opts 
 	}
 	originalTag := outboundTag(template)
 
-	nodes, err := BuildPoolOutbounds(SelectPoolServers(servers, opts.Selection), selector, template, nil)
+	nodes, err := buildSubscriptionPool(servers, opts.Selection, selector, template, nil)
 	if err != nil {
 		return state, err
 	}
@@ -124,7 +124,10 @@ func apiFileIfCreated(path string, created bool) string {
 
 // DisablePool collapses the pool back to a single outbound carrying server.
 func DisablePool(rt Runtime, outboundsPath string, server *models.Server, state PoolState) error {
-	if server == nil || server.RawURI == "" {
+	if HasActiveProfile(outboundsPath) || server != nil && len(server.RawProfile) > 0 {
+		return fmt.Errorf("сначала выберите самостоятельный сервер, затем отключите пул")
+	}
+	if server == nil || !CanBuildServer(*server) {
 		return fmt.Errorf("нужен активный сервер, чтобы вернуться к одиночному outbound")
 	}
 
@@ -147,13 +150,11 @@ func DisablePool(rt Runtime, outboundsPath string, server *models.Server, state 
 		return fmt.Errorf("outbounds не найдены в %s", outboundsPath)
 	}
 
-	params, err := ParseVLESS(server.RawURI)
-	if err != nil {
-		return fmt.Errorf("ошибка парсинга URI: %w", err)
-	}
-
 	_, template := findProxyOutbound(outbounds)
-	single := mergeOutbound(template, buildOutboundFromURI(params, tag, detectOutboundFormat(template)))
+	single, err := BuildServerOutbound(*server, tag, template)
+	if err != nil {
+		return fmt.Errorf("ошибка конфигурации сервера: %w", err)
+	}
 	config["outbounds"] = append([]interface{}{single}, serviceOutbounds(outbounds)...)
 
 	doc, err := findRoutingDoc(rt, ruleTargetsBalancer(balancerTag))
@@ -201,7 +202,7 @@ func SyncPool(rt Runtime, outboundsPath string, servers []models.Server, state P
 	}
 
 	_, template := findProxyOutbound(outbounds)
-	nodes, err := BuildPoolOutbounds(SelectPoolServers(servers, sel), state.Selector, template, layout)
+	nodes, err := buildSubscriptionPool(servers, sel, state.Selector, template, layout)
 	if err != nil {
 		return err
 	}
@@ -209,6 +210,7 @@ func SyncPool(rt Runtime, outboundsPath string, servers []models.Server, state P
 	// The manual slot may be what traffic is pinned to right now
 	nodes = append(nodes, manualOutbounds(outbounds)...)
 	config["outbounds"] = append(nodes, serviceOutbounds(outbounds)...)
+	preserveProfileDefault(outboundsPath, config)
 
 	return applyConfigs(rt, map[string]map[string]interface{}{outboundsPath: config})
 }
@@ -217,6 +219,9 @@ func SyncPool(rt Runtime, outboundsPath string, servers []models.Server, state P
 // the core loads the directory as one config. A rejected result rolls every
 // file back — a partial apply is what leaves XKeen unable to start.
 func applyConfigs(rt Runtime, writes map[string]map[string]interface{}) error {
+	if err := applyRoutingPolicy(rt, writes); err != nil {
+		return err
+	}
 	written := make([]string, 0, len(writes))
 
 	for path, config := range writes {

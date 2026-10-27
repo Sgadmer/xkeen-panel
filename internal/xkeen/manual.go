@@ -14,14 +14,16 @@ const ManualTag = "manual"
 
 // SetManualOutbound writes server into the manual slot and validates the config.
 func SetManualOutbound(rt Runtime, outboundsPath string, server models.Server) error {
-	if server.Protocol != "" && server.Protocol != "vless" {
-		return fmt.Errorf("вручную можно выбрать только VLESS-сервер, у %q протокол %s", server.Name, server.Protocol)
-	}
-	params, err := ParseVLESS(server.RawURI)
+	policy, err := LoadRoutingPolicy(rt)
 	if err != nil {
-		return fmt.Errorf("ошибка парсинга URI: %w", err)
+		return err
 	}
-
+	if policy.Mode != "preserve" && len(server.RawProfile) > 0 {
+		return fmt.Errorf("этот профиль содержит свои правила; выберите обычный сервер или сохранение текущей политики в разделе маршрутизации")
+	}
+	if len(server.RawProfile) > 0 || HasActiveProfile(outboundsPath) {
+		return setManualWithProfile(rt, outboundsPath, server)
+	}
 	config, err := ReadOutboundsConfig(outboundsPath)
 	if err != nil {
 		return err
@@ -33,7 +35,10 @@ func SetManualOutbound(rt Runtime, outboundsPath string, server models.Server) e
 
 	// A pool node is the template: it carries the sockopt mark XKeen validates
 	_, template := findProxyOutbound(outbounds)
-	slot := mergeOutbound(template, buildOutboundFromURI(params, ManualTag, detectOutboundFormat(template)))
+	slot, err := BuildServerOutbound(server, ManualTag, template)
+	if err != nil {
+		return err
+	}
 
 	var nodes []interface{}
 	for _, raw := range outbounds {
@@ -60,6 +65,9 @@ func HasManualOutbound(outboundsPath string) bool {
 // ApplyManualLive swaps the manual slot in the running core. A failure leaves
 // the slot missing from the core, so the caller has to restart it.
 func ApplyManualLive(rt Runtime, apiAddr, outboundsPath string) error {
+	if HasActiveProfile(outboundsPath) {
+		return fmt.Errorf("профиль с маршрутизацией применяется перезапуском Xray")
+	}
 	config, err := ReadOutboundsConfig(outboundsPath)
 	if err != nil {
 		return err
@@ -88,8 +96,12 @@ func manualOutbound(outbounds []interface{}) map[string]interface{} {
 
 // manualOutbounds keeps the slot when the pool around it is rebuilt.
 func manualOutbounds(outbounds []interface{}) []interface{} {
-	if slot := manualOutbound(outbounds); slot != nil {
-		return []interface{}{slot}
+	var kept []interface{}
+	for _, raw := range outbounds {
+		outbound := mapOf(raw)
+		if outbound != nil && !isServiceOutbound(outbound) && (outboundTag(outbound) == ManualTag || IsProfileInternalTag(outboundTag(outbound))) {
+			kept = append(kept, raw)
+		}
 	}
-	return nil
+	return kept
 }

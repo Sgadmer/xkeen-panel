@@ -31,7 +31,7 @@ type PoolSelection struct {
 }
 
 // SelectPoolServers filters and ranks the subscription for pool membership:
-// VLESS only, no avoided countries, live first, closest first.
+// Supported Xray outbounds, no avoided countries, live first, closest first.
 //
 // The country filter matters because the balancer picks the node — an RU server
 // left in the pool is one the balancer may route through, whatever
@@ -44,7 +44,17 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 
 	var allowed []models.Server
 	for _, server := range servers {
-		if server.RawURI == "" || (server.Protocol != "" && server.Protocol != "vless") {
+		// A provider profile owns its own balancing and routing. Selecting it
+		// explicitly must never nest that policy inside the ordinary auto pool.
+		if len(server.RawProfile) > 0 {
+			continue
+		}
+		if !CanBuildServer(server) {
+			continue
+		}
+		// Keep failed nodes in the subscription for manual selection, but do
+		// not offer a confirmed failed HTTPS tunnel to automatic selection.
+		if server.ProbeKind == "https" && server.Latency < 0 {
 			continue
 		}
 		if sel.avoided(server) {
@@ -141,11 +151,7 @@ func (sel PoolSelection) incumbentsFirst(servers []models.Server) []models.Serve
 // down, which is exactly when a pool rebuild happens — so unreachable servers
 // are kept as a tail rather than dropped. An empty pool would be worse.
 func (sel PoolSelection) rankByLatency(servers []models.Server) []models.Server {
-	if sel.ProbeTimeout <= 0 {
-		return servers
-	}
-
-	checked := CheckAllLatencies(servers, sel.ProbeTimeout, sel.ProbeConcurrency)
+	checked := checkPoolLatencies(servers, sel.ProbeTimeout, sel.ProbeConcurrency)
 
 	var live, dead []models.Server
 	for _, server := range checked {
@@ -164,6 +170,42 @@ func (sel PoolSelection) rankByLatency(servers []models.Server) []models.Server 
 	}
 
 	return append(live, dead...)
+}
+
+// checkPoolLatencies preserves native HTTPS measurements. The TCP fallback is
+// only for old URI-only VLESS state without such a measurement; raw outbounds
+// and UDP protocols must be measured through the actual proxy by the HTTPS
+// probe or by the core's observatory.
+func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurrency int) []models.Server {
+	checked := append([]models.Server(nil), servers...)
+	var tcpServers []models.Server
+	var indexes []int
+	for i, server := range servers {
+		if server.ProbeKind == "https" || len(server.RawOutbound) > 0 || (server.Protocol != "" && server.Protocol != "vless") {
+			continue
+		}
+		ob, err := BuildServerOutbound(server, "", nil)
+		if err != nil {
+			continue
+		}
+		protocol, _ := ob["protocol"].(string)
+		stream := mapOf(ob["streamSettings"])
+		network, _ := stream["network"].(string)
+		switch {
+		case protocol == "hysteria" || protocol == "hysteria2":
+			continue
+		case network == "hysteria" || network == "quic" || network == "kcp" || network == "mkcp":
+			continue
+		}
+		tcpServers = append(tcpServers, server)
+		indexes = append(indexes, i)
+	}
+	if timeout > 0 {
+		for i, server := range CheckAllLatencies(tcpServers, timeout, concurrency) {
+			checked[indexes[i]] = server
+		}
+	}
+	return checked
 }
 
 func (sel PoolSelection) avoided(server models.Server) bool {

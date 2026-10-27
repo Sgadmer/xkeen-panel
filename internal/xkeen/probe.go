@@ -1,10 +1,11 @@
 package xkeen
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 )
 
 // ProbeInboundTag marks the local socks inbound the panel checks the proxy through.
@@ -42,25 +43,20 @@ func EnsureProbeRoute(rt Runtime, probeAddr string, top Topology) (ready, change
 	}
 
 	inboundPath := filepath.Join(rt.XrayConfDir, probeInboundFile)
-	inboundDoc := map[string]interface{}{
-		"inbounds": []interface{}{map[string]interface{}{
-			"tag":      ProbeInboundTag,
-			"listen":   host,
-			"port":     port,
-			"protocol": "socks",
-			"settings": map[string]interface{}{"auth": "noauth", "udp": false},
-		}},
-	}
-
 	writes := map[string]map[string]interface{}{}
 
 	var current map[string]interface{}
 	inboundExisted := ReadJSONC(inboundPath, &current) == nil
+	profileOwned := hasOwnedProfileProbeRule(doc.routing)
+	inboundDoc := genericProbeInbound(host, port, current, profileOwned)
 	if !inboundExisted || !sameJSON(current, inboundDoc) {
 		writes[inboundPath] = inboundDoc
 	}
 
-	if setProbeRule(doc.routing, targetKey, target) {
+	// An active provider profile binds panel-probe directly to its own rules.
+	// Replacing those rules with the outer balancer routes checks into the
+	// profile's control guard rather than through the actual provider policy.
+	if !profileOwned && setProbeRule(doc.routing, targetKey, target) {
 		doc.config["routing"] = doc.routing
 		writes[doc.path] = doc.config
 	}
@@ -77,6 +73,36 @@ func EnsureProbeRoute(rt Runtime, probeAddr string, top Topology) (ready, change
 	}
 
 	return true, true, nil
+}
+
+func hasOwnedProfileProbeRule(routing map[string]interface{}) bool {
+	for _, raw := range asSlice(routing["rules"]) {
+		rule := mapOf(raw)
+		tag, _ := rule["ruleTag"].(string)
+		if isProbeRule(rule) && IsProfileInternalTag(tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func genericProbeInbound(host string, port int, current map[string]interface{}, preserveSniffing bool) map[string]interface{} {
+	inbound := map[string]interface{}{
+		"tag": ProbeInboundTag, "listen": host, "port": port, "protocol": "socks",
+		"settings": map[string]interface{}{"auth": "noauth", "udp": false},
+	}
+	if preserveSniffing {
+		for _, raw := range asSlice(current["inbounds"]) {
+			previous := mapOf(raw)
+			if previous["tag"] == ProbeInboundTag {
+				if sniffing, exists := previous["sniffing"]; exists {
+					inbound["sniffing"] = sniffing
+				}
+				break
+			}
+		}
+	}
+	return map[string]interface{}{"inbounds": []interface{}{inbound}}
 }
 
 // probeTarget is where client traffic goes: the balancer in a pool, otherwise
@@ -134,7 +160,15 @@ func isProbeRule(rule map[string]interface{}) bool {
 // sameJSON compares parsed JSON with freshly built maps, whose numbers are ints
 // rather than the float64 the decoder produces.
 func sameJSON(a, b map[string]interface{}) bool {
-	return reflect.DeepEqual(normalizeJSON(a), normalizeJSON(b))
+	left, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	right, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(left, right)
 }
 
 func normalizeJSON(v interface{}) interface{} {

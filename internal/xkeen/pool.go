@@ -37,19 +37,17 @@ func BuildPoolOutbounds(servers []models.Server, selector string, template map[s
 		selector = DefaultPoolSelector
 	}
 
-	format := detectOutboundFormat(template)
-
 	var nodes []interface{}
 	for _, entry := range assignTags(servers, selector, existing) {
-		params, err := ParseVLESS(entry.Server.RawURI)
+		node, err := BuildServerOutbound(entry.Server, entry.Tag, template)
 		if err != nil {
 			continue
 		}
-		nodes = append(nodes, mergeOutbound(template, buildOutboundFromURI(params, entry.Tag, format)))
+		nodes = append(nodes, node)
 	}
 
 	if len(nodes) == 0 {
-		return nil, fmt.Errorf("нет VLESS-серверов для пула")
+		return nil, fmt.Errorf("нет поддерживаемых Xray-серверов для пула")
 	}
 
 	return nodes, nil

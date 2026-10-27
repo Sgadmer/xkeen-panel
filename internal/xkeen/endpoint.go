@@ -1,6 +1,7 @@
 package xkeen
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -8,40 +9,57 @@ import (
 	"xkeen-panel/internal/models"
 )
 
-// endpoint identifies an upstream. Two subscription entries with the same
-// address, port and uuid are the same node however the list happens to order
-// them — which is what makes pool membership comparable across refreshes.
+// endpoint identifies the complete upstream configuration. Address and UUID
+// alone cannot distinguish two transports or a provider changing its REALITY
+// key, TLS name or gRPC service on the same listening socket.
 type endpoint struct {
-	Address string
-	Port    int
-	UUID    string
+	Address  string
+	Port     int
+	UUID     string
+	Identity string
 }
 
 func endpointOfServer(server models.Server) (endpoint, bool) {
-	if server.RawURI == "" || (server.Protocol != "" && server.Protocol != "vless") {
-		return endpoint{}, false
+	if len(server.RawProfile) > 0 {
+		identity := ProfileIdentity(server)
+		return endpoint{Identity: identity}, identity != ""
 	}
-
-	params, err := ParseVLESS(server.RawURI)
+	ob, err := BuildServerOutbound(server, "", nil)
 	if err != nil {
 		return endpoint{}, false
 	}
-
-	return endpoint{Address: params.Address, Port: params.Port, UUID: params.UUID}, true
+	return endpointOfOutbound(ob)
 }
 
 func endpointOfOutbound(ob map[string]interface{}) (endpoint, bool) {
-	address, port, uuid, ok := readProxyEndpoint(ob)
-	if !ok {
+	if identity := ProfileEndpointIdentity(ob); identity != "" {
+		return endpoint{Identity: identity}, true
+	}
+	if ob == nil || isServiceOutbound(ob) {
 		return endpoint{}, false
 	}
-
-	return endpoint{Address: address, Port: port, UUID: uuid}, true
+	raw, err := json.Marshal(ob)
+	if err != nil {
+		return endpoint{}, false
+	}
+	identity := ServerIdentity(models.Server{RawOutbound: raw})
+	if identity == "" {
+		return endpoint{}, false
+	}
+	address, port, _, err := outboundMetadata(ob)
+	if err != nil {
+		return endpoint{}, false
+	}
+	_, _, uuid, _ := readProxyEndpoint(ob)
+	return endpoint{Address: address, Port: port, UUID: uuid, Identity: identity}, true
 }
 
 // Key renders an endpoint as a stable string, so a pin can be stored as the
 // node it means and not merely as the tag that happens to carry it.
 func (e endpoint) Key() string {
+	if e.Identity != "" {
+		return e.Identity
+	}
 	return e.Address + ":" + strconv.Itoa(e.Port) + ":" + e.UUID
 }
 
@@ -115,6 +133,7 @@ func assignTags(servers []models.Server, selector string, existing PoolLayout) [
 
 	assigned := make([]taggedServer, 0, len(servers))
 	taken := map[string]bool{}
+	seen := map[endpoint]bool{}
 	var pending []taggedServer
 
 	for _, server := range servers {
@@ -122,6 +141,10 @@ func assignTags(servers []models.Server, selector string, existing PoolLayout) [
 		if !ok {
 			continue
 		}
+		if seen[ep] {
+			continue
+		}
+		seen[ep] = true
 
 		if tag, found := existing.tagOf(ep); found && !taken[tag] {
 			taken[tag] = true

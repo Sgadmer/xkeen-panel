@@ -1,163 +1,199 @@
-# XKeen Panel
+# XKeen Panel — установка и управление роутером
 
-Web panel for managing [XKeen](https://github.com/jameszeroX/XKeen)/Xray on Keenetic routers.
+Русскоязычный форк [Dearonski/xkeen-panel](https://github.com/Dearonski/xkeen-panel)
+для Keenetic/Netcraze с Entware, [XKeen](https://github.com/jameszeroX/XKeen) и
+[Xray](https://github.com/XTLS/Xray-core). Установка рассчитана на помощь агента:
+пользователю не нужно разбираться в командах, архитектуре процессора и JSON.
 
-Supports both the jameszeroX fork (**XKeen 2.x**, `S05xkeen`) and the original
-Skrill0 layout (1.x, `S24xray`) — the layout, the active proxy core
-(Xray/Mihomo) and the proxying mode are detected at startup.
+> Первый выпуск этой ветки — предварительный. Проверки на временных окружениях
+> и сборка под архитектуру не заменяют испытания каждой физической модели.
+> Перед изменениями агент обследует именно ваш роутер и сохраняет восстановление.
 
-<p align="center">
-  <img src="docs/screenshots/desktop.png" alt="Home on a desktop" width="100%">
-</p>
-<p align="center">
-  <img src="docs/screenshots/home.png" alt="Home" width="24%">
-  <img src="docs/screenshots/servers.png" alt="Servers" width="24%">
-  <img src="docs/screenshots/devices.png" alt="Devices" width="24%">
-  <img src="docs/screenshots/settings.png" alt="Settings" width="24%">
-</p>
+![Главная страница нашей сборки](docs/screenshots/overview.jpg)
 
-## Features
+## Что умеет наша сборка
 
-- **First-run wizard** — subscription, devices and launch in three steps; on a
-  fresh XKeen install the panel writes the whole Xray config itself
-- **Balancer pool** — the fastest servers of the subscription in a `leastPing`
-  pool; Xray leaves a dead node without a restart
-- **Any server by hand** — pin any subscription server, in the pool or not; if
-  it dies, the panel moves to another server of the same country
-- **Honest status** — checks go through the proxy via a local Xray inbound, so
-  a working router uplink is never mistaken for a working VPN
-- **Devices** — choose which devices go through the VPN; the panel manages the
-  Keenetic `xkeen` policy through the router's own API
-- **Self-update** — installs new releases at night, with rollback
-- **XKeen settings** — proxying ports, port and IP exclusions, GitHub proxy
-- **Authentication** — passkey (Face ID / Touch ID) or password with TOTP
-- **iPhone home screen** — adds as a standalone app
+- Импорт подписки по HTTP(S), готовой ссылки сервера и локального файла.
+- Импорт поддерживаемых серверов и составных Xray-профилей с отчётом
+  несовместимых функций; проверка настоящим HTTPS-запросом до применения.
+- Ручной выбор сервера, автопул и сохранение выбора после перезапуска.
+- Выбор устройств и два режима: выбранные сервисы через VPN либо весь
+  клиентский трафик через VPN, кроме исключений.
+- Исключения URL/доменов, точных доменов `full:`, IPv4/IPv6 и подсетей CIDR.
+- Выбор доступной версии XKeen/Xray, предварительный план изменения,
+  проверка файлов, резервная копия и восстановление.
+- Выбор источников геобаз, ручное обновление и отдельное расписание.
+- Обновление кода панели из **этого форка**. Автообновление включается явно.
+- Адаптивный интерфейс, вход с компьютера и телефона, QR-код адреса,
+  добавление веб-приложения на экран iPhone.
 
-## Installation
+## Установка для новичка
 
-### Requirements
+Используйте [скилл `xkeen-router-install`](skills/xkeen-router-install/SKILL.md)
+в локальном агенте, которому доступны терминал, браузер и домашняя сеть.
+Достаточно попросить: **«Установи XKeen и панель на мой роутер»**.
 
-- Keenetic router with [Entware](https://help.keenetic.com/hc/ru/articles/360021214160)
-  on a USB drive
-- Keenetic components **Netfilter kernel modules** (required) and **IPv6
-  protocol** (recommended), enabled in the router's general settings
+Скилл сам получает нужные файлы из публичного репозитория обычными средствами
+командной строки. GitHub-аккаунт или GitHub-интеграция для установки не нужны.
+Исходники не требуется прикладывать к чату. Готовые пакеты и скилл находятся
+в [релизах](https://github.com/Sgadmer/xkeen-panel/releases).
 
-### Quick install
+Агент сначала спрашивает о прошлых установках и независимо от ответа проверяет
+роутер. Он определяет модель/ревизию, прошивку, архитектуру, компоненты,
+память, накопитель, Entware и имеющиеся VPN-службы. Затем объясняет, подходит ли
+устройство, что необходимо подготовить и какие изменения предстоят.
 
-Connect to the router's Entware over SSH (`root`, usually port 222) and run.
+От вас нужны подключённый к домашней сети компьютер, локальный ввод пароля
+администратора и готовая ссылка подключения. Если необходим накопитель,
+его нужно физически подключить. Пароли, ключи и коды подтверждения вводятся
+локально; агент не должен публиковать их в переписке или GitHub.
 
-Panel and XKeen together, on a router without XKeen:
+VPN-клиент на компьютере может блокировать домашнюю сеть. До установки агент
+проверяет доступ к роутеру и при необходимости помогает разрешить LAN-доступ
+с сохранением VPN, через который работает агент. Отключение клиента допускается только после проверки альтернативного доступа агента. После проверки политики
+компьютера агент сообщает: для настроенного доступа через этот роутер отдельный
+VPN на ПК больше не требуется. Это относится к работе в домашней сети.
+
+Подробности: [установка и совместимость](docs/installation.md).
+
+## Если раньше уже была панель
+
+Это отдельный сценарий миграции. Агент находит службы, правила маршрутизации,
+списки доменов/IP, политики устройств и подписки, а затем предлагает перенос,
+сохранение прежней установки для возврата или удаление после проверки.
+
+Перед переключением вы увидите, какие настройки сохранятся, что будет отключено
+и какие правила несовместимы. Две панели не должны одновременно менять один
+Xray. Неизвестные файлы и старые резервные копии не удаляются без разбора.
+Существующий HWID сохраняется до первого запроса подписки, когда он применим.
+
+Подробнее: [перенос настроек и восстановление](docs/migration.md).
+
+## Подписка или свой сервер
+
+Подойдёт URL подписки `https://…` либо готовая ссылка сервера, например
+`vless://…`, из уже настроенного приложения провайдера или собственного VPS.
+Можно импортировать поддерживаемый файл. Одного IP сервера недостаточно.
+
+![Импорт источника](docs/screenshots/server-sources.jpg)
+
+Аренда и настройка самого VPS в сценарий не входят. Поддержка формата не
+означает поддержку всех его функций установленным ядром: несовместимости
+показываются явно, прежнее рабочее подключение сохраняется при ошибке.
+Источник со статической ссылкой/файлом не скачивается по часовому расписанию;
+автообновление списка относится к HTTP(S)-подпискам.
+
+## Как направляется трафик
+
+**Выбранные сервисы через VPN:** выбираете готовые категории или добавляете
+свои домены/IP; остальной клиентский трафик идёт напрямую.
+
+**Всё через VPN, кроме исключений:** подходящий клиентский трафик отправляется
+через VPN; указанные исключения идут напрямую.
+
+![Выбор режима маршрутизации](docs/screenshots/routing.jpg)
+
+При миграции можно сохранить действующие правила. Составные профили провайдера
+со своей маршрутизацией используют этот режим; для ручных режимов выбирается
+обычный сервер. Несовместимое переключение отклоняется до изменения подключения.
+
+Правила панели применяются к трафику, поступившему в Xray. Системные
+IP/портовые исключения и GeoIPSET могут пропускать трафик ещё до Xray;
+агент должен проверить и согласовать эти настройки с выбранным режимом.
+GeoIP и GeoSite являются наборами данных, а не автоматическим определителем
+блокировок каждого приложения.
+
+![Ручные исключения VPN](docs/screenshots/exclusions.jpg)
+
+Обычный домен включает поддомены. Из URL берётся hostname: путь и параметры
+не ограничивают правило. Для точного домена используйте `full:host.example.com`.
+
+## Версии, геобазы и обновления
+
+![Версии компонентов и геоданные](docs/screenshots/components.jpg)
+
+В разделе «Компоненты и геобазы» показаны установленные версии, доступные
+релизы, источники геоданных, расписание, ход операций и доступное восстановление.
+Доступны опубликованные стабильные и предварительные релизы upstream;
+доступность параметров зависит от выбранной версии и прошивки.
+
+Это разные процессы:
+
+| Что обновляется | Откуда и как |
+|---|---|
+| Панель | Наши релизы `Sgadmer/xkeen-panel`; ручное обновление и выбор автообновления |
+| XKeen | Официальные выпуски `jameszeroX/XKeen`, с проверкой совместимости |
+| Xray | Официальные выпуски `XTLS/Xray-core` для архитектуры роутера |
+| Геобазы | Выбранные источники, отдельное расписание |
+| Подписка | Данные вашего провайдера; по умолчанию каждый час |
+
+Обновления первоначальной панели можно переносить в форк через отдельную
+ветку: получить upstream, разрешить конфликты, выполнить тесты и выпустить
+наш релиз. Роутеры не устанавливают непроверенный код upstream напрямую.
+
+## Как потом открыть панель
+
+После установки агент показывает **ваш фактический адрес**, а раздел
+«Вход с ПК и телефона» содержит адрес и QR-код без паролей и токенов.
+
+![Вход с телефона](docs/screenshots/access.jpg)
+
+На компьютере откройте адрес в браузере и сохраните в закладки. На телефоне
+подключитесь к домашнему Wi-Fi и откройте тот же адрес. Локальный адрес доступен
+из домашней сети; установка не открывает административную панель в интернет.
+
+На iPhone: **Safari → адрес панели → «Поделиться» → «На экран Домой» →
+«Открывать как веб-приложение» (если доступно) → «Добавить»**.
+Пункты меню могут отличаться в разных версиях iOS. Face ID/Touch ID для
+passkey требуют подходящего HTTPS-домена; это проверяется отдельно.
+
+![Мобильный интерфейс](docs/screenshots/mobile.jpg)
+
+## Совместимость и ограничения
+
+ARM64 и MIPS little-endian — цели сборки. Проверка должна учитывать конкретную
+прошивку, ядро, накопитель и доступную память; нельзя устанавливать бинарник
+только по похожему названию модели. Объём необходимого места рассчитывается
+с учётом полного комплекта, временных файлов и резервной копии.
+
+Расширенные профили и ручная маршрутизация этой ветки ориентированы на Xray.
+Наличие поддержки Mihomo в XKeen не означает полного совпадения возможностей
+нашей панели. Непроверенные сочетания должны останавливаться с объяснением.
+
+## Сборка и проверка разработчиком
+
+Использованные инструменты: Go **1.27.1**, Node.js **24**, npm из поставки Node.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Dearonski/xkeen-panel/main/install.sh | sh -s -- --with-xkeen
+cd frontend
+npm ci
+npm run build
+cd ..
+go test ./...
+python3 -m unittest discover -s installer/tests -v
+python3 scripts/check-public-source.py
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w -X xkeen-panel/internal/version.Version=v3.0.0-beta.1' -o build/xkeen-panel-aarch64 .
 ```
 
-The panel only, when XKeen is already installed — also the way to update:
+Для демонстрации реального интерфейса с синтетическими данными запустите
+локальную сборку с `-demo`: сервер слушает только `127.0.0.1:3300`, не читает
+роутер и отклоняет изменения. Все скриншоты README получены в этом режиме.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/Dearonski/xkeen-panel/main/install.sh | sh
-```
+## Авторы и участники
 
-Then open `http://<router IP>:3000`, create an account and follow the wizard.
+- **[Dearonski](https://github.com/Dearonski)** — автор исходной панели;
+  [первоначальный репозиторий](https://github.com/Dearonski/xkeen-panel).
+- **[Sgadmer](https://github.com/Sgadmer)** — сопровождение этого форка.
+- **[OpenAI Codex](https://github.com/codex)** — помощь в разработке,
+  установщике, тестах и скилле; отмечается соавтором соответствующих коммитов.
+- XKeen и Xray — отдельные проекты своих авторов, указанных выше.
 
-Installer options:
+История upstream сохранена. Этот форк не объявляет новую лицензию на чужой
+код; применимые условия исходных проектов и зависимостей сохраняются.
 
-| Option | Effect |
-|--------|--------|
-| `--with-xkeen` | Install XKeen first if it is missing (Xray core, geo databases, no GeoIPSET) |
-| `--mihomo` | With `--with-xkeen`, install the Mihomo core as well |
-| `--check` | Only check the router — components, free space, GitHub access — and change nothing |
-| `aarch64` / `mipsel` | Override the detected architecture |
+## Персональные данные
 
-Downloads fall back to GitHub mirrors when GitHub is unreachable, and the panel
-binary is checked against the release's `SHA256SUMS`. An existing
-`config.yaml` is never overwritten; the previous binary is kept as
-`/opt/sbin/xkeen-panel.bak`.
-
-> Installing XKeen through `--with-xkeen` runs XKeen's own non-interactive
-> installer (`xkeen -i auto`) with autostart left off — the wizard turns it on
-> once the panel has written a working config.
-
-## Usage
-
-```sh
-# Start / stop / restart
-/opt/etc/init.d/S99xkeen-panel start
-/opt/etc/init.d/S99xkeen-panel stop
-/opt/etc/init.d/S99xkeen-panel restart
-
-# Logs
-tail -f /opt/var/log/xkeen-panel.log
-```
-
-## Configuration
-
-File: `/opt/etc/xkeen-panel/config.yaml`
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `port` | `3000` | Web panel port |
-| `data_dir` | `/opt/etc/xkeen-panel/data` | Data directory |
-| `xkeen_path` | `/opt/sbin/xkeen` | Path to XKeen binary |
-| `outbounds_file` | `/opt/etc/xray/configs/04_outbounds.json` | Xray outbounds config |
-| `xray_config_dir` | auto | Xray config directory |
-| `routing_file` | auto | Routing config; auto-detected among the config files |
-| `mihomo_config` | auto | `/opt/etc/mihomo/config.yaml` |
-| `xkeen_json` | auto | `/opt/etc/xkeen/xkeen.json` |
-| `xray_api_addr` | `127.0.0.1:10085` | Xray gRPC API, used to pin a node |
-| `probe_addr` | `127.0.0.1:10086` | Local socks inbound the panel checks the proxy through |
-| `check_interval` | `120` | Watchdog check interval (seconds) |
-| `check_url` | `https://www.google.com` | URL for connection check |
-| `max_fails` | `3` | Consecutive failures before server switch |
-| `auto_switch_avoid_countries` | `[RU, BY]` | Countries the pool and automatic switching skip |
-| `subscription_refresh_interval` | `1800` | Subscription refresh period (seconds), `0` = off |
-
-Paths left empty are detected on startup, so an install that moved its configs
-only needs the ones that differ. Avoided countries and the refresh period can
-also be changed in the panel; those choices are stored in `data/settings.json`
-and take precedence, so `config.yaml` is never rewritten.
-
-## How the panel edits your config
-
-- **A fresh install is configured from scratch.** When Xray has no proxy
-  outbound at all, adding a subscription writes a pool, `direct`/`block`
-  outbounds with `sockopt.mark` 255, and routing that sends Russian domains,
-  Russian IPs and local networks direct and everything else through the pool.
-- **The outbound shape is preserved.** Xray accepts both `settings.vnext[]` and
-  the newer flat `settings.{address,port,id}`; whichever your config uses is
-  kept, and so is `raw` as the spelling of the `tcp` transport.
-- **`streamSettings.sockopt` survives.** XKeen checks `sockopt.mark` on every
-  real outbound to proxy the router's own traffic, so the panel merges its
-  changes over the existing outbound instead of replacing it.
-- **Checks have their own inbound.** The panel adds `00_panel_probe.json` (a
-  socks inbound on `probe_addr`) and one rule at the top of the routing file
-  sending it where client traffic goes.
-- **Comments are read, not written.** Xray configs legally carry `//` and
-  `/* */`; the panel parses through them, but a file it writes comes back
-  without them. The previous content is always kept as `.bak` next to the file.
-- **Every write is validated.** After writing, `xkeen -xtest` (or `-mtest`) runs
-  the core's own parser; a rejected config is restored from the backup and the
-  error is shown instead of restarting into a broken state.
-
-## Building from source
-
-```sh
-# Requirements
-go 1.25+
-node 20+
-
-# Build for all architectures
-make build-all
-
-# Or specific target
-make build-arm64   # Keenetic Giga/Ultra/Peak
-make build-mipsel  # Keenetic older models
-
-# Output: build/xkeen-panel-{aarch64,mipsel}
-```
-
-## Stack
-
-- **Backend:** Go, chi router, JWT, TOTP, WebAuthn, SSE
-- **Frontend:** React 19, Vite, Tailwind CSS 4, TanStack Query
-- Frontend is embedded into the binary via `go:embed`
+В репозиторий и релизные исходники не входят пользователи панели, рабочие
+подписки, HWID, RCI-токены, пароли, настройки роутера, журналы и резервные копии.
+Примеры используют синтетические параметры и документационные адреса.
+Перед публикацией выполняется отдельная проверка исходников.

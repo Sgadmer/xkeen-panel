@@ -37,7 +37,7 @@ watchdog_auto_start: true       # Start the watchdog automatically on boot
 # brings the pool in line with the subscription: providers rotate servers, and a
 # stale pool sends traffic to dead nodes. The update is applied through the Xray
 # api without a restart, so the interval can stay short.
-subscription_refresh_interval: 1800
+subscription_refresh_interval: 3600
 
 # How many nodes the balancer pool holds. Xray probes every node separately
 # (observatory), so a pool of the whole subscription means constant handshakes

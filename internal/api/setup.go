@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"xkeen-panel/internal/keenetic"
 	"xkeen-panel/internal/monitor"
@@ -21,21 +22,22 @@ func NewSetupHandler(det *xkeen.Detector, sub *xkeen.SubscriptionManager, wd *mo
 
 // SetupState is what the first-run wizard still has to do on this router.
 type SetupState struct {
-	XKeenInstalled bool   `json:"xkeen_installed"`
-	XKeenVersion   string `json:"xkeen_version"`
-	Core           string `json:"core"`
-	CoreRunning    bool   `json:"core_running"`
-	Autostart      bool   `json:"autostart"`
-	Subscription   bool   `json:"subscription"`
-	Servers        int    `json:"servers"`
-	Configured     bool   `json:"configured"`
-	PoolNodes      int    `json:"pool_nodes"`
-	RouterAPI      bool   `json:"router_api"`
-	PolicyFound    bool   `json:"policy_found"`
-	DevicesInVPN   int    `json:"devices_in_vpn"`
-	NewDevicesVPN  bool   `json:"new_devices_vpn"`
-	Watchdog       bool   `json:"watchdog"`
-	Complete       bool   `json:"complete"`
+	XKeenInstalled        bool   `json:"xkeen_installed"`
+	XKeenVersion          string `json:"xkeen_version"`
+	Core                  string `json:"core"`
+	CoreRunning           bool   `json:"core_running"`
+	Autostart             bool   `json:"autostart"`
+	Subscription          bool   `json:"subscription"`
+	Servers               int    `json:"servers"`
+	Configured            bool   `json:"configured"`
+	RoutingModeConfigured bool   `json:"routing_mode_configured"`
+	PoolNodes             int    `json:"pool_nodes"`
+	RouterAPI             bool   `json:"router_api"`
+	PolicyFound           bool   `json:"policy_found"`
+	DevicesInVPN          int    `json:"devices_in_vpn"`
+	NewDevicesVPN         bool   `json:"new_devices_vpn"`
+	Watchdog              bool   `json:"watchdog"`
+	Complete              bool   `json:"complete"`
 }
 
 func (h *SetupHandler) state() SetupState {
@@ -43,6 +45,8 @@ func (h *SetupHandler) state() SetupState {
 	rt := h.detector.Runtime()
 	top := h.detector.Topology()
 	data := h.subscription.GetData()
+	_, routingStateErr := os.Stat(xkeen.RoutingPolicyPath(rt))
+	_, routingPolicyErr := xkeen.LoadRoutingPolicy(rt)
 
 	s := SetupState{
 		XKeenInstalled: rt.Installed,
@@ -50,12 +54,13 @@ func (h *SetupHandler) state() SetupState {
 		Core:           rt.Core,
 		CoreRunning:    rt.Installed && xkeen.IsRunning(rt.Core),
 		Autostart:      rt.Autostart,
-		Subscription:   data.URL != "",
+		Subscription:   data.URL != "" || len(data.Servers) > 0,
 		Servers:        len(data.Servers),
 		// Mihomo keeps its proxies in its own config, which the subscription sync fills
-		Configured: rt.Core == xkeen.CoreMihomo || len(top.ProxyTags) > 0,
-		PoolNodes:  len(top.PoolTags),
-		Watchdog:   h.watchdog.IsActive(),
+		Configured:            rt.Core == xkeen.CoreMihomo || len(top.ProxyTags) > 0,
+		RoutingModeConfigured: rt.Core != xkeen.CoreXray || routingStateErr == nil && routingPolicyErr == nil,
+		PoolNodes:             len(top.PoolTags),
+		Watchdog:              h.watchdog.IsActive(),
 	}
 
 	c := h.devices.client()
@@ -105,14 +110,14 @@ func (h *SetupHandler) HandleFinish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !rt.Autostart {
-		if out, err := xkeen.SetAutostart(rt.Dispatcher, true); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось включить автозапуск XKeen: " + err.Error(), "output": out})
+		if _, err := xkeen.SetAutostart(rt.Dispatcher, true); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось включить автозапуск XKeen; проверьте локальный журнал роутера"})
 			return
 		}
 	}
 	if !xkeen.IsRunning(rt.Core) {
-		if out, err := xkeen.Start(rt.Dispatcher); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось запустить XKeen: " + err.Error(), "output": out})
+		if _, err := xkeen.Start(rt.Dispatcher); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось запустить XKeen; проверьте локальный журнал роутера"})
 			return
 		}
 	}

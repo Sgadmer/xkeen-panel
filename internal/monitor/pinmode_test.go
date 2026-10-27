@@ -25,6 +25,7 @@ var poolTopology = xkeen.Topology{Mode: xkeen.TopologyPool, BalancerTag: "balanc
 // than the choice, and the owner is told why.
 func TestRotateExitDropsManualPin(t *testing.T) {
 	w, store := pooledWatchdog(t, xkeen.PoolState{Enabled: true, PinnedTag: "sub-3", PinManual: true})
+	w.active = true
 
 	w.rotateExit(xkeen.Runtime{}, poolTopology)
 
@@ -42,6 +43,7 @@ func TestRotateExitDropsManualPin(t *testing.T) {
 
 func TestSuperviseDropsManualPinThatLeftPool(t *testing.T) {
 	w, store := pooledWatchdog(t, xkeen.PoolState{Enabled: true, PinnedTag: "sub-3", PinnedNode: "gone:443:u", PinManual: true})
+	w.active = true
 
 	w.superviseP(xkeen.Runtime{}, poolTopology)
 

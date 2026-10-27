@@ -13,8 +13,14 @@ import (
 	"xkeen-panel/internal/models"
 )
 
-// ParseSubscription parses subscription content, base64 or plain text.
+// ParseSubscription keeps the historical API while the detailed parser also
+// reports profiles which cannot safely become independent router endpoints.
 func ParseSubscription(content string) ([]models.Server, error) {
+	servers, _, err := ParseSubscriptionDetailed(content)
+	return servers, err
+}
+
+func parseURISubscription(content string) ([]models.Server, error) {
 	// Try base64
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(content))
 	if err != nil {
@@ -46,11 +52,13 @@ func ParseSubscription(content string) ([]models.Server, error) {
 		case strings.HasPrefix(line, "vless://"):
 			server, parseErr = parseVLESS(line)
 		case strings.HasPrefix(line, "vmess://"):
-			server, parseErr = parseVMess(line)
+			server, parseErr = parseBuiltURIServer(line)
 		case strings.HasPrefix(line, "trojan://"):
-			server, parseErr = parseTrojan(line)
+			server, parseErr = parseBuiltURIServer(line)
 		case strings.HasPrefix(line, "ss://"):
-			server, parseErr = parseShadowsocks(line)
+			server, parseErr = parseBuiltURIServer(line)
+		case strings.HasPrefix(line, "hy2://"), strings.HasPrefix(line, "hysteria2://"):
+			server, parseErr = parseHysteria2(line)
 		default:
 			continue
 		}

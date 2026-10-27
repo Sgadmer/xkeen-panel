@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Server, Status } from '@/types'
+import type { Server, Status, SubscriptionUpdateResponse } from '@/types'
 
 export function useServerActions() {
     const qc = useQueryClient()
@@ -9,6 +9,7 @@ export function useServerActions() {
         qc.invalidateQueries({ queryKey: ['status'] })
         qc.invalidateQueries({ queryKey: ['pool'] })
         qc.invalidateQueries({ queryKey: ['subscription'] })
+        qc.invalidateQueries({ queryKey: ['routing-mode'] })
     }
 
     const select = useMutation({
@@ -40,12 +41,14 @@ export function useServerActions() {
     })
 
     const refreshSubscription = useMutation({
-        mutationFn: () => api.post('/api/subscription/refresh'),
+        mutationFn: () =>
+            api.post<SubscriptionUpdateResponse>('/api/subscription/refresh'),
         onSettled: refreshAll,
     })
 
     const setSubscription = useMutation({
-        mutationFn: (url: string) => api.post('/api/subscription', { url }),
+        mutationFn: (url: string) =>
+            api.post<SubscriptionUpdateResponse>('/api/subscription', { url }),
         onSettled: refreshAll,
     })
 

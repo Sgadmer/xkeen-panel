@@ -51,7 +51,11 @@ func TestSetManualOutbound(t *testing.T) {
 		t.Errorf("slot lost the mark XKeen validates: %v", sockopt)
 	}
 
-	if key := NodeKeyForTag(outboundsPath, DefaultPoolSelector, ManualTag); key != "fi.example:443:33333333-4444-5555-6666-777777777777" {
+	wantKey := NodeKeyOfServer(fi)
+	if wantKey == "" {
+		t.Fatal("manual server fixture has no canonical identity")
+	}
+	if key := NodeKeyForTag(outboundsPath, DefaultPoolSelector, ManualTag); key != wantKey {
 		t.Errorf("NodeKeyForTag(manual) = %q", key)
 	}
 

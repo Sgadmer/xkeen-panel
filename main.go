@@ -15,6 +15,7 @@ import (
 	"time"
 	"xkeen-panel/internal/api"
 	"xkeen-panel/internal/auth"
+	"xkeen-panel/internal/demo"
 	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/localtz"
 	"xkeen-panel/internal/models"
@@ -34,12 +35,21 @@ const panelInitScript = "/opt/etc/init.d/S99xkeen-panel"
 func main() {
 	configPath := flag.String("config", "config.yaml", "путь к конфигурационному файлу")
 	showVersion := flag.Bool("version", false, "вывести версию и выйти")
+	demoMode := flag.Bool("demo", false, "обезличенная демонстрация интерфейса на 127.0.0.1:3300")
 	flag.Parse()
 
 	// The updater runs the new binary with -version before switching to it
 	if *showVersion {
 		fmt.Println(version.Version)
 		return
+	}
+	if *demoMode {
+		frontend, err := fs.Sub(frontendDist, "frontend/dist")
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Print("Демонстрационные данные: http://127.0.0.1:3300; роутер не используется")
+		log.Fatal(http.ListenAndServe("127.0.0.1:3300", demo.Handler(frontend)))
 	}
 
 	if rule, ok := localtz.Apply("/etc/localtime"); ok {
@@ -164,6 +174,17 @@ func main() {
 			Type: "status",
 			Data: watchdog.GetStatus(),
 		})
+		if !restarting {
+			// RestartAndWait may be called while a config transaction holds
+			// changeMu. Restore on a separate goroutine and read the preference
+			// only after acquiring that same lock.
+			go func() {
+				if err := watchdog.ReapplySelection(); err != nil {
+					watchdog.Log("[PIN] Не удалось восстановить выбор после перезапуска: %v", err)
+				}
+				watchdog.CheckNow()
+			}()
+		}
 	}
 
 	// Context for graceful shutdown
@@ -185,6 +206,8 @@ func main() {
 	// The process is replaced only after the HTTP server and the watchdog have stopped
 	reexec := make(chan struct{}, 1)
 	upd := updater.New(updater.Options{
+		Locked:     false,
+		Repo:       updater.DefaultRepo,
 		Current:    version.Version,
 		BinPath:    binPath,
 		DataDir:    cfg.DataDir,
@@ -285,81 +308,25 @@ func panelResponds(port int) bool {
 // restarted only when the active server was actually replaced (it vanished from
 // the subscription) — a refresh must not drop a working connection.
 func runSubscriptionRefresh(ctx context.Context, cfg *models.Config, sm *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, matcher *geoip.Matcher, bus *sse.EventBus, reset <-chan struct{}) {
+	handler := api.NewHandlers(cfg, sm, wd, det, pool, matcher)
 	for {
-		// Re-read every round: the interval is edited from the panel, and 0 turns refreshing off
 		var tick <-chan time.Time
 		if interval := cfg.RefreshInterval(); interval > 0 {
 			tick = time.After(interval)
 		}
-
 		select {
 		case <-ctx.Done():
 			return
 		case <-reset:
 			continue
 		case <-tick:
-			prevURI := ""
-			if a := sm.GetActiveServer(); a != nil {
-				prevURI = a.RawURI
-			}
-
-			var err error
-			for attempt := 0; attempt < 2; attempt++ {
-				if _, err = sm.Refresh(); err == nil {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(30 * time.Second):
-				}
-			}
-			if err != nil {
-				wd.Log("[AUTO-UPDATE] Подписка не обновилась: %v", err)
+			if !sm.CanRefresh() {
 				continue
 			}
-
-			active := sm.GetActiveServer()
-			newURI := ""
-			if active != nil {
-				newURI = active.RawURI
+			if err := handler.RefreshManaged(ctx); err != nil {
+				wd.Log("[AUTO-UPDATE] Подписка не обновлена: %v", err)
+				continue
 			}
-
-			rt := det.Runtime()
-
-			// A pool is generated from subscription URIs, so a rotated server
-			// leaves it pointing at an endpoint that no longer answers. Sync on
-			// every refresh, not only when the active server changed.
-			if top := det.Topology(); top.Mode == xkeen.TopologyPool {
-				state := pool.Get()
-				state.BalancerTag = top.BalancerTag
-				if len(top.Selectors) > 0 {
-					state.Selector = top.Selectors[0]
-				}
-
-				res, err := xkeen.RefreshPool(rt, cfg.OutboundsFile, cfg.XrayAPIAddr, sm.GetServers(), state,
-					xkeen.PoolSelectionFromConfig(cfg, matcher))
-				switch {
-				case err != nil:
-					wd.Log("[AUTO-UPDATE] Пул не синхронизирован: %v", err)
-				case res.Changed:
-					det.InvalidateTopology()
-					wd.Log("[AUTO-UPDATE] Пул обновлён: +%d, -%d, заменено %d%s", len(res.Added), len(res.Removed), len(res.Replaced), liveSuffix(res))
-				}
-			} else if active != nil && newURI != prevURI {
-				// Single-outbound mode: the active server left the subscription.
-				// Do not blindly restart onto servers[0] — it may sit in an
-				// avoided country; let the watchdog's geo filter choose.
-				if target := wd.AllowedActiveOrBest(); target != nil {
-					if err := xkeen.ApplyServer(rt, cfg.OutboundsFile, target); err != nil {
-						log.Printf("[AUTO-UPDATE] Ошибка конфига: %v", err)
-					} else {
-						xkeen.Restart(rt.Dispatcher)
-						log.Printf("[AUTO-UPDATE] Активный сервер заменён на %s, ядро перезапущено", target.Name)
-					}
-				}
-			}
-
 			bus.Publish(sse.Event{Type: "subscription", Data: map[string]bool{"updated": true}})
 			wd.Log("[AUTO-UPDATE] Подписка обновлена (%d серверов)", len(sm.GetServers()))
 		}
@@ -403,7 +370,7 @@ func loadConfig(path string) (*models.Config, error) {
 		BlacklistTTLSec:    300,
 		WatchdogAutoStart:  true,
 
-		SubscriptionRefreshInterval: 1800,
+		SubscriptionRefreshInterval: 3600,
 		AutoUpdateHour:              4,
 
 		PoolMaxNodes:             xkeen.DefaultPoolMaxNodes,

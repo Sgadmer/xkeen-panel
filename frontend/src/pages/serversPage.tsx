@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
     IconActivityHeartbeat,
     IconCheck,
@@ -20,6 +20,8 @@ import {
     Switch,
 } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
+import { ServerSourceForm } from '@/components/serverSourceForm'
+import { Badge } from '@/components/ui/badge'
 import { AddSiteSheet, SiteSheet, siteSummary } from '@/components/siteSheets'
 import {
     usePool,
@@ -37,6 +39,7 @@ import {
     toneText,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { importWarnings, safeNotice } from '@/lib/subscription'
 import type { Server } from '@/types'
 
 const OTHER = '—'
@@ -71,13 +74,33 @@ export function ServersPage() {
         setSubscription,
         setCountry,
     } = useServerActions()
-    const { check, checking } = useStreamLatency()
+    const { check, checking, error: checkError, progress } = useStreamLatency()
     const [query, setQuery] = useState('')
     const [country, setCountryFilter] = useState('all')
     const [sheetOpen, setSheetOpen] = useState(false)
     const [tab, setTabState] = useState<Tab>(savedTab)
     const [addingSite, setAddingSite] = useState(false)
     const [siteId, setSiteId] = useState<number | null>(null)
+    const hasSubscription = Boolean(
+        subscription?.configured || (subscription?.server_count ?? 0) > 0,
+    )
+    const warnings = importWarnings(
+        subscription?.import_report ??
+            setSubscription.data?.import_report ??
+            refreshSubscription.data?.import_report,
+    )
+    const rawActionError =
+        select.error?.message ??
+        pin.error?.message ??
+        auto.error?.message ??
+        refreshSubscription.error?.message ??
+        refreshSubscription.data?.pool_error
+    const actionError = rawActionError
+        ? safeNotice(
+              rawActionError,
+              'Не удалось применить действие. Рабочее подключение сохранено.',
+          )
+        : ''
 
     const isPool = pool?.mode === 'pool' && (pool.nodes?.length ?? 0) > 0
     const view: Tab = isPool ? tab : 'all'
@@ -127,7 +150,12 @@ export function ServersPage() {
                 return {
                     node: n,
                     country: server ? serverCountry(server) : n.country,
-                    latency: server?.latency_ms ?? n.latency_ms,
+                    protocol: server?.protocol,
+                    latency: server
+                        ? server.probe_kind === 'https'
+                            ? server.latency_ms
+                            : 0
+                        : n.latency_ms,
                     current: n.tag === pool?.current_tag,
                     excluded: !!n.excluded_until,
                 }
@@ -163,12 +191,12 @@ export function ServersPage() {
                             <IconLink className='size-[17px]' stroke={2.2} />
                         </IconTile>
                     }
-                    label={subscription?.url ? 'Подписка' : 'Добавить подписку'}
-                    tone={subscription?.url ? undefined : 'tint'}
+                    label={hasSubscription ? 'Источник серверов' : 'Добавить серверы'}
+                    tone={hasSubscription ? undefined : 'tint'}
                     hint={
-                        subscription?.url
-                            ? `${hostOf(subscription.url)}${updated ? ` · обновлена ${updated} назад` : ''}`
-                            : 'Ссылка от VPN-провайдера'
+                        hasSubscription
+                            ? `${subscription?.host || 'Ручной источник'}${updated ? ` · обновлена ${updated} назад` : ''}`
+                            : 'Подписка, ссылка сервера или файл'
                     }
                     onClick={() => setSheetOpen(true)}
                     trailing={
@@ -179,7 +207,7 @@ export function ServersPage() {
                     }
                 />
             </div>
-            {subscription?.url && (
+            {hasSubscription && (
                 <div className={TILE}>
                     <Row
                         icon={
@@ -190,8 +218,14 @@ export function ServersPage() {
                                 />
                             </IconTile>
                         }
-                        label={checking ? 'Проверяю пинг…' : 'Проверить пинг'}
-                        hint='До самих серверов, без VPN'
+                        label={checking ? 'Проверяю HTTPS…' : 'Проверить HTTPS'}
+                        hint={
+                            checking && progress.total > 0
+                                ? progress.completed > 0
+                                    ? `Проверено ${progress.completed} из ${progress.total} серверов`
+                                    : `Проверка ${progress.total} серверов может занять минуту`
+                                : 'Реальное соединение через каждый сервер'
+                        }
                         onClick={check}
                         disabled={checking}
                     />
@@ -205,8 +239,8 @@ export function ServersPage() {
             <PageTitle
                 title='Серверы'
                 subtitle={
-                    subscription?.url
-                        ? `${subscription.server_count} серверов${isPool ? ` · ${pool?.nodes?.length} в пуле` : ''}${updated ? ` · обновлено ${updated} назад` : ''}`
+                    hasSubscription
+                        ? `${subscription?.server_count ?? servers.length} серверов${isPool ? ` · ${pool?.nodes?.length} в пуле` : ''}${updated ? ` · обновлено ${updated} назад` : ''}`
                         : 'Добавьте ссылку на подписку'
                 }
                 action={
@@ -216,7 +250,7 @@ export function ServersPage() {
                             onChange={setQuery}
                             className='hidden w-64 lg:flex'
                         />
-                        {subscription?.url && (
+                        {hasSubscription && subscription?.can_refresh !== false && (
                             <CircleButton
                                 label='Обновить подписку'
                                 onClick={() => refreshSubscription.mutate()}
@@ -235,6 +269,25 @@ export function ServersPage() {
                 }
             />
 
+            {warnings.length > 0 && (
+                <p
+                    role='status'
+                    className='px-4 text-[15px] text-muted-foreground'
+                >
+                    {warnings.join(' ')}
+                </p>
+            )}
+            {checkError && (
+                <p role='alert' className='px-4 text-[15px] text-destructive'>
+                    {checkError}
+                </p>
+            )}
+            {actionError && (
+                <p role='alert' className='px-4 text-[15px] text-destructive'>
+                    {actionError}
+                </p>
+            )}
+
             {isPool && (
                 <div className='lg:max-w-sm'>
                     <Segmented
@@ -250,6 +303,19 @@ export function ServersPage() {
                         ]}
                     />
                 </div>
+            )}
+
+            {servers.some(s => s.protocol === 'xray-profile') && (
+                <Group title='Режимы провайдера' footer='Профиль применяет свои правила и выбор серверов. Для обычного автовыбора используйте пул панели.'>
+                    {servers.filter(s => s.protocol === 'xray-profile').map(server => (
+                        <Row key={server.id} label={server.name}
+                            hint={server.check_error || `${server.profile_nodes ?? 0} серверов · ${server.active ? 'Выбран' : server.latency_ms > 0 ? `HTTPS ${server.latency_ms} мс` : 'Не прошёл проверку'}`}
+                            onClick={() => select.mutate(server.id)}
+                            disabled={select.isPending || pin.isPending || auto.isPending || server.active}
+                            trailing={server.active ? <IconCheck className='size-5 text-tint' /> : <IconChevronRight className='size-4 text-label-tertiary' />}
+                        />
+                    ))}
+                </Group>
             )}
 
             {view === 'pool' && (
@@ -294,6 +360,7 @@ export function ServersPage() {
                                 key={r.node.tag}
                                 name={r.node.name}
                                 country={r.country}
+                                protocol={r.protocol}
                                 latency={r.latency}
                                 current={r.current}
                                 excludedUntil={r.node.excluded_until}
@@ -423,8 +490,8 @@ export function ServersPage() {
             <SubscriptionSheet
                 open={sheetOpen}
                 onClose={() => setSheetOpen(false)}
-                url={subscription?.url}
-                onSave={url => setSubscription.mutateAsync(url)}
+                configured={hasSubscription}
+                host={subscription?.host}
             />
             <AddSiteSheet
                 open={addingSite}
@@ -464,6 +531,7 @@ function siteLabel(domains: string[]) {
 function PoolRow({
     name,
     country,
+    protocol,
     latency,
     current,
     excludedUntil,
@@ -472,6 +540,7 @@ function PoolRow({
 }: {
     name: string
     country?: string
+    protocol?: string
     latency: number
     current: boolean
     excludedUntil?: string
@@ -499,6 +568,7 @@ function PoolRow({
                     )}
                 >
                     {name}
+                    {protocol && <ProtocolBadge protocol={protocol} />}
                 </span>
                 {notes.length > 0 && (
                     <span className='mt-0.5 block text-[13px] text-muted-foreground'>
@@ -539,7 +609,10 @@ function byLatency(a: Server, b: Server) {
 }
 
 function statusOf(server: Server) {
+	if (server.check_error) return { label: server.check_error, className: 'text-destructive' }
     if (server.active) return { label: 'Выбран', className: 'text-tint' }
+    if (server.probe_kind !== 'https')
+        return { label: 'Не проверен', className: 'text-muted-foreground' }
     if (server.latency_ms === -1)
         return { label: 'Не отвечает', className: 'text-destructive' }
     if (server.pool_tag)
@@ -547,16 +620,17 @@ function statusOf(server: Server) {
     return null
 }
 
-const hostOf = (url: string) => url.replace(/^https?:\/\/([^/]+).*$/, '$1')
-
-// Subscription links carry the account token, so only the host and both ends are shown
-function maskUrl(url: string) {
-    const m = url.match(/^https?:\/\/([^/]+)(\/.*)?$/)
-    if (!m) return '…'
-    const path = m[2] ?? ''
-    return path.length > 16
-        ? `${m[1]}${path.slice(0, 9)}…${path.slice(-4)}`
-        : `${m[1]}${path}`
+function ProtocolBadge({ protocol }: { protocol: string }) {
+    const label = ['hysteria', 'hysteria2', 'hy2'].includes(
+        protocol.toLowerCase(),
+    )
+        ? 'Hysteria2'
+        : protocol === 'xray-profile' ? 'Профиль' : protocol.toUpperCase()
+    return (
+        <Badge variant='secondary' className='ml-2 align-middle text-[11px]'>
+            {label}
+        </Badge>
+    )
 }
 
 function SearchField({
@@ -602,12 +676,8 @@ function ServerRow({
     const [editing, setEditing] = useState(false)
     const [value, setValue] = useState(serverCountry(server))
     const status = statusOf(server)
-    const ping =
-        server.latency_ms === 0
-            ? ''
-            : server.latency_ms < 0
-              ? '—'
-              : `${server.latency_ms} мс`
+    const measured = server.probe_kind === 'https' ? server.latency_ms : 0
+    const ping = measured === 0 ? '' : measured < 0 ? '—' : `${measured} мс`
 
     if (editing) {
         return (
@@ -660,6 +730,7 @@ function ServerRow({
                 <span className='min-w-0 flex-1'>
                     <span className='block break-words text-[17px] tracking-[-0.43px]'>
                         {server.name}
+                        <ProtocolBadge protocol={server.protocol} />
                     </span>
                     {status && (
                         <span
@@ -675,7 +746,7 @@ function ServerRow({
                 <span
                     className={cn(
                         'shrink-0 text-right text-[15px] tabular-nums',
-                        toneText[latencyTone(server.latency_ms)],
+                        toneText[latencyTone(measured)],
                     )}
                 >
                     {ping}
@@ -705,139 +776,16 @@ function ServerRow({
     )
 }
 
-function SubscriptionSheet({
-    open,
-    onClose,
-    url,
-    onSave,
-}: {
+function SubscriptionSheet({ open, onClose, configured, host }: {
     open: boolean
     onClose: () => void
-    url?: string
-    onSave: (url: string) => Promise<unknown>
+    configured?: boolean
+    host?: string
 }) {
-    const [value, setValue] = useState('')
-    const [saving, setSaving] = useState(false)
-    const [error, setError] = useState('')
-    const [copied, setCopied] = useState(false)
-
-    useEffect(() => {
-        if (!open) return
-        setValue('')
-        setError('')
-    }, [open])
-
-    const valid = /^https?:\/\/\S+$/.test(value.trim())
-
-    const submit = async () => {
-        if (!valid || saving) return
-        setSaving(true)
-        setError('')
-        try {
-            await onSave(value.trim())
-            onClose()
-        } catch (e) {
-            setError(
-                e instanceof Error
-                    ? e.message
-                    : 'Не удалось загрузить подписку',
-            )
-        } finally {
-            setSaving(false)
-        }
-    }
-
-    const paste = async () => {
-        try {
-            setValue((await navigator.clipboard.readText()).trim())
-        } catch {
-            setError(
-                'Браузер не дал прочитать буфер обмена — вставьте ссылку вручную',
-            )
-        }
-    }
-
-    const copy = async () => {
-        if (!url) return
-        await navigator.clipboard?.writeText(url)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
-    }
-
-    return (
-        <Sheet
-            open={open}
-            onClose={onClose}
-            title='Подписка'
-            done={{
-                label: saving ? 'Загружаю…' : 'Готово',
-                onClick: submit,
-                disabled: !valid || saving,
-            }}
-        >
-            <Group
-                title={url ? 'Новая ссылка' : 'Ссылка'}
-                footer={
-                    error ? (
-                        <span className='text-destructive'>{error}</span>
-                    ) : (
-                        'Ссылку даёт VPN-провайдер — обычно в личном кабинете или в боте. Панель загрузит серверы и сама пересоберёт пул.'
-                    )
-                }
-            >
-                <form
-                    className='flex min-h-[52px] items-center gap-2'
-                    onSubmit={e => {
-                        e.preventDefault()
-                        submit()
-                    }}
-                >
-                    <label htmlFor='subscription-url' className='sr-only'>
-                        Ссылка на подписку
-                    </label>
-                    <input
-                        id='subscription-url'
-                        type='url'
-                        inputMode='url'
-                        autoComplete='off'
-                        autoFocus
-                        value={value}
-                        onChange={e => setValue(e.target.value)}
-                        placeholder='https://'
-                        className='min-w-0 flex-1 bg-transparent text-[17px] tracking-[-0.43px] outline-none placeholder:text-label-tertiary'
-                    />
-                    {!value && (
-                        <button
-                            type='button'
-                            onClick={paste}
-                            className='min-h-9 shrink-0 cursor-pointer rounded-full bg-fill px-3 text-[15px] font-medium text-tint'
-                        >
-                            Вставить
-                        </button>
-                    )}
-                </form>
-            </Group>
-
-            {url && (
-                <Group title='Сейчас'>
-                    <Row
-                        label={
-                            <span className='block truncate font-mono text-[15px]'>
-                                {maskUrl(url)}
-                            </span>
-                        }
-                        trailing={
-                            <button
-                                type='button'
-                                onClick={copy}
-                                className='min-h-9 shrink-0 cursor-pointer px-1 text-[15px] text-tint'
-                            >
-                                {copied ? 'Скопировано' : 'Скопировать'}
-                            </button>
-                        }
-                    />
-                </Group>
-            )}
-        </Sheet>
-    )
+    return <Sheet open={open} onClose={onClose} title='Источник серверов'>
+        <Group footer='Подойдёт подписка провайдера, готовая ссылка собственного сервера или файл. Панель проверит настоящее HTTPS-соединение перед применением.'>
+            {open && <ServerSourceForm onApplied={() => onClose()} />}
+        </Group>
+        {configured && <Group title='Сейчас'><Row label={host || 'Серверы сохранены локально'} hint='Чтобы заменить источник, импортируйте новый выше.' /></Group>}
+    </Sheet>
 }

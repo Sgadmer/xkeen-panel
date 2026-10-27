@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -11,8 +12,11 @@ import (
 	"time"
 )
 
+// ErrLocked is a build policy, not a user preference or a version check.
+var ErrLocked = errors.New("обновление и откат кода заблокированы в этой сборке, чтобы сохранить доработки панели")
+
 const (
-	DefaultRepo = "Dearonski/xkeen-panel"
+	DefaultRepo = "Sgadmer/xkeen-panel"
 
 	checkEvery = 12 * time.Hour
 	tickEvery  = 10 * time.Minute
@@ -24,7 +28,8 @@ const (
 
 // Kept in data/ so the UI can change them without rewriting config.yaml and losing its comments.
 type Settings struct {
-	Auto bool `json:"auto"`
+	Auto       bool   `json:"auto"`
+	Repository string `json:"repository,omitempty"`
 
 	// Rolled back from or failed to start: automatic updates leave it alone, the button still installs it
 	Skip string `json:"skip,omitempty"`
@@ -33,6 +38,8 @@ type Settings struct {
 }
 
 type State struct {
+	Repository  string    `json:"repository"`
+	Locked      bool      `json:"locked"`
 	Current     string    `json:"current"`
 	Latest      *Release  `json:"latest,omitempty"`
 	Available   bool      `json:"available"`
@@ -50,6 +57,7 @@ type State struct {
 }
 
 type Options struct {
+	Locked     bool // immutable build policy; never read from YAML or update.json
 	Current    string
 	BinPath    string
 	DataDir    string
@@ -65,6 +73,7 @@ type Options struct {
 }
 
 type Updater struct {
+	locked     bool // copied once at construction; there is intentionally no setter
 	current    string
 	binPath    string
 	dataDir    string
@@ -95,6 +104,7 @@ type Updater struct {
 
 func New(opts Options) *Updater {
 	u := &Updater{
+		locked:     opts.Locked,
 		current:    opts.Current,
 		binPath:    opts.BinPath,
 		dataDir:    opts.DataDir,
@@ -108,7 +118,7 @@ func New(opts Options) *Updater {
 		publish:    opts.Publish,
 		restart:    opts.Restart,
 		busy:       opts.Busy,
-		settings:   Settings{Auto: true},
+		settings:   Settings{Auto: false},
 		attempted:  map[string]time.Time{},
 
 		guardDelay:   guardDelay,
@@ -124,9 +134,21 @@ func New(opts Options) *Updater {
 		u.client = &http.Client{Timeout: 5 * time.Minute}
 	}
 
-	if err := readJSON(u.settingsPath(), &u.settings); err != nil && !os.IsNotExist(err) {
-		u.log("[UPDATE] Настройки обновлений не прочитаны (%v) — автообновление включено", err)
+	if u.locked {
+		return u
 	}
+	loaded := u.settings
+	if err := readJSON(u.settingsPath(), &loaded); err == nil {
+		u.settings = loaded
+	} else if !os.IsNotExist(err) {
+		u.log("[UPDATE] Настройки обновлений не прочитаны (%v) — требуется ручное включение автообновления", err)
+	}
+	// An upstream/previous locked build may have left auto=true on disk.
+	// Enabling updates for this fork requires a fresh choice for this source.
+	if u.settings.Repository != u.repo {
+		u.settings.Auto = false
+	}
+	u.settings.Repository = u.repo
 
 	return u
 }
@@ -140,6 +162,9 @@ func (u *Updater) log(format string, args ...interface{}) {
 }
 
 func (u *Updater) supported() (bool, string) {
+	if u.locked {
+		return false, ErrLocked.Error()
+	}
 	if _, ok := parseSemver(u.current); !ok {
 		return false, "сборка без версии (dev) не обновляется"
 	}
@@ -159,9 +184,15 @@ func (u *Updater) State() State {
 }
 
 func (u *Updater) stateLocked() State {
+	if u.locked {
+		// No disk probing, cached release or persisted preference can expose an
+		// install/rollback action when this binary has updates compiled out.
+		return State{Locked: true, Current: u.current, Reason: ErrLocked.Error(), AutoHour: u.autoHour}
+	}
 	supported, reason := u.supported()
 
 	state := State{
+		Repository:  u.repo,
 		Current:     u.current,
 		Latest:      u.latest,
 		Supported:   supported,
@@ -198,6 +229,9 @@ func (u *Updater) notify() {
 }
 
 func (u *Updater) Check(ctx context.Context) (State, error) {
+	if u.locked {
+		return u.State(), ErrLocked
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -223,6 +257,9 @@ func (u *Updater) Check(ctx context.Context) (State, error) {
 }
 
 func (u *Updater) Apply() error {
+	if u.locked {
+		return ErrLocked
+	}
 	if ok, reason := u.supported(); !ok {
 		return fmt.Errorf("обновление недоступно: %s", reason)
 	}
@@ -250,6 +287,9 @@ func (u *Updater) Apply() error {
 }
 
 func (u *Updater) runApply(release Release) {
+	if u.locked {
+		return
+	}
 	u.log("[UPDATE] Устанавливаю %s (сейчас %s)", release.Tag, u.current)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -284,6 +324,9 @@ func (u *Updater) fail(err error) {
 }
 
 func (u *Updater) Rollback() error {
+	if u.locked {
+		return ErrLocked
+	}
 	u.mu.Lock()
 	if u.updating {
 		u.mu.Unlock()
@@ -320,9 +363,16 @@ func (u *Updater) Rollback() error {
 
 // Checks keep running either way, so the UI can still offer an update by hand.
 func (u *Updater) SetAuto(auto bool) error {
+	if u.locked {
+		return ErrLocked
+	}
 	u.mu.Lock()
+	old := u.settings.Auto
 	u.settings.Auto = auto
 	err := writeJSON(u.settingsPath(), u.settings)
+	if err != nil {
+		u.settings.Auto = old
+	}
 	u.mu.Unlock()
 
 	u.notify()
@@ -330,6 +380,9 @@ func (u *Updater) SetAuto(auto bool) error {
 }
 
 func (u *Updater) Startup(ctx context.Context, healthy func() bool) {
+	if u.locked {
+		return
+	}
 	var failed pendingMarker
 	if err := readJSON(u.failedPath(), &failed); err == nil {
 		os.Remove(u.failedPath())
@@ -373,6 +426,9 @@ func (u *Updater) Startup(ctx context.Context, healthy func() bool) {
 }
 
 func (u *Updater) Run(ctx context.Context) {
+	if u.locked {
+		return
+	}
 	if ok, reason := u.supported(); !ok {
 		u.log("[UPDATE] Автообновление недоступно: %s", reason)
 		return
@@ -402,6 +458,9 @@ func (u *Updater) Run(ctx context.Context) {
 }
 
 func (u *Updater) tick(ctx context.Context, now time.Time) {
+	if u.locked {
+		return
+	}
 	u.mu.Lock()
 	due := now.Sub(u.lastCheck) >= checkEvery
 	u.mu.Unlock()

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -185,8 +186,8 @@ func TestCheckFindsNewerRelease(t *testing.T) {
 	if !state.Available || state.Latest == nil || state.Latest.Tag != "v1.3.1" || state.Latest.Notes != "notes" {
 		t.Errorf("state = %+v, want v1.3.1 available with notes", state)
 	}
-	if !state.Auto {
-		t.Error("automatic updates must be on by default")
+	if state.Auto {
+		t.Error("automatic updates require explicit opt-in")
 	}
 }
 
@@ -212,6 +213,7 @@ func TestDevBuildNeverUpdates(t *testing.T) {
 }
 
 func TestApplyInstallsAndRestarts(t *testing.T) {
+	requirePOSIXSmokeTest(t)
 	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1"})
 	if _, err := h.u.Check(context.Background()); err != nil {
 		t.Fatal(err)
@@ -264,6 +266,7 @@ func TestApplyRefusesReleaseWithoutSums(t *testing.T) {
 // A binary that runs but is not the release it claims to be — wrong asset,
 // stale cache — must not replace a working panel.
 func TestApplyRejectsVersionMismatch(t *testing.T) {
+	requirePOSIXSmokeTest(t)
 	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1", reported: "v1.2.0"})
 	h.u.Check(context.Background())
 
@@ -294,6 +297,7 @@ func assertUntouched(t *testing.T, h *harness) {
 // The guard is what saves a router whose new binary never comes up: nothing
 // else is left running to notice.
 func TestGuardRollsBackUnconfirmedUpdate(t *testing.T) {
+	requirePOSIXSmokeTest(t)
 	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1"})
 	h.u.guardDelay = time.Second
 	h.u.Check(context.Background())
@@ -320,6 +324,7 @@ func TestGuardRollsBackUnconfirmedUpdate(t *testing.T) {
 }
 
 func TestGuardLeavesConfirmedUpdate(t *testing.T) {
+	requirePOSIXSmokeTest(t)
 	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1"})
 	h.u.guardDelay = time.Second
 	h.u.Check(context.Background())
@@ -338,6 +343,13 @@ func TestGuardLeavesConfirmedUpdate(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	if got := h.binContent(t); !strings.Contains(got, "v1.3.1") {
 		t.Errorf("binary = %q, want the confirmed release kept", got)
+	}
+}
+
+func requirePOSIXSmokeTest(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("This smoke test executes its temporary POSIX shell binary; run it natively on Linux, not as a Windows executable")
 	}
 }
 
@@ -421,6 +433,7 @@ func TestShouldAutoApply(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1"})
+			h.u.settings.Auto = true
 			if _, err := h.u.Check(context.Background()); err != nil {
 				t.Fatal(err)
 			}

@@ -13,6 +13,8 @@ import {
 import { DeviceGroups, NewDevicesGroup } from '@/components/deviceList'
 import { Group, Row } from '@/components/ios'
 import { Logo } from '@/components/logo'
+import { ServerSourceForm } from '@/components/serverSourceForm'
+import { RoutingModeForm } from '@/pages/routingModePage'
 import { useDevices, useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -26,6 +28,7 @@ export type SetupState = {
     subscription: boolean
     servers: number
     configured: boolean
+    routing_mode_configured: boolean
     pool_nodes: number
     router_api: boolean
     policy_found: boolean
@@ -35,14 +38,11 @@ export type SetupState = {
     complete: boolean
 }
 
-type StepId = 'xkeen' | 'subscription' | 'devices' | 'start'
+type StepId = 'xkeen' | 'subscription' | 'routing' | 'devices' | 'start'
 
-const STEPS: StepId[] = ['subscription', 'devices', 'start']
+const STEPS: StepId[] = ['subscription', 'routing', 'devices', 'start']
 
 export const SETUP_LATER_KEY = 'xkeen_setup_later'
-
-const INSTALL =
-    'curl -fsSL https://raw.githubusercontent.com/Dearonski/xkeen-panel/main/install.sh | sh -s -- --with-xkeen'
 
 export function useSetupState() {
     return useQuery({
@@ -54,6 +54,7 @@ export function useSetupState() {
 function firstStep(s: SetupState): StepId {
     if (!s.xkeen_installed) return 'xkeen'
     if (!s.subscription || !s.configured) return 'subscription'
+    if (!s.routing_mode_configured) return 'routing'
     if (!s.policy_found) return 'devices'
     return 'start'
 }
@@ -126,18 +127,29 @@ export function WelcomePage() {
                     </div>
                 )}
                 {s && step === 'xkeen' && (
-                    <XKeenStep onRetry={() => setup.refetch()} />
+                    <XKeenStep onRetry={() => {
+                        void setup.refetch().then(result => { if (result.data) setStep(firstStep(result.data)) })
+                    }} />
                 )}
                 {s && step === 'subscription' && (
                     <SubscriptionStep
                         state={s}
-                        onNext={() => setStep('devices')}
+                        onNext={() => setStep('routing')}
                     />
+                )}
+                {s && step === 'routing' && (
+                    <>
+                        <StepHeader icon={<IconTerminal2 className='size-8' />} color='#6366f1' title='Режим VPN'>
+                            Выберите нужные сервисы или VPN для всего трафика. При миграции можно сохранить прежнюю политику.
+                        </StepHeader>
+                        <RoutingModeForm onApplied={() => setStep('devices')} />
+                        <button type='button' onClick={() => setStep('subscription')} className='mt-4 min-h-11 text-tint'>Назад</button>
+                    </>
                 )}
                 {s && step === 'devices' && (
                     <DevicesStep
                         state={s}
-                        onBack={() => setStep('subscription')}
+                        onBack={() => setStep('routing')}
                         onNext={() => setStep('start')}
                     />
                 )}
@@ -217,13 +229,6 @@ function Actions({
 }
 
 function XKeenStep({ onRetry }: { onRetry: () => void }) {
-    const [copied, setCopied] = useState(false)
-    const copy = async () => {
-        await navigator.clipboard?.writeText(INSTALL)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
-    }
-
     return (
         <>
             <StepHeader
@@ -231,159 +236,42 @@ function XKeenStep({ onRetry }: { onRetry: () => void }) {
                 color='#8e8e93'
                 title='XKeen не установлен'
             >
-                Панель управляет XKeen, а его на роутере нет. Подключитесь к
-                роутеру по SSH и выполните команду — она поставит XKeen и
-                обновит панель.
+                XKeen пока не обнаружен. Поручите установку агенту со скиллом
+                «xkeen-router-install»: он проверит модель, память и прежние
+                настройки, подготовит совместимую версию и сохранит возврат.
             </StepHeader>
             <Group
-                footer={
-                    copied
-                        ? 'Скопировано'
-                        : 'Нужен Entware на USB-накопителе и компоненты Keenetic «Модули ядра подсистемы Netfilter» и «Протокол IPv6».'
-                }
+                footer='Потребуются доступ к роутеру в домашней сети и готовая подписка или ссылка сервера. Не отключайте VPN компьютера, пока агент не проверит альтернативный доступ.'
             >
-                <button
-                    type='button'
-                    onClick={copy}
-                    className='w-full cursor-pointer break-all py-3 text-left font-mono text-[13px] leading-relaxed'
+                <a
+                    href='https://github.com/Sgadmer/xkeen-panel/blob/v3.0.0-beta.1/docs/installation.md'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className='flex min-h-12 items-center py-3 text-[15px] text-tint'
                 >
-                    {INSTALL}
-                </button>
+                    Порядок установки и скилл
+                </a>
             </Group>
             <Actions primary={{ label: 'Проверить снова', onClick: onRetry }} />
         </>
     )
 }
 
-function SubscriptionStep({
-    state,
-    onNext,
-}: {
-    state: SetupState
-    onNext: () => void
-}) {
-    const qc = useQueryClient()
+function SubscriptionStep({ state, onNext }: { state: SetupState; onNext: () => void }) {
     const [editing, setEditing] = useState(!state.subscription)
-    const [value, setValue] = useState('')
-    const valid = /^https?:\/\/\S+$/.test(value.trim())
-
-    const save = useMutation({
-        mutationFn: (url: string) =>
-            api.post<{ server_count: number; pool_error?: string }>(
-                '/api/subscription',
-                { url },
-            ),
-        onSuccess: async res => {
-            await qc.invalidateQueries({ queryKey: ['setup'] })
-            qc.invalidateQueries({ queryKey: ['servers'] })
-            qc.invalidateQueries({ queryKey: ['subscription'] })
-            if (!res.pool_error) setEditing(false)
-        },
-    })
-
-    const error = save.error?.message ?? save.data?.pool_error
     const ready = state.subscription && state.configured && !editing
-
-    const paste = async () => {
-        try {
-            setValue((await navigator.clipboard.readText()).trim())
-        } catch {
-            // Clipboard access is refused outside a user gesture on some browsers
-        }
-    }
-
-    return (
-        <>
-            <StepHeader
-                icon={<IconLink className='size-8' stroke={2} />}
-                color='#6366f1'
-                title='Подписка'
-            >
-                Вставьте ссылку от VPN-провайдера. Панель скачает серверы,
-                выберет самые быстрые и сама соберёт конфигурацию Xray.
-            </StepHeader>
-
-            {ready ? (
-                <Group footer='Российские сайты пойдут напрямую, остальное — через VPN.'>
-                    <Row
-                        icon={
-                            <IconCircleCheckFilled className='size-[22px] text-success' />
-                        }
-                        label='Подписка загружена'
-                        hint={`${state.servers} серверов${state.pool_nodes ? ` · в пуле ${state.pool_nodes}` : ''}`}
-                    />
-                    <Row
-                        label='Заменить ссылку'
-                        tone='tint'
-                        onClick={() => setEditing(true)}
-                    />
-                </Group>
-            ) : (
-                <Group
-                    footer={
-                        error ? (
-                            <span className='text-destructive'>{error}</span>
-                        ) : (
-                            'Обычно её дают в личном кабинете или в боте провайдера.'
-                        )
-                    }
-                >
-                    <form
-                        className='flex min-h-[52px] items-center gap-2'
-                        onSubmit={e => {
-                            e.preventDefault()
-                            if (valid) save.mutate(value.trim())
-                        }}
-                    >
-                        <label htmlFor='welcome-url' className='sr-only'>
-                            Ссылка на подписку
-                        </label>
-                        <input
-                            id='welcome-url'
-                            type='url'
-                            inputMode='url'
-                            autoComplete='off'
-                            value={value}
-                            onChange={e => setValue(e.target.value)}
-                            placeholder='https://'
-                            className='min-w-0 flex-1 bg-transparent text-[17px] tracking-[-0.43px] outline-none placeholder:text-label-tertiary'
-                        />
-                        {!value && (
-                            <button
-                                type='button'
-                                onClick={paste}
-                                className='min-h-9 shrink-0 cursor-pointer rounded-full bg-fill px-3 text-[15px] font-medium text-tint'
-                            >
-                                Вставить
-                            </button>
-                        )}
-                    </form>
-                </Group>
-            )}
-
-            <Actions
-                primary={
-                    ready
-                        ? { label: 'Далее', onClick: onNext }
-                        : {
-                              label: save.isPending
-                                  ? 'Загружаю серверы…'
-                                  : 'Загрузить',
-                              onClick: () => save.mutate(value.trim()),
-                              disabled: !valid,
-                              busy: save.isPending,
-                          }
-                }
-                secondary={
-                    editing && state.subscription
-                        ? { label: 'Отмена', onClick: () => setEditing(false) }
-                        : undefined
-                }
-            />
-        </>
-    )
+    return <>
+        <StepHeader icon={<IconLink className='size-8' stroke={2} />} color='#6366f1' title='Серверы VPN'>
+            Подписка провайдера, готовая ссылка собственного сервера или файл. Панель проверит реальное HTTPS-соединение.
+        </StepHeader>
+        {ready ? <Group>
+            <Row icon={<IconCircleCheckFilled className='size-[22px] text-success' />} label='Серверы подключены' hint={`${state.servers} серверов${state.pool_nodes ? ` · в пуле ${state.pool_nodes}` : ''}`} />
+            <Row label='Заменить источник' tone='tint' onClick={() => setEditing(true)} />
+        </Group> : <Group><ServerSourceForm onApplied={() => setEditing(false)} /></Group>}
+        {ready && <Actions primary={{ label: 'Далее: режим VPN', onClick: onNext }} />}
+        {editing && state.subscription && <button type='button' onClick={() => setEditing(false)} className='mt-4 min-h-11 text-tint'>Отмена</button>}
+    </>
 }
-
 function DevicesStep({
     state,
     onBack,

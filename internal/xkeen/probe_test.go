@@ -25,7 +25,7 @@ func TestEnsureProbeRouteSingle(t *testing.T) {
 		t.Error("probe file must not carry routing — it would replace the owner's rules")
 	}
 	ib := asSlice(inbound["inbounds"])[0].(map[string]interface{})
-	if ib["protocol"] != "socks" || ib["listen"] != "127.0.0.1" || ib["port"] != float64(10086) {
+	if ib["protocol"] != "socks" || ib["listen"] != "127.0.0.1" || toInt(ib["port"]) != 10086 {
 		t.Errorf("unexpected probe inbound: %v", ib)
 	}
 

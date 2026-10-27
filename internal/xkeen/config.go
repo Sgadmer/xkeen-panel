@@ -38,7 +38,7 @@ func WriteOutboundsConfig(path string, config map[string]interface{}) error {
 		return err
 	}
 
-	return writeFileAtomic(path, data, 0644)
+	return writeFileAtomic(path, data, 0600)
 }
 
 // backupFile keeps a single .bak copy next to the original.
@@ -51,7 +51,7 @@ func backupFile(path string) error {
 		return fmt.Errorf("ошибка чтения %s для резервной копии: %w", path, err)
 	}
 
-	if err := os.WriteFile(path+".bak", data, 0644); err != nil {
+	if err := os.WriteFile(path+".bak", data, 0600); err != nil {
 		return fmt.Errorf("не удалось создать резервную копию %s: %w", path+".bak", err)
 	}
 
@@ -65,7 +65,7 @@ func RestoreBackup(path string) error {
 		return fmt.Errorf("резервная копия %s недоступна: %w", path+".bak", err)
 	}
 
-	return writeFileAtomic(path, data, 0644)
+	return writeFileAtomic(path, data, 0600)
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
@@ -294,20 +294,6 @@ func UpdateOutbound(outboundsPath string, server *models.Server) error {
 		return fmt.Errorf("outbounds не найдены в конфиге")
 	}
 
-	// Parse the VLESS URI
-	if server.RawURI == "" {
-		return fmt.Errorf("RawURI пуст — невозможно сгенерировать конфиг. Обновите подписку")
-	}
-
-	if server.Protocol != "" && server.Protocol != "vless" {
-		return fmt.Errorf("автоконфигурация поддерживает только VLESS, протокол %q пока не поддержан", server.Protocol)
-	}
-
-	params, err := ParseVLESS(server.RawURI)
-	if err != nil {
-		return fmt.Errorf("ошибка парсинга URI: %w", err)
-	}
-
 	// A pool means routing picks the node through a balancer; replacing one of
 	// its members would silently break the pool. Pools are handled separately.
 	if n := countProxyOutbounds(outbounds); n > 1 {
@@ -317,11 +303,13 @@ func UpdateOutbound(outboundsPath string, server *models.Server) error {
 	// Tag and shape come from the existing outbound: the tag has to keep matching
 	// routing, and nobody asked to convert the config between vnext and flat.
 	replaceIdx, existing := findProxyOutbound(outbounds)
-	newOutbound := mergeOutbound(existing, buildOutboundFromURI(
-		params,
-		outboundTag(existing),
-		detectOutboundFormat(existing),
-	))
+	newOutbound, err := BuildServerOutbound(*server, outboundTag(existing), existing)
+	if err != nil {
+		return err
+	}
+	if len(server.RawOutbound) == 0 && (server.Protocol == "" || server.Protocol == "vless") {
+		newOutbound = mergeOutbound(existing, newOutbound)
+	}
 
 	if replaceIdx >= 0 {
 		outbounds[replaceIdx] = newOutbound

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -108,22 +109,28 @@ type User struct {
 
 // Server is one entry of the subscription.
 type Server struct {
-	ID              int       `json:"id"`
-	Name            string    `json:"name"`
-	Address         string    `json:"address"`
-	Port            int       `json:"port"`
-	Protocol        string    `json:"protocol"`
-	Active          bool      `json:"active"`
-	Latency         int       `json:"latency_ms"`
-	RawURI          string    `json:"raw_uri,omitempty"`
-	LastChecked     time.Time `json:"last_checked,omitempty"`
-	Country         string    `json:"country,omitempty"`
-	CountryOverride string    `json:"country_override,omitempty"`
+	ID              int             `json:"id"`
+	Name            string          `json:"name"`
+	Address         string          `json:"address"`
+	Port            int             `json:"port"`
+	Protocol        string          `json:"protocol"`
+	Active          bool            `json:"active"`
+	Latency         int             `json:"latency_ms"`
+	RawURI          string          `json:"raw_uri,omitempty"`
+	RawOutbound     json.RawMessage `json:"raw_outbound,omitempty"`
+	RawProfile      json.RawMessage `json:"raw_profile,omitempty"`
+	ProfileNodes    int             `json:"profile_nodes,omitempty"`
+	ProbeKind       string          `json:"probe_kind,omitempty"`
+	CheckError      string          `json:"check_error,omitempty"`
+	LastChecked     time.Time       `json:"last_checked,omitempty"`
+	Country         string          `json:"country,omitempty"`
+	CountryOverride string          `json:"country_override,omitempty"`
 }
 
 // SubscriptionData is the stored subscription (data/subscription.json).
 type SubscriptionData struct {
 	URL         string    `json:"url"`
+	SourceKind  string    `json:"source_kind,omitempty"`
 	LastUpdated time.Time `json:"last_updated"`
 	Servers     []Server  `json:"servers"`
 	ActiveID    int       `json:"active_id"`

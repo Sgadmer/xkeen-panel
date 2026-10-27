@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,9 @@ func timeIn(loc *time.Location) (string, int) {
 
 // Runs in a child process: time.Local is fixed once per process, and the router starts in UTC.
 func TestApplyReadsPOSIXRule(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows obtains time.Local from system settings rather than the POSIX TZ environment; exercise this subprocess test natively on Linux")
+	}
 	if os.Getenv("LOCALTZ_CHILD") == "1" {
 		rule, ok := Apply(os.Getenv("LOCALTZ_FILE"))
 		name, offset := time.Now().Zone()

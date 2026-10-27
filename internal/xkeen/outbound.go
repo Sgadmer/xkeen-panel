@@ -1,6 +1,9 @@
 package xkeen
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Xray accepts two shapes for a VLESS outbound:
 //
@@ -30,6 +33,9 @@ var serviceProtocols = map[string]bool{
 // isServiceOutbound reports whether the outbound is infrastructure rather than a
 // proxy node. Tags are checked too because XKeen templates label them that way.
 func isServiceOutbound(ob map[string]interface{}) bool {
+	if ProfileEndpointIdentity(ob) != "" {
+		return false
+	}
 	protocol, _ := ob["protocol"].(string)
 	if serviceProtocols[protocol] {
 		return true
@@ -137,6 +143,10 @@ func readProxyEndpoint(ob map[string]interface{}) (address string, port int, uui
 }
 
 func toInt(v interface{}) int {
+	if number, ok := v.(json.Number); ok {
+		value, _ := number.Int64()
+		return int(value)
+	}
 	switch n := v.(type) {
 	case float64:
 		return int(n)

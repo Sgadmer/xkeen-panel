@@ -1,0 +1,4 @@
+interface:
+  display_name: "Установка XKeen и панели"
+  short_description: "Установка и миграция VPN на Keenetic и Netcraze"
+  default_prompt: "Используй $xkeen-router-install, чтобы проверить мой роутер и установить XKeen с панелью."

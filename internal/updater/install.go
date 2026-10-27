@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -30,6 +29,9 @@ func (u *Updater) prevPath() string    { return u.binPath + ".prev" }
 func (u *Updater) newPath() string     { return u.binPath + ".new" }
 
 func (u *Updater) install(ctx context.Context, release Release) error {
+	if u.locked {
+		return ErrLocked
+	}
 	if release.assetURL == "" {
 		return fmt.Errorf("в релизе %s нет файла %s", release.Tag, u.asset)
 	}
@@ -59,15 +61,25 @@ func (u *Updater) install(ctx context.Context, release Release) error {
 	}
 
 	if err := writeJSON(u.pendingPath(), pendingMarker{From: u.current, To: release.Tag}); err != nil {
-		u.log("[UPDATE] Не удалось записать маркер обновления: %v — откат при сбое запуска не сработает", err)
+		if restoreErr := u.rollbackBinary(); restoreErr != nil {
+			return fmt.Errorf("маркер восстановления не записан, восстановление бинарника не подтверждено")
+		}
+		return fmt.Errorf("не удалось подготовить восстановление; прежняя версия сохранена")
 	} else if err := u.startGuard(); err != nil {
-		u.log("[UPDATE] Сторож отката не запущен: %v", err)
+		if restoreErr := u.rollbackBinary(); restoreErr != nil {
+			return fmt.Errorf("сторож восстановления не запущен, восстановление бинарника не подтверждено")
+		}
+		os.Remove(u.pendingPath())
+		return fmt.Errorf("не удалось запустить восстановление; прежняя версия сохранена")
 	}
 
 	return nil
 }
 
 func (u *Updater) download(ctx context.Context, url, path, sum string) error {
+	if u.locked {
+		return ErrLocked
+	}
 	resp, err := u.get(ctx, url, "")
 	if err != nil {
 		return err
@@ -100,6 +112,9 @@ func (u *Updater) download(ctx context.Context, url, path, sum string) error {
 
 // A wrong-arch or truncated binary fails here instead of leaving the router without a panel.
 func (u *Updater) smokeTest(ctx context.Context, path, tag string) error {
+	if u.locked {
+		return ErrLocked
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
@@ -124,6 +139,9 @@ if [ -x "$GUARD_INIT" ]; then
 fi`
 
 func (u *Updater) startGuard() error {
+	if u.locked {
+		return ErrLocked
+	}
 	// The outer shell exits at once, so the guard is orphaned to init and nothing reaps it after exec
 	cmd := exec.Command("/bin/sh", "-c", `(`+guardScript+`) </dev/null >/dev/null 2>&1 &`)
 	cmd.Env = append(os.Environ(),
@@ -134,12 +152,15 @@ func (u *Updater) startGuard() error {
 		"GUARD_BIN="+u.binPath,
 		"GUARD_INIT="+u.initScript,
 	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedProcessAttrs()
 
 	return cmd.Run()
 }
 
 func (u *Updater) rollbackBinary() error {
+	if u.locked {
+		return ErrLocked
+	}
 	if _, err := os.Stat(u.prevPath()); err != nil {
 		return fmt.Errorf("предыдущей версии нет на диске")
 	}

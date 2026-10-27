@@ -22,7 +22,7 @@ var directNetworks = []interface{}{
 // NeedsBootstrap reports a config with no proxy outbound at all, which is what
 // a fresh XKeen install ships: 04_outbounds.json holds only a comment.
 func NeedsBootstrap(rt Runtime, top Topology) bool {
-	return rt.Core == CoreXray && len(top.ProxyTags) == 0
+	return rt.Core == CoreXray && top.Mode != TopologyPool && len(top.ProxyTags) == 0
 }
 
 // Bootstrap writes a working config from scratch: a pool built from the
@@ -44,7 +44,7 @@ func Bootstrap(rt Runtime, outboundsPath string, servers []models.Server, opts P
 	template := map[string]interface{}{
 		"streamSettings": map[string]interface{}{"sockopt": map[string]interface{}{"mark": entwareMark}},
 	}
-	nodes, err := BuildPoolOutbounds(SelectPoolServers(servers, opts.Selection), selector, template, nil)
+	nodes, err := buildSubscriptionPool(servers, opts.Selection, selector, template, nil)
 	if err != nil {
 		return PoolState{}, err
 	}

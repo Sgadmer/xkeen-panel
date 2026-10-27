@@ -3,12 +3,25 @@ export type Server = {
     name: string
     address: string
     port: number
-    protocol: 'vless' | 'vmess' | 'trojan' | 'shadowsocks'
+    protocol:
+        | 'vless'
+        | 'vmess'
+        | 'trojan'
+        | 'shadowsocks'
+        | 'hysteria'
+        | 'hysteria2'
+        | 'hy2'
+        | 'socks'
+        | 'http'
+        | 'xray-profile'
     active: boolean
     latency_ms: number
     country?: string
     country_override?: string
     last_checked?: string
+    probe_kind?: string
+    check_error?: string
+    profile_nodes?: number
     pool_tag?: string
 }
 
@@ -111,9 +124,28 @@ export type SelfTestResult = {
 }
 
 export type SubscriptionInfo = {
-    url: string
+    configured?: boolean
+    source_kind?: 'subscription' | 'server' | 'file'
+    can_refresh?: boolean
+    host?: string
     last_updated: string
     server_count: number
+    import_report?: ImportReport
+}
+
+export type ImportReport = {
+    imported: number
+    imported_profiles?: number
+    skipped_composite: number
+    skipped_unsupported: number
+    warnings?: string[]
+}
+
+export type SubscriptionUpdateResponse = {
+    server_count: number
+    pool_error?: string
+    import_report?: ImportReport
+    warnings?: string[]
 }
 
 export type AuthStatus = {
@@ -135,7 +167,9 @@ export type ApiError = {
 }
 
 export type UpdateState = {
+    repository?: string
     current: string
+    locked: boolean
     latest?: {
         tag: string
         notes: string

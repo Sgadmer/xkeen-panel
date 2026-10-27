@@ -1,0 +1,82 @@
+# Synthetic provider fixture. Never contact these .invalid hosts.
+proxies:
+  - name: Germany VLESS Reality
+    type: vless
+    server: vless.example.invalid
+    port: 443
+    uuid: 00000000-0000-4000-8000-000000000001
+    flow: xtls-rprx-vision
+    udp: true
+    tls: true
+    servername: reality.example.invalid
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
+      short-id: "0102"
+  - name: VMess WebSocket
+    type: vmess
+    server: vmess.example.invalid
+    port: 443
+    uuid: 00000000-0000-4000-8000-000000000002
+    alterId: 0
+    cipher: aes-128-gcm
+    tls: true
+    servername: tls.example.invalid
+    network: ws
+    ws-opts:
+      path: /synthetic
+      headers:
+        Host: cdn.example.invalid
+        X-Synthetic: fixture
+      max-early-data: 1024
+      early-data-header-name: Sec-WebSocket-Protocol
+  - name: Trojan gRPC
+    type: trojan
+    server: trojan.example.invalid
+    port: 443
+    password: synthetic-trojan-password
+    sni: tls.example.invalid
+    network: grpc
+    grpc-opts:
+      grpc-service-name: synthetic-service
+      grpc-user-agent: synthetic-client
+  - name: Shadowsocks
+    type: ss
+    server: ss.example.invalid
+    port: 8443
+    cipher: 2022-blake3-aes-128-gcm
+    password: MDEyMzQ1Njc4OWFiY2RlZg==
+  - name: SOCKS authenticated
+    type: socks5
+    server: socks.example.invalid
+    port: 1080
+    username: synthetic-user
+    password: synthetic-password
+  - name: HTTP authenticated
+    type: http
+    server: http.example.invalid
+    port: 8080
+    username: synthetic-user
+    password: synthetic-password
+    headers:
+      X-Synthetic: fixture
+  - name: Hysteria2
+    type: hysteria2
+    server: hy2.example.invalid
+    port: 443
+    ports: 5000-5002,8443
+    hop-interval: 20
+    password: synthetic-hy2-password
+    up: 30
+    down: 100 Mbps
+    obfs: salamander
+    obfs-password: synthetic-obfs
+    sni: tls.example.invalid
+    alpn: [h3]
+proxy-groups:
+  - name: AUTO
+    type: url-test
+    proxies: [Germany VLESS Reality, Hysteria2]
+    url: https://www.gstatic.com/generate_204
+rules:
+  - MATCH,AUTO

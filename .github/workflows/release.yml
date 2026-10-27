@@ -1,52 +1,62 @@
 name: Release
-
 on:
   push:
-    tags:
-      - 'v*'
-
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Точный тег выпуска'
+        required: true
+        default: 'v3.0.0-beta.1'
+        type: string
 permissions:
   contents: write
-
 jobs:
   release:
+    if: github.repository == 'Sgadmer/xkeen-panel'
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
-
+          go-version: '1.27.1'
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Privacy check
+        run: python3 scripts/check-public-source.py --tracked-only
+      - name: Validate release version
+        run: '[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]'
       - name: Build frontend
         run: cd frontend && npm ci && npm run build
-
-      - name: Test
+      - name: Backend tests
         run: go test ./...
-
-      - name: Build binaries
-        env:
-          LDFLAGS: -s -w -X xkeen-panel/internal/version.Version=${{ github.ref_name }}
+      - name: Installer tests
+        run: python3 -m unittest discover -s installer/tests -v
+      - name: Build verified architectures
         run: |
-          # aarch64 (Keenetic Giga, Ultra, Peak, Hopper and others)
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$LDFLAGS" -o build/xkeen-panel-aarch64 .
-
-          # mipsel (older Keenetic series)
-          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="$LDFLAGS" -o build/xkeen-panel-mipsel .
-
-      # The panel refuses to update itself from a release without this file
+          mkdir -p build
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w -X xkeen-panel/internal/version.Version=$VERSION" -o build/xkeen-panel-aarch64 .
+          CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="-s -w -X xkeen-panel/internal/version.Version=$VERSION" -o build/xkeen-panel-mipsel .
+          git archive --format=zip --prefix=xkeen-panel/ HEAD > build/xkeen-panel-source.zip
+          cd skills && zip -r ../build/xkeen-router-install.zip xkeen-router-install
       - name: Checksums
-        run: cd build && sha256sum xkeen-panel-aarch64 xkeen-panel-mipsel > SHA256SUMS
-
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+        run: python3 installer/release-manifest.py --directory build
+      - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ contains(env.VERSION, '-') }}
           generate_release_notes: true
           files: |
             build/xkeen-panel-aarch64
             build/xkeen-panel-mipsel
+            build/xkeen-panel-source.zip
+            build/xkeen-router-install.zip
             build/SHA256SUMS

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -110,6 +111,12 @@ func (u *Updater) expectedSum(ctx context.Context, release Release) (string, err
 }
 
 func (u *Updater) get(ctx context.Context, url, accept string) (*http.Response, error) {
+	if u.locked {
+		return nil, ErrLocked
+	}
+	if u.apiBase == "https://api.github.com" && !trustedUpdateURL(url, u.repo) {
+		return nil, fmt.Errorf("источник обновления не принадлежит репозиторию %s", u.repo)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -132,4 +139,15 @@ func (u *Updater) get(ctx context.Context, url, accept string) (*http.Response, 
 	}
 
 	return resp, nil
+}
+
+func trustedUpdateURL(raw, repo string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	if parsed.Host == "api.github.com" {
+		return parsed.Path == "/repos/"+repo+"/releases/latest"
+	}
+	return parsed.Host == "github.com" && strings.HasPrefix(parsed.Path, "/"+repo+"/releases/download/") && !strings.Contains(parsed.Path, "/../")
 }

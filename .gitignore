@@ -17,3 +17,12 @@ frontend/dist/
 .vscode/
 *.swp
 .DS_Store
+
+# Installer runtime bundles and local checks
+__pycache__/
+*.pyc
+.pytest_cache/
+installer/bundles/
+*.dpapi.json
+*.new
+*.prev

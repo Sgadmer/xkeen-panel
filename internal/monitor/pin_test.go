@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func routerRoot(t *testing.T) (root, calls string) {
 	write("opt/sbin/xray", "#!/bin/sh\necho \"$@\" >> "+calls+"\n", 0755)
 	write("opt/etc/xray/configs/04_outbounds.json", `{"outbounds":[
 		{"tag":"sub-1","protocol":"vless","settings":{"address":"nl.example","port":443,"id":"11111111-2222-3333-4444-555555555555"},
-		 "streamSettings":{"network":"tcp","sockopt":{"mark":255}}},
+		 "streamSettings":{"network":"tcp","security":"reality","realitySettings":{"serverName":"a.com","publicKey":"K"},"sockopt":{"mark":255}}},
 		{"tag":"direct","protocol":"freedom"}]}`, 0644)
 	write("opt/etc/xray/configs/05_routing.json", `{"routing":{
 		"balancers":[{"tag":"balancer","selector":["sub-"]}],
@@ -74,6 +75,9 @@ func readCalls(t *testing.T, path string) string {
 }
 
 func TestPinServerOutsidePool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake Xray is a POSIX shell executable")
+	}
 	fi := models.Server{Name: "FI", Protocol: "vless", RawURI: fiURI, Country: "FI"}
 	w, store, calls := routerWatchdog(t, []models.Server{{Name: "NL", Protocol: "vless", RawURI: nlURI}, fi})
 
@@ -102,6 +106,9 @@ func TestPinServerOutsidePool(t *testing.T) {
 }
 
 func TestPinServerInsidePoolUsesItsTag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake Xray is a POSIX shell executable")
+	}
 	nl := models.Server{Name: "NL", Protocol: "vless", RawURI: nlURI}
 	w, store, calls := routerWatchdog(t, []models.Server{nl})
 
@@ -132,14 +139,24 @@ func TestSameCountryReplacement(t *testing.T) {
 	host, port := listener(t)
 
 	servers := []models.Server{
-		{Name: "FI-failed", Protocol: "vless", RawURI: "failed", Address: host, Port: port, Country: "FI"},
-		{Name: "FI-dead", Protocol: "vless", RawURI: "dead", Address: "127.0.0.1", Port: 1, Country: "FI"},
-		{Name: "FI-live", Protocol: "vless", RawURI: "live", Address: host, Port: port, Country: "FI"},
-		{Name: "NL-live", Protocol: "vless", RawURI: "nl", Address: host, Port: port, Country: "NL"},
+		{Name: "FI-failed", Protocol: "vless", RawURI: fiURI, Address: host, Port: port, Country: "FI"},
+		{Name: "FI-dead", Protocol: "vless", RawURI: "vless://44444444-5555-6666-7777-888888888888@dead.example:443", Address: "127.0.0.1", Port: 1, Country: "FI"},
+		{Name: "FI-live", Protocol: "vless", RawURI: "vless://55555555-6666-7777-8888-999999999999@live.example:443", Address: host, Port: port, Country: "FI"},
+		{Name: "NL-live", Protocol: "vless", RawURI: nlURI, Address: host, Port: port, Country: "NL"},
 	}
 	w, _, _ := routerWatchdog(t, servers)
+	w.probeServers = func(_ xkeen.Runtime, candidates []models.Server, _ xkeen.ProbeOptions) ([]models.Server, error) {
+		for i := range candidates {
+			candidates[i].ProbeKind = "https"
+			candidates[i].Latency = -1
+			if candidates[i].Name == "FI-live" {
+				candidates[i].Latency = 40
+			}
+		}
+		return candidates, nil
+	}
 
-	next, err := w.sameCountryReplacement("FI", "failed")
+	next, err := w.sameCountryReplacement("FI", fiURI)
 	if err != nil {
 		t.Fatalf("sameCountryReplacement: %v", err)
 	}
@@ -155,6 +172,9 @@ func TestSameCountryReplacement(t *testing.T) {
 // A hand-picked country stays picked: the failed server is swapped for another
 // one of the same country, and the owner sees why.
 func TestRotateExitKeepsManualCountry(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake Xray is a POSIX shell executable")
+	}
 	host, port := listener(t)
 	uri := func(uuid string) string {
 		return fmt.Sprintf("vless://%s@%s:%d?type=tcp&security=reality&sni=b.com&pbk=K", uuid, host, port)
@@ -163,6 +183,14 @@ func TestRotateExitKeepsManualCountry(t *testing.T) {
 	backup := models.Server{Name: "FI-2", Protocol: "vless", RawURI: uri("44444444-5555-6666-7777-888888888888"), Address: host, Port: port, Country: "FI"}
 
 	w, store, _ := routerWatchdog(t, []models.Server{{Name: "NL", Protocol: "vless", RawURI: nlURI}, failed, backup})
+	w.active = true
+	w.probeServers = func(_ xkeen.Runtime, candidates []models.Server, _ xkeen.ProbeOptions) ([]models.Server, error) {
+		for i := range candidates {
+			candidates[i].ProbeKind = "https"
+			candidates[i].Latency = 40
+		}
+		return candidates, nil
+	}
 	if _, err := w.PinServer(failed, true, ""); err != nil {
 		t.Fatalf("PinServer: %v", err)
 	}

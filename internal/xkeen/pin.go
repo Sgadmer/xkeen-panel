@@ -12,6 +12,7 @@ import (
 // PoolNode ties a pool outbound to the subscription server behind it.
 type PoolNode struct {
 	Tag     string
+	NodeKey string // complete canonical configuration, not merely host:port
 	Address string
 	Port    int
 	UUID    string
@@ -31,13 +32,12 @@ func PoolNodes(outboundsPath, selector string, servers []models.Server) ([]PoolN
 		return nil, err
 	}
 
-	byEndpoint := make(map[[3]interface{}]*models.Server, len(servers))
+	byEndpoint := make(map[endpoint]*models.Server, len(servers))
 	for i := range servers {
-		params, err := ParseVLESS(servers[i].RawURI)
-		if err != nil {
+		key, ok := endpointOfServer(servers[i])
+		if !ok {
 			continue
 		}
-		key := [3]interface{}{params.Address, params.Port, params.UUID}
 		if existing, seen := byEndpoint[key]; seen && preferNamed(*existing, servers[i]).ID == existing.ID {
 			continue
 		}
@@ -46,15 +46,16 @@ func PoolNodes(outboundsPath, selector string, servers []models.Server) ([]PoolN
 
 	nodes := make([]PoolNode, 0, len(raw))
 	for _, ob := range raw {
-		address, port, uuid, ok := readProxyEndpoint(ob)
+		ep, ok := endpointOfOutbound(ob)
 		if !ok {
 			continue
 		}
 		tag, _ := ob["tag"].(string)
 
-		node := PoolNode{Tag: tag, Address: address, Port: port, UUID: uuid, Latency: -1}
-		if server, found := byEndpoint[[3]interface{}{address, port, uuid}]; found {
+		node := PoolNode{Tag: tag, NodeKey: ep.Key(), Address: ep.Address, Port: ep.Port, UUID: ep.UUID, Latency: -1}
+		if server, found := byEndpoint[ep]; found {
 			node.Server = server
+			node.Latency = server.Latency
 		}
 		nodes = append(nodes, node)
 	}
@@ -117,32 +118,57 @@ func PinBestNode(rt Runtime, apiAddr, outboundsPath string, top Topology, server
 	if len(nodes) == 0 {
 		return "", fmt.Errorf("в пуле нет нод")
 	}
+	// leastPing uses observatory requests through the actual outbound. Unlike
+	// a TCP connect to the endpoint, this verifies REALITY/TLS credentials and
+	// also works for UDP transports such as Hysteria2.
+	if info, statusErr := BalancerStatus(rt, apiAddr, top.BalancerTag); statusErr == nil && info.Selects != "" && !excluded[info.Selects] {
+		for _, node := range nodes {
+			if node.Tag == info.Selects {
+				if err := OverrideBalancerTarget(rt, apiAddr, top.BalancerTag, node.Tag); err != nil {
+					return "", err
+				}
+				return node.Tag, nil
+			}
+		}
+	}
 
 	candidates := make([]models.Server, 0, len(nodes))
-	tagOf := make(map[string]string, len(nodes))
 	for _, node := range nodes {
 		if excluded[node.Tag] {
 			continue
 		}
-		candidates = append(candidates, models.Server{
-			Name:    node.Tag,
-			Address: node.Address,
-			Port:    node.Port,
-			RawURI:  node.Tag,
-		})
-		tagOf[node.Tag] = node.Tag
+		if node.Server != nil && node.Server.ProbeKind == "https" && node.Server.Latency < 0 {
+			continue
+		}
+		candidate := models.Server{Name: node.Tag, Address: node.Address, Port: node.Port, Latency: -1}
+		if node.Server != nil {
+			candidate = *node.Server
+			candidate.Name = node.Tag
+		}
+		candidates = append(candidates, candidate)
 	}
 
 	// Everything is excluded — better a suspect node than no traffic at all
 	if len(candidates) == 0 {
 		log.Printf("[PIN] Все ноды исключены — снимаю исключения")
 		for _, node := range nodes {
-			candidates = append(candidates, models.Server{Name: node.Tag, Address: node.Address, Port: node.Port, RawURI: node.Tag})
+			if node.Server != nil && node.Server.ProbeKind == "https" && node.Server.Latency < 0 {
+				continue
+			}
+			candidate := models.Server{Name: node.Tag, Address: node.Address, Port: node.Port, Latency: -1}
+			if node.Server != nil {
+				candidate = *node.Server
+				candidate.Name = node.Tag
+			}
+			candidates = append(candidates, candidate)
 		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("в пуле нет нод с успешной проверкой HTTPS")
 	}
 
 	if probeTimeout > 0 {
-		checked := CheckAllLatencies(candidates, probeTimeout, concurrency)
+		checked := checkPoolLatencies(candidates, probeTimeout, concurrency)
 		sort.SliceStable(checked, func(i, j int) bool {
 			switch {
 			case checked[i].Latency < 0:

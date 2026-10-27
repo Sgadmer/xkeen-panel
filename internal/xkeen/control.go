@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -58,7 +57,7 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 	cmd.Env = append(os.Environ(), "XKEEN_FOREGROUND=1")
 	cmd.Stdout = out
 	cmd.Stderr = out
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedProcessAttrs()
 
 	runErr := cmd.Run()
 
@@ -109,6 +108,29 @@ func Restart(dispatcher string) (string, error) {
 	}()
 
 	return "restart initiated", nil
+}
+
+// RestartAndWait reports the dispatcher's actual result to transactional callers.
+func RestartAndWait(dispatcher string) (string, error) {
+	restartMu.Lock()
+	if restarting {
+		restartMu.Unlock()
+		return "", fmt.Errorf("перезапуск ядра уже выполняется")
+	}
+	restarting = true
+	restartMu.Unlock()
+	if OnRestartStateChange != nil {
+		OnRestartStateChange(true)
+	}
+	defer func() {
+		restartMu.Lock()
+		restarting = false
+		restartMu.Unlock()
+		if OnRestartStateChange != nil {
+			OnRestartStateChange(false)
+		}
+	}()
+	return runXkeen(dispatcher, restartTimeout, "-restart")
 }
 
 // Start starts the proxy core. The `on` argument mirrors what `xkeen -start`

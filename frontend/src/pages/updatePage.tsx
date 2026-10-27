@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { IconLoader2 } from '@tabler/icons-react'
+import { IconLoader2, IconLock } from '@tabler/icons-react'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
 import { useUpdate } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
@@ -44,6 +44,25 @@ export function UpdatePage() {
     })
 
     if (!u) return <PageTitle title='Обновления' back={back} />
+
+    if (u.locked) {
+        return (
+            <>
+                <PageTitle
+                    title='Обновления'
+                    subtitle={`Установлена ${u.current}`}
+                    back={back}
+                />
+                <Group footer='Обновление подписки продолжает работать по расписанию из настроек.'>
+                    <Row
+                        icon={<IconLock className='size-5 shrink-0 text-tint' />}
+                        label='Обновление кода панели заблокировано'
+                        hint='Защита персональной сборки. Изменения кода устанавливаются отдельно.'
+                    />
+                </Group>
+            </>
+        )
+    }
 
     const busy =
         u.updating || check.isPending || apply.isPending || rollback.isPending
@@ -90,10 +109,14 @@ export function UpdatePage() {
     return (
         <>
             <PageTitle
-                title='Обновления'
+                title='Обновление панели'
                 subtitle={`Установлена ${u.current}`}
                 back={back}
             />
+
+            <Group footer='Здесь обновляется только панель. Версии XKeen, Xray и геобазы управляются в разделе «Компоненты».'>
+                <Row label='Источник обновлений' detail={u.repository ?? 'Sgadmer/xkeen-panel'} />
+            </Group>
 
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <Group

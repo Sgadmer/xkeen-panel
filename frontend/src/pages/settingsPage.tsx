@@ -147,6 +147,14 @@ export function SettingsPage() {
                 />
 
                 <Group title='XKeen'>
+                    <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint='Выбранные сервисы или весь трафик' to='/settings/routing' />
+                    <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint='Версии XKeen/Xray, обновления и геоданные' to='/settings/components' />
+                    <Row
+                        icon={icon('#30d158', IconArrowsExchange)}
+                        label='Исключения VPN'
+                        hint='Домены, URL, IP-адреса и подсети без VPN'
+                        to='/exclusions'
+                    />
                     <Row
                         icon={icon('#6366f1', IconCpu)}
                         label='Ядро'
@@ -158,7 +166,7 @@ export function SettingsPage() {
                     />
                     <Row
                         icon={icon('#0a84ff', IconAdjustmentsHorizontal)}
-                        label='Порты и исключения'
+                        label='Порты и системные исключения'
                         detail={status?.xkeen_version}
                         to='/settings/xkeen'
                     />
@@ -176,11 +184,14 @@ export function SettingsPage() {
                         )
                     }
                 >
+                    <Row icon={icon('#0a84ff', IconWand)} label='Вход с ПК и телефона' hint='Адрес панели, QR-код и приложение на iPhone' to='/settings/access' />
                     <Row
                         icon={icon('#8e8e93', IconDownload)}
-                        label='Обновления'
+                        label='Обновление панели'
                         detail={
-                            update?.available && update.latest ? (
+                            update?.locked ? (
+                                'Заблокировано'
+                            ) : update?.available && update.latest ? (
                                 <span className='text-tint'>
                                     {update.latest.tag}
                                 </span>

@@ -1,319 +1,319 @@
 #!/bin/sh
-# Installs XKeen Panel on a Keenetic router with Entware, and XKeen itself with --with-xkeen
-
-REPO="Dearonski/xkeen-panel"
-XKEEN_URL="https://github.com/jameszeroX/XKeen/releases/latest/download/xkeen.tar.gz"
-MIRRORS="https://gh-proxy.com https://ghfast.top"
-
-INSTALL_DIR="/opt/etc/xkeen-panel"
-BIN_PATH="/opt/sbin/xkeen-panel"
-INIT_SCRIPT="/opt/etc/init.d/S99xkeen-panel"
-XKEEN_BIN="/opt/sbin/xkeen"
-
-WITH_XKEEN=0
-WITH_MIHOMO=0
-CHECK_ONLY=0
-ARCH=""
-
-green="\033[92m"
-red="\033[91m"
-yellow="\033[93m"
-reset="\033[0m"
-if [ ! -t 1 ]; then
-    green="" red="" yellow="" reset=""
-fi
-
-ok() { printf "  ${green}✓${reset} %s\n" "$*"; }
-warn() { printf "  ${yellow}!${reset} %s\n" "$*"; }
-bad() { printf "  ${red}✗${reset} %s\n" "$*"; }
-fail() {
-    printf "\n${red}Ошибка${reset}: %s\n" "$*"
-    exit 1
-}
-
+# Sgadmer/xkeen-panel. Run by the installation skill after a read-only audit.
+set -eu
+umask 077
+ROOT=; BUNDLE=; REVIEWED=0; MIGRATION=0; CHECK=0; RESUME=; PORT=3000
+fail() { printf 'Ошибка: %s\n' "$*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
 usage() {
     cat <<'EOF'
-Установка XKeen Panel на роутер Keenetic с Entware.
+Проверенная установка XKeen Panel и первоначального стека XKeen/Xray.
+  sh install.sh --check
+  sh install.sh --bundle /opt/tmp/xkp-bundle --preflight-reviewed
+  sh install.sh --bundle /opt/tmp/xkp-bundle --preflight-reviewed --migration-reviewed
+  sh install.sh --resume /opt/etc/xkeen-panel-install.XXXXXX --preflight-reviewed --migration-reviewed
 
-  sh install.sh                 поставить или обновить панель
-  sh install.sh --with-xkeen    поставить XKeen (если его нет) и панель
-  sh install.sh --check         только проверить роутер, ничего не меняя
-
-  --mihomo                      вместе с XKeen поставить и ядро Mihomo
-  aarch64 | mipsel              указать архитектуру вручную
+Комплект готовится на компьютере: python installer/prepare_bundle.py --help.
+Версии и контрольные суммы фиксируются до копирования на роутер.
+--preflight-reviewed означает, что агент проверил точную модель/прошивку,
+Netfilter, память/накопитель, резервную копию KeeneticOS и план действий.
+--migration-reviewed означает согласованный перенос прежней установки.
+--port NUMBER задаёт LAN-порт новой панели (по умолчанию 3000).
+Пароли, подписки и RCI-токены не передаются в аргументах этого установщика.
 EOF
 }
-
-for arg in "$@"; do
-    case "$arg" in
-        --with-xkeen) WITH_XKEEN=1 ;;
-        --mihomo) WITH_MIHOMO=1 ;;
-        --check) CHECK_ONLY=1 ;;
-        -h | --help)
-            usage
-            exit 0
-            ;;
-        aarch64 | arm64) ARCH="aarch64" ;;
-        mipsel | mipsle) ARCH="mipsel" ;;
-        *)
-            usage
-            fail "неизвестный параметр: $arg"
-            ;;
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --check) CHECK=1 ;;
+        --bundle|--resume|--port|--test-root)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || fail "нет значения $1"
+            case "$1" in --bundle) BUNDLE=$2;; --resume) RESUME=$2;; --port) PORT=$2;; --test-root) [ "${XKP_INSTALL_TESTING:-}" = 1 ] || fail 'test-root доступен только тестам'; ROOT=$2;; esac
+            shift ;;
+        --preflight-reviewed) REVIEWED=1 ;;
+        --migration-reviewed) MIGRATION=1 ;;
+        --help|-h) usage; exit 0 ;;
+        *) fail "неизвестный параметр $1" ;;
     esac
+    shift
 done
-
-# GitHub is often slow or blocked from Russian ISPs; the mirrors proxy release downloads
-fetch() {
-    url="$1"
-    out="$2"
-    curl -fL --connect-timeout 10 -m 600 -o "$out" "$url" 2>/dev/null && return 0
-    for mirror in $MIRRORS; do
-        curl -fL --connect-timeout 10 -m 600 -o "$out" "$mirror/$url" 2>/dev/null && return 0
-    done
-    return 1
+case "$ROOT" in ''|/*) ;; *) fail 'неверный корень теста';; esac
+case "$PORT" in ''|*[!0-9]*) fail 'некорректный порт';; esac
+[ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || fail 'порт должен быть от 1024 до 65535'
+OPT=$ROOT/opt; DATA=$OPT/etc/xkeen-panel; BIN=$OPT/sbin/xkeen-panel; INIT=$OPT/etc/init.d/S99xkeen-panel
+PATH=$OPT/sbin:$OPT/bin:$PATH
+export PATH
+arch() {
+    ew=$(opkg print-architecture 2>/dev/null | awk '$2!="all" && $2!="noarch" {a=$2} END {print a}')
+    case "$ew:$(uname -m)" in aarch64*:*|*:aarch64|*:arm64) echo aarch64;; mipsel*:*) echo mipsel;; *) return 1;; esac
 }
-
-detect_arch() {
-    [ -n "$ARCH" ] && return 0
-    # uname -m says "mips" for both endiannesses; opkg knows which one Entware runs
-    opkg_arch=$(opkg print-architecture 2>/dev/null | awk '$2 != "all" && $2 != "noarch" {a=$2} END {print a}')
-    case "$opkg_arch$(uname -m)" in
-        aarch64* | *aarch64 | *arm64) ARCH="aarch64" ;;
-        mipsel*) ARCH="mipsel" ;;
-        mips*) fail "big-endian MIPS не поддерживается: сборки есть только для aarch64 и mipsel" ;;
-        *) fail "не удалось определить архитектуру ($opkg_arch $(uname -m)). Укажите её вручную: aarch64 или mipsel" ;;
-    esac
+if [ "$CHECK" = 1 ]; then
+    printf 'architecture=%s\n' "$(arch || echo unsupported)"
+    printf 'kernel=%s\n' "$(uname -r)"
+    printf 'entware=%s\n' "$([ -d "$OPT/etc" ] && command -v opkg >/dev/null 2>&1 && echo found || echo missing)"
+    printf 'ram_available_kib=%s\n' "$(awk '/^MemAvailable:/ {print $2}' "$ROOT/proc/meminfo" 2>/dev/null || true)"
+    printf 'opt_free_kib=%s\n' "$(df -Pk "$OPT" 2>/dev/null | awk 'NR==2 {print $4}')"
+    for name in xkeen xray xkeen-panel; do printf '%s=%s\n' "$name" "$([ -e "$OPT/sbin/$name" ] && echo found || echo absent)"; done
+    for name in opkg ndmc jq curl tar sha256sum timeout; do command -v "$name" >/dev/null 2>&1 || printf 'missing_command=%s\n' "$name"; done
+    say 'Это первичная диагностика. Полный аудит и проверка совместимости описаны в docs/installation.md.'
+    exit 0
+fi
+[ "$REVIEWED" = 1 ] || fail 'сначала аудит и --preflight-reviewed'
+[ "$(id -u)" = 0 ] || fail 'нужна оболочка Entware root, а не CLI KeeneticOS'
+[ -d "$OPT/etc" ] && command -v opkg >/dev/null 2>&1 || fail 'нужно подготовить Entware через официальный веб-интерфейс'
+[ -n "$ROOT" ] || command -v ndmc >/dev/null 2>&1 || fail 'поддерживаемая среда Keenetic/Netcraze не обнаружена'
+for name in jq curl tar sha256sum timeout awk sed grep df du find; do command -v "$name" >/dev/null 2>&1 || fail "отсутствует $name; агент должен подготовить зависимости Entware"; done
+ARCH=$(arch) || fail 'архитектура Entware не поддерживается'
+[ ! -L "$BIN" ] && [ ! -L "$DATA" ] && [ ! -L "$INIT" ] || fail 'управляемый путь является символической ссылкой'
+if [ -x "$OPT/sbin/xkeen" ] || [ -e "$BIN" ] || [ -d "$DATA/data" ]; then [ "$MIGRATION" = 1 ] || fail 'найдена предыдущая установка: сначала согласуйте миграцию'; fi
+mkdir -p "$OPT/etc" "$OPT/tmp" "$OPT/var/lock"
+LOCK=$OPT/var/lock/xkeen-panel-install.lock
+mkdir "$LOCK" 2>/dev/null || fail 'установка заблокирована; проверьте PID и журнал предыдущего запуска'
+printf '%s\n' "$$" > "$LOCK/pid"
+STAGE=; MUTATED=0; COMPLETE=0; PANEL_RUNNING=0; CORE_RUNNING=0; PANEL_PAUSED=0
+safe_stage() {
+    base=$(basename "$1")
+    printf '%s\n' "$base" | grep -Eq '^xkeen-panel-install\.[A-Za-z0-9]{6}$' || return 1
+    [ "$1" = "$OPT/etc/$base" ] && [ -d "$1" ] && [ ! -L "$1" ] || return 1
+    expected_parent=$(cd "$OPT/etc" && pwd -P) || return 1
+    actual=$(cd "$1" && pwd -P) || return 1
+    [ "$actual" = "$expected_parent/$base" ]
 }
-
-xkeen_installed() {
-    [ -x "$XKEEN_BIN" ] && [ -d /opt/sbin/.xkeen ]
+service() {
+    if [ -n "$ROOT" ] && [ "${XKP_INSTALL_TESTING:-}" = 1 ]; then "$ROOT/.test-service" "$1" "$2"; else XKEEN_FOREGROUND=1 "$1" "$2"; fi
 }
-
-xkeen_version() {
-    sed -n 's/^xkeen_current_version="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /opt/sbin/.xkeen/01_info/01_info_variable.sh 2>/dev/null | head -n 1
+safe_target() {
+    case "$1" in
+        opt/sbin/xkeen|opt/sbin/.xkeen|opt/sbin/xray|opt/sbin/xkeen-panel|opt/etc/xkeen|opt/etc/xray|opt/etc/xkeen-panel|opt/etc/init.d/S05xkeen|opt/etc/init.d/S99xkeen-panel|opt/etc/ndm/netfilter.d/proxy.sh|opt/etc/ndm/schedule.d/00-xkeen-hotspot-sync.sh|opt/var/spool/cron/crontabs/root|opt/lib/opkg/status|opt/lib/opkg/info/xkeen.control|opt/lib/opkg/info/xkeen.list|opt/lib/opkg/info/xray.control|opt/lib/opkg/info/xray.list|opt/lib/opkg/info/xray.conffiles) return 0;; *) return 1;; esac
 }
-
-PREFLIGHT_FAILED=0
-
-preflight() {
-    printf "\nПроверка роутера\n"
-
-    if [ "$(id -u)" = "0" ]; then ok "запуск от root"; else bad "нужен root — подключитесь к Entware по SSH как root"; PREFLIGHT_FAILED=1; fi
-
-    if command -v opkg >/dev/null 2>&1 && [ -d /opt/etc ]; then
-        ok "Entware установлен"
-    else
-        bad "Entware не найден — установите его на USB-накопитель через веб-интерфейс Keenetic"
-        PREFLIGHT_FAILED=1
-    fi
-
-    if command -v ndmc >/dev/null 2>&1; then ok "роутер Keenetic"; else bad "это не Keenetic: нет ndmc"; PREFLIGHT_FAILED=1; fi
-
-    ok "архитектура $ARCH"
-
-    components=$(curl -s -m 5 http://127.0.0.1:79/rci/show/version 2>/dev/null | sed -n 's/.*"components": *"\([^"]*\)".*/\1/p')
-    if [ -z "$components" ]; then
-        warn "не удалось прочитать список компонентов Keenetic — проверьте их вручную"
-    else
-        case ",$components," in
-            *,opkg-kmod-netfilter,*) ok "компонент «Модули ядра подсистемы Netfilter»" ;;
-            *)
-                bad "нет компонента «Модули ядра подсистемы Netfilter» — включите его в «Общих настройках» Keenetic"
-                PREFLIGHT_FAILED=1
-                ;;
-        esac
-        case ",$components," in
-            *,ip6,*) ok "компонент «Протокол IPv6»" ;;
-            *) warn "нет компонента «Протокол IPv6» — XKeen будет работать только с IPv4" ;;
-        esac
-    fi
-
-    need_kb=20000
-    [ "$WITH_XKEEN" = 1 ] && ! xkeen_installed && need_kb=200000
-    free_kb=$(df -k /opt 2>/dev/null | awk 'NR == 2 {print $4}')
-    if [ -n "$free_kb" ] && [ "$free_kb" -ge "$need_kb" ]; then
-        ok "свободно $((free_kb / 1024)) МБ на /opt"
-    else
-        bad "на /opt мало места: нужно хотя бы $((need_kb / 1024)) МБ"
-        PREFLIGHT_FAILED=1
-    fi
-
-    if curl -sI -m 8 https://github.com >/dev/null 2>&1; then
-        ok "GitHub доступен"
-    else
-        mirror_ok=0
-        for mirror in $MIRRORS; do
-            curl -sI -m 8 "$mirror" >/dev/null 2>&1 && mirror_ok=1 && break
-        done
-        if [ "$mirror_ok" = 1 ]; then
-            warn "GitHub недоступен напрямую — скачаю через зеркало"
+verify_backup() {
+    [ -f "$STAGE/before.tar" ] && [ ! -L "$STAGE/before.tar" ] && [ -f "$STAGE/before.sha256" ] || return 1
+    digest=$(cat "$STAGE/before.sha256")
+    printf '%s\n' "$digest" | grep -Eq '^[a-f0-9]{64}$' || return 1
+    [ "$(sha256sum "$STAGE/before.tar" | awk '{print $1}')" = "$digest" ] || return 1
+    tar -tf "$STAGE/before.tar" > "$STAGE/backup-index.checked" || return 1
+    tar -tvf "$STAGE/before.tar" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit bad}' || return 1
+    while IFS= read -r entry; do
+        case "$entry" in /*|*'\\'*|*'..'*|*'//'*) return 1;; esac
+        entry=${entry%/}; accepted=0
+        while IFS= read -r managed; do
+            safe_target "$managed" || return 1
+            case "$entry" in "$managed"|"$managed"/*) accepted=1;; esac
+        done < "$STAGE/managed"
+        [ "$accepted" = 1 ] || return 1
+    done < "$STAGE/backup-index.checked"
+}
+rollback() {
+    safe_stage "$STAGE" || return 1
+    # A failed/corrupt snapshot must never cause deletion of the live files.
+    verify_backup || return 1
+    [ ! -x "$INIT" ] || service "$INIT" stop >> "$STAGE/commands.log" 2>&1 || true
+    if [ -x "$OPT/etc/init.d/S05xkeen" ] && [ "$(cat "$STAGE/mode")" = fresh ]; then service "$OPT/etc/init.d/S05xkeen" stop >> "$STAGE/commands.log" 2>&1 || true; fi
+    while IFS= read -r relative; do
+        safe_target "$relative" || return 1
+        target=$ROOT/$relative
+        [ ! -L "$target" ] || return 1
+        # Only the explicit installation-owned allowlist is restored/deleted.
+        if grep -Fx "$relative" "$STAGE/existed" >/dev/null; then
+            parent=$(dirname "$target"); mkdir -p "$parent"
+            [ ! -e "$target" ] || rm -rf "$target"
         else
-            bad "нет доступа ни к GitHub, ни к зеркалам"
-            PREFLIGHT_FAILED=1
+            [ ! -e "$target" ] || rm -rf "$target"
         fi
-    fi
-
-    if xkeen_installed; then
-        ok "XKeen $(xkeen_version) уже установлен"
-    elif [ "$WITH_XKEEN" = 1 ]; then
-        ok "XKeen будет установлен"
-    else
-        warn "XKeen не установлен — добавьте --with-xkeen, чтобы поставить его вместе с панелью"
-    fi
+    done < "$STAGE/managed"
+    tar -xf "$STAGE/before.tar" -C "${ROOT:-/}" || return 1
+    if [ "$(cat "$STAGE/mode")" = fresh ] && [ "$CORE_RUNNING" = 1 ]; then service "$OPT/etc/init.d/S05xkeen" start >> "$STAGE/commands.log" 2>&1 || return 1; fi
+    [ "$PANEL_RUNNING" != 1 ] || service "$INIT" start >> "$STAGE/commands.log" 2>&1 || return 1
+    printf 'rolled-back\n' > "$STAGE/status"
+    say "Прежние управляемые файлы восстановлены: $STAGE"
 }
-
-install_xkeen() {
-    printf "\nУстановка XKeen\n"
-    work=$(mktemp -d /tmp/xkeen-install.XXXXXX) || fail "не удалось создать временную папку"
-
-    fetch "$XKEEN_URL" "$work/xkeen.tar.gz" || fail "не удалось скачать XKeen ни с GitHub, ни через зеркала"
-    mkdir -p "$work/stage"
-    tar -xzf "$work/xkeen.tar.gz" -C "$work/stage" 2>/dev/null || fail "архив XKeen повреждён"
-    [ -f "$work/stage/xkeen" ] && [ -d "$work/stage/_xkeen" ] || fail "в архиве XKeen нет ожидаемых файлов"
-
-    rm -rf /opt/sbin/.xkeen
-    mv "$work/stage/_xkeen" /opt/sbin/.xkeen || fail "не удалось установить модули XKeen"
-    mv "$work/stage/xkeen" "$XKEEN_BIN" && chmod +x "$XKEEN_BIN" || fail "не удалось установить XKeen"
-    rm -rf "$work"
-    ok "XKeen скачан"
-
-    cores="xray"
-    [ "$WITH_MIHOMO" = 1 ] && cores="all"
-
-    # Autostart stays off until the panel writes a working config; </dev/null stops XKeen reading this piped script
-    printf "  Ставлю ядро и геобазы — это займёт несколько минут\n\n"
-    "$XKEEN_BIN" -i auto cores="$cores" geo=on geoipset=off cron=on autostart=off </dev/null ||
-        fail "установка XKeen завершилась с ошибкой — подробности выше"
-    xkeen_installed || fail "XKeen не установился"
-    ok "XKeen $(xkeen_version) установлен"
+cleanup() {
+    status=$?; trap - EXIT HUP INT TERM
+    if [ "$MUTATED" = 1 ] && [ "$COMPLETE" != 1 ]; then rollback || say "Откат не подтверждён; сохранён журнал $STAGE. Агент должен проверить состояние." >&2; fi
+    if [ "$MUTATED" = 0 ] && [ "$PANEL_PAUSED" = 1 ] && [ "$PANEL_RUNNING" = 1 ]; then service "$INIT" start >> "$STAGE/commands.log" 2>&1 || say 'Не подтверждён повторный запуск прежней панели после ошибки snapshot.' >&2; fi
+    if [ -f "$LOCK/pid" ] && [ "$(cat "$LOCK/pid")" = "$$" ]; then rm -f "$LOCK/pid"; rmdir "$LOCK"; fi
+    exit "$status"
 }
-
-verify_sha() {
-    file="$1"
-    name="$2"
-    sums="$3"
-    if ! command -v sha256sum >/dev/null 2>&1; then
-        warn "нет sha256sum — контрольная сумма не проверена"
-        return 0
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+if [ -n "$RESUME" ]; then
+    safe_stage "$RESUME" || fail 'неверный каталог восстановления'
+    STAGE=$RESUME
+    [ "$(cat "$STAGE/status")" != complete ] || { say 'Эта установка уже завершена; сначала проверьте результат.'; COMPLETE=1; exit 0; }
+    BUNDLE=$STAGE/bundle
+    PANEL_RUNNING=$(cat "$STAGE/panel-running" 2>/dev/null || echo 0); CORE_RUNNING=$(cat "$STAGE/core-running" 2>/dev/null || echo 0)
+    [ ! -f "$STAGE/before.tar" ] || { MUTATED=1; rollback || fail 'сначала требуется восстановить незавершённую транзакцию'; MUTATED=0; }
+fi
+[ -d "$BUNDLE" ] && [ ! -L "$BUNDLE" ] || fail 'нужен локальный проверенный комплект --bundle'
+for name in bundle.json SHA256SUMS; do [ -f "$BUNDLE/$name" ] && [ ! -L "$BUNDLE/$name" ] || fail "нет $name"; done
+EXPECTED=$(awk '$2=="bundle.json" {print $1}' "$BUNDLE/SHA256SUMS")
+printf '%s\n' "$EXPECTED" | grep -Eq '^[a-f0-9]{64}$' || fail 'нет однозначной SHA256 bundle.json'
+[ "$(sha256sum "$BUNDLE/bundle.json" | awk '{print $1}')" = "$EXPECTED" ] || fail 'manifest повреждён'
+jq -e '.schema==1 and .repository=="Sgadmer/xkeen-panel" and (.mode=="fresh" or .mode=="panel") and (.files|type=="array" and length>0)' "$BUNDLE/bundle.json" >/dev/null || fail 'неизвестный формат комплекта'
+[ "$(jq -r .architecture "$BUNDLE/bundle.json")" = "$ARCH" ] || fail 'комплект для другой архитектуры'
+MODE=$(jq -r .mode "$BUNDLE/bundle.json")
+VERSION=$(jq -r .panel_version "$BUNDLE/bundle.json")
+printf '%s\n' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' || fail 'неверная версия панели'
+if [ "$MODE" = fresh ]; then
+    [ "$(jq -r .adapter "$BUNDLE/bundle.json")" = xkeen-2.1-cores-none-v1 ] && [ "$(jq -r .xkeen_version "$BUNDLE/bundle.json")" = 2.1 ] || fail 'неизвестный адаптер чистой установки; проверена версия XKeen 2.1'
+    [ ! -e "$OPT/sbin/xkeen" ] && [ ! -d "$OPT/etc/xray" ] && [ ! -e "$OPT/sbin/xray" ] || fail 'fresh предназначен для чистого прокси-стека; для миграции используйте panel-only или отдельно согласованный перенос'
+else
+    [ -x "$OPT/sbin/xkeen" ] && [ -x "$OPT/sbin/xray" ] || fail 'режим panel требует существующий рабочий XKeen/Xray'
+fi
+for pattern in '*xkeen-ui*' '*xkeen-go*' '*umarcheh*'; do
+    for other in "$OPT/etc/init.d/"$pattern; do
+        [ -f "$other" ] || continue
+        grep -Eq '^ENABLED=(no|false|0)$' "$other" || fail "сначала согласуйте отключение конкурирующей службы $(basename "$other")"
+    done
+done
+if [ -n "$(find "$BUNDLE" -type l -print)" ]; then fail 'символические ссылки в комплекте запрещены'; fi
+ROWS=$(jq -r '.files[] | [.path,.sha256,(.bytes|tostring)] | @tsv' "$BUNDLE/bundle.json")
+[ "$(printf '%s\n' "$ROWS" | cut -f1 | sort | uniq -d | wc -l | tr -d ' ')" = 0 ] || fail 'повторяющиеся пути manifest'
+TOTAL=0
+TAB=$(printf '\t')
+while IFS="$TAB" read -r file digest bytes; do
+    printf '%s\n' "$file" | grep -Eq '^(panel|core/(xray|xkeen|\.xkeen/[A-Za-z0-9_./-]+)|geodata/(geosite_v2fly|geoip_v2fly)\.dat)$' || fail 'неразрешённый путь в комплекте'
+    case "/$file/" in */../*|*/./*) fail 'небезопасный путь';; esac
+    printf '%s\n' "$digest:$bytes" | grep -Eq '^[a-f0-9]{64}:[0-9]+$' || fail 'неверные метаданные файла'
+    [ -f "$BUNDLE/$file" ] && [ ! -L "$BUNDLE/$file" ] || fail "отсутствует $file"
+    [ "$(wc -c < "$BUNDLE/$file" | tr -d ' ')" = "$bytes" ] || fail 'размер файла отличается'
+    [ "$(sha256sum "$BUNDLE/$file" | awk '{print $1}')" = "$digest" ] || fail 'контрольная сумма файла отличается'
+    TOTAL=$((TOTAL + bytes))
+done <<EOF
+$ROWS
+EOF
+actual_files=$(find "$BUNDLE" -type f | wc -l | tr -d ' ')
+listed_files=$(printf '%s\n' "$ROWS" | wc -l | tr -d ' ')
+[ "$actual_files" = "$((listed_files + 2))" ] || fail 'в комплекте есть файлы вне manifest'
+[ -f "$BUNDLE/panel" ] || fail 'в комплекте нет панели'
+if [ "$MODE" = fresh ]; then
+    for file in core/xray core/xkeen core/.xkeen/import.sh geodata/geoip_v2fly.dat geodata/geosite_v2fly.dat; do grep -F "$(printf '%s\t' "$file")" <<EOF >/dev/null || fail "в manifest нет $file"
+$ROWS
+EOF
+    done
+fi
+RAM=$(awk '/^MemAvailable:/ {print $2}' "$ROOT/proc/meminfo")
+MIN_RAM=$(jq -r .min_available_ram_kib "$BUNDLE/bundle.json"); RESERVE=$(jq -r .reserve_kib "$BUNDLE/bundle.json")
+printf '%s\n' "$MIN_RAM:$RESERVE" | grep -Eq '^[0-9]+:[0-9]+$' || fail 'нет бюджета ресурсов'
+[ -n "$RAM" ] && [ "$RAM" -ge "$MIN_RAM" ] || fail 'свободная RAM ниже бюджета выбранного комплекта'
+FREE=$(df -Pk "$OPT" | awk 'NR==2 {print $4}')
+BACKUP=$(du -sk "$DATA" "$OPT/etc/xray" "$OPT/etc/xkeen" "$OPT/sbin/.xkeen" "$OPT/sbin/xray" "$OPT/sbin/xkeen" "$BIN" 2>/dev/null | awk '{n+=$1} END {print n+0}')
+NEED=$(( (TOTAL * 2 + 1023) / 1024 + BACKUP + RESERVE ))
+[ "$FREE" -ge "$NEED" ] || fail "недостаточно места на /opt: требуется $NEED КиБ с учётом stage/backup/резерва"
+STAGE=$(mktemp -d "$OPT/etc/xkeen-panel-install.XXXXXX"); chmod 700 "$STAGE"
+cp -R "$BUNDLE" "$STAGE/bundle"; BUNDLE=$STAGE/bundle
+printf '%s\n' "$MODE" > "$STAGE/mode"; printf 'verified\n' > "$STAGE/status"
+cat > "$STAGE/managed" <<'EOF'
+opt/sbin/xkeen-panel
+opt/etc/xkeen-panel
+opt/etc/init.d/S99xkeen-panel
+EOF
+if [ "$MODE" = fresh ]; then cat >> "$STAGE/managed" <<'EOF'
+opt/sbin/xkeen
+opt/sbin/.xkeen
+opt/sbin/xray
+opt/etc/xkeen
+opt/etc/xray
+opt/etc/init.d/S05xkeen
+opt/etc/ndm/netfilter.d/proxy.sh
+opt/etc/ndm/schedule.d/00-xkeen-hotspot-sync.sh
+opt/var/spool/cron/crontabs/root
+opt/lib/opkg/status
+opt/lib/opkg/info/xkeen.control
+opt/lib/opkg/info/xkeen.list
+opt/lib/opkg/info/xray.control
+opt/lib/opkg/info/xray.list
+opt/lib/opkg/info/xray.conffiles
+EOF
+fi
+: > "$STAGE/existed"
+while IFS= read -r relative; do
+    safe_target "$relative" || fail 'неверный путь резервного копирования'
+    [ ! -L "$ROOT/$relative" ] || fail 'ссылка в управляемых путях'
+    if [ -e "$ROOT/$relative" ]; then
+        [ -z "$(find "$ROOT/$relative" -type l -print)" ] || fail 'ссылка внутри управляемых путей'
+        printf '%s\n' "$relative" >> "$STAGE/existed"
     fi
-    expected=$(awk -v n="$name" '$2 == n {print $1}' "$sums")
-    [ -n "$expected" ] || fail "в SHA256SUMS нет $name"
-    actual=$(sha256sum "$file" | awk '{print $1}')
-    [ "$expected" = "$actual" ] || fail "контрольная сумма $name не совпала — файл повреждён или подменён"
-}
-
-write_config() {
-    mkdir -p "$INSTALL_DIR/data" /opt/var/log
-    if [ -f "$INSTALL_DIR/config.yaml" ]; then
-        ok "конфиг уже есть, оставляю как есть"
-        return 0
-    fi
-    cat >"$INSTALL_DIR/config.yaml" <<'YAML'
-# Web panel port
-port: 3000
-
-# Data directory (user.json, subscription.json)
+done < "$STAGE/managed"
+[ -z "$(pidof xkeen-panel 2>/dev/null || true)" ] || PANEL_RUNNING=1
+[ -z "$(pidof xray 2>/dev/null || true)" ] || CORE_RUNNING=1
+printf '%s\n' "$PANEL_RUNNING" > "$STAGE/panel-running"; printf '%s\n' "$CORE_RUNNING" > "$STAGE/core-running"
+if [ "$PANEL_RUNNING" = 1 ]; then
+    [ -x "$INIT" ] || fail 'панель запущена без известной службы; сначала согласуйте способ её остановки'
+    PANEL_PAUSED=1
+    service "$INIT" stop >> "$STAGE/commands.log" 2>&1 || fail 'не удалось приостановить прежнюю панель для согласованного snapshot'
+    attempts=0
+    while [ -n "$(pidof xkeen-panel 2>/dev/null || true)" ] && [ "$attempts" -lt 5 ]; do attempts=$((attempts+1)); sleep 1; done
+    [ -z "$(pidof xkeen-panel 2>/dev/null || true)" ] || fail 'прежняя панель ещё работает; snapshot не создаётся'
+fi
+tar -cf "$STAGE/before.tar" -C "${ROOT:-/}" -T "$STAGE/existed"
+sha256sum "$STAGE/before.tar" | awk '{print $1}' > "$STAGE/before.sha256"
+verify_backup || fail 'не удалось проверить резервную копию до применения'
+printf 'backed-up\n' > "$STAGE/status"
+MUTATED=1
+[ ! -x "$INIT" ] || service "$INIT" stop >> "$STAGE/commands.log" 2>&1
+mkdir -p "$OPT/sbin" "$OPT/etc/init.d" "$OPT/var/log"
+if [ "$MODE" = fresh ]; then
+    [ -z "$ROOT" ] || [ "${XKP_INSTALL_TESTING:-}" = 1 ] || fail 'неверный тестовый корень'
+    cp "$BUNDLE/core/xray" "$OPT/sbin/xray"; chmod 755 "$OPT/sbin/xray"
+    cp "$BUNDLE/core/xkeen" "$OPT/sbin/xkeen"; chmod 755 "$OPT/sbin/xkeen"
+    cp -R "$BUNDLE/core/.xkeen" "$OPT/sbin/.xkeen"
+    find "$OPT/sbin/.xkeen" -type d -exec chmod 700 '{}' ';'
+    find "$OPT/sbin/.xkeen" -type f -exec chmod 700 '{}' ';'
+    timeout 20 "$OPT/sbin/xray" version > "$STAGE/core-version.log" 2>&1 || fail 'выбранный Xray не запускается'
+    want_xray=$(jq -r .xray_version "$BUNDLE/bundle.json" | sed 's/^v//')
+    grep -F "$want_xray" "$STAGE/core-version.log" >/dev/null || fail 'версия Xray отличается от выбранной'
+    printf 'configuring-xkeen\n' > "$STAGE/status"
+    # No unpinned core/geodata downloads: an exact verified core already exists.
+    LC_ALL=C XKEEN_FOREGROUND=1 timeout 600 "$OPT/sbin/xkeen" -i auto cores=none geo=off geoipset=off cron=off autostart=off >> "$STAGE/commands.log" 2>&1 || fail 'подготовка выбранного XKeen не завершена'
+    [ -x "$OPT/etc/init.d/S05xkeen" ] || fail 'не создана служба XKeen'
+    timeout 20 "$OPT/sbin/xkeen" -v > "$STAGE/xkeen-version.log" 2>&1 || fail 'не удалось проверить версию XKeen'
+    want_xkeen=$(jq -r .xkeen_version "$BUNDLE/bundle.json" | sed 's/^v//')
+    grep -F "$want_xkeen" "$STAGE/xkeen-version.log" >/dev/null || fail 'версия XKeen отличается от выбранной'
+    mkdir -p "$OPT/etc/xray/dat"
+    cp "$BUNDLE/geodata/geoip_v2fly.dat" "$BUNDLE/geodata/geosite_v2fly.dat" "$OPT/etc/xray/dat/"
+    service "$OPT/etc/init.d/S05xkeen" stop >> "$STAGE/commands.log" 2>&1 || true
+    [ -z "$(pidof xray 2>/dev/null || true)" ] || fail 'ядро должно оставаться остановленным до проверки подписки'
+fi
+chmod 700 "$BUNDLE/panel"
+timeout 10 "$BUNDLE/panel" -version > "$STAGE/panel-version.log" 2>&1 || fail 'панель не запускается на этой архитектуре'
+grep -F "$VERSION" "$STAGE/panel-version.log" >/dev/null || fail 'версия панели отличается'
+cp "$BUNDLE/panel" "$BIN.install-next"; chmod 755 "$BIN.install-next"; mv "$BIN.install-next" "$BIN"
+mkdir -p "$DATA/data"; chmod 700 "$DATA" "$DATA/data"
+if [ ! -f "$DATA/config.yaml" ]; then cat > "$DATA/config.yaml" <<EOF
+port: $PORT
 data_dir: /opt/etc/xkeen-panel/data
-
-# === XKeen/Xray paths ===
-# The XKeen layout (S05xkeen/S24xray), the active core and the proxying mode
-# are detected automatically — set the paths below only for a non-standard
-# install.
 xkeen_path: /opt/sbin/xkeen
 outbounds_file: /opt/etc/xray/configs/04_outbounds.json
-
-# === Watchdog ===
-check_interval: 120
-check_url: https://www.google.com
-max_fails: 3
-
-# Log file
 log_file: /opt/var/log/xkeen-panel.log
-
-# Hour (router time) at which the panel installs its own updates.
-# Automatic updates themselves are switched on and off in the panel.
-auto_update_hour: 4
-
-# Balancer pool size (lowest latency, without avoided countries)
-pool_max_nodes: 10
-
-# Probe real services through the active node (catches IPs banned by CDNs)
-health_check_every: 5
-health_fail_threshold: 2
-health_quorum: 2
-YAML
-    ok "конфиг $INSTALL_DIR/config.yaml"
-}
-
-write_init() {
-    cat >"$INIT_SCRIPT" <<'INITSCRIPT'
+subscription_refresh_interval: 3600
+check_interval: 120
+check_url: https://www.google.com/generate_204
+max_fails: 3
+EOF
+    chmod 600 "$DATA/config.yaml"
+else
+    existing_port=$(awk '$1=="port:" {print $2; exit}' "$DATA/config.yaml")
+    [ "$existing_port" = "$PORT" ] || fail 'порт существующей панели отличается; укажите его явно'
+fi
+cat > "$INIT" <<'EOF'
 #!/bin/sh
-
 ENABLED=yes
 PROCS="xkeen-panel"
 ARGS="-config /opt/etc/xkeen-panel/config.yaml"
 DESC="XKeen Panel"
-
 PREARGS=""
 . /opt/etc/init.d/rc.func
-INITSCRIPT
-    chmod +x "$INIT_SCRIPT"
-}
-
-install_panel() {
-    printf "\nУстановка панели\n"
-    work=$(mktemp -d /tmp/xkeen-panel.XXXXXX) || fail "не удалось создать временную папку"
-    asset="xkeen-panel-$ARCH"
-    base="https://github.com/$REPO/releases/latest/download"
-
-    fetch "$base/$asset" "$work/$asset" || fail "не удалось скачать $asset ни с GitHub, ни через зеркала"
-    fetch "$base/SHA256SUMS" "$work/SHA256SUMS" || fail "не удалось скачать SHA256SUMS"
-    verify_sha "$work/$asset" "$asset" "$work/SHA256SUMS"
-    chmod +x "$work/$asset"
-    version=$("$work/$asset" -version 2>/dev/null) || fail "скачанная панель не запускается на этом роутере"
-    ok "панель $version скачана и проверена"
-
-    [ -x "$INIT_SCRIPT" ] && "$INIT_SCRIPT" stop >/dev/null 2>&1
-    [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "$BIN_PATH.bak"
-    mv "$work/$asset" "$BIN_PATH" || fail "не удалось заменить $BIN_PATH"
-    rm -rf "$work"
-
-    write_config
-    write_init
-    "$INIT_SCRIPT" start >/dev/null 2>&1
-
-    i=0
-    while [ $i -lt 20 ]; do
-        if curl -s -o /dev/null -m 2 http://127.0.0.1:3000/api/auth/status; then
-            ok "панель запущена"
-            return 0
-        fi
-        i=$((i + 1))
-        sleep 1
-    done
-    warn "панель не ответила за 20 секунд — посмотрите /opt/var/log/xkeen-panel.log"
-}
-
-printf "=== XKeen Panel — установка ===\n"
-detect_arch
-preflight
-
-if [ "$PREFLIGHT_FAILED" = 1 ]; then
-    fail "роутер не готов — исправьте пункты с ✗ и запустите снова"
-fi
-if [ "$CHECK_ONLY" = 1 ]; then
-    printf "\nРоутер готов к установке.\n"
-    exit 0
-fi
-
-if [ "$WITH_XKEEN" = 1 ] && ! xkeen_installed; then
-    install_xkeen
-fi
-
-install_panel
-
-lan_ip=$(ip -4 -o addr show br0 2>/dev/null | awk '{sub(/\/.*/, "", $4); print $4; exit}')
-printf "\n${green}Готово.${reset} Откройте http://%s:3000\n" "${lan_ip:-<IP роутера>}"
-if [ ! -f "$INSTALL_DIR/data/user.json" ]; then
-    printf "Создайте аккаунт — мастер настройки проведёт через подписку, устройства и запуск.\n"
-fi
+EOF
+chmod 755 "$INIT"
+printf 'starting-panel\n' > "$STAGE/status"
+service "$INIT" start >> "$STAGE/commands.log" 2>&1 || fail 'не удалось запустить службу панели'
+ready=0; n=0
+while [ "$n" -lt 30 ]; do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/auth/status" > "$STAGE/auth-status.json" 2>/dev/null && grep -Eq '"setup_required"[[:space:]]*:' "$STAGE/auth-status.json"; then ready=1; break; fi
+    n=$((n+1)); sleep 1
+done
+[ "$ready" = 1 ] || fail 'панель не ответила корректно; выполняется откат'
+printf 'complete\n' > "$STAGE/status"; COMPLETE=1
+say "Панель $VERSION установлена. Журнал и резервная копия: $STAGE"
+say "Адрес: http://<LAN-адрес-роутера>:$PORT. Агент должен определить точный адрес, защитить вход, импортировать источник, выбрать режим VPN и проверить реальный трафик."
+say 'Установленные файлы ещё не означают работающий VPN: завершите мастер и HTTPS/исключения/перезапуск по скиллу.'

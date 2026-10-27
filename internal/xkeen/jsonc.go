@@ -1,8 +1,10 @@
 package xkeen
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -75,8 +77,14 @@ func ReadJSONC(path string, v interface{}) error {
 		return fmt.Errorf("ошибка чтения %s: %w", path, err)
 	}
 
-	if err := json.Unmarshal(StripJSONComments(data), v); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(StripJSONComments(data)))
+	decoder.UseNumber()
+	if err := decoder.Decode(v); err != nil {
 		return fmt.Errorf("ошибка парсинга %s: %w", path, err)
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("ошибка парсинга %s: лишние данные после JSON", path)
 	}
 
 	return nil

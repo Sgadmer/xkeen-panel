@@ -32,6 +32,7 @@ type Watchdog struct {
 	subscription *xkeen.SubscriptionManager
 	detector     *xkeen.Detector
 	mu           sync.RWMutex
+	changeMu     sync.Mutex // serializes config/runtime changes with API refreshes
 	active       bool
 	failCount    int
 	latencyHigh  int
@@ -54,6 +55,7 @@ type Watchdog struct {
 	lastRotation time.Time
 	poolStore    *xkeen.PoolStore
 	trigger      chan struct{}
+	probeServers func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
 }
 
 func NewWatchdog(cfg *models.Config, sub *xkeen.SubscriptionManager, det *xkeen.Detector) *Watchdog {
@@ -67,6 +69,7 @@ func NewWatchdog(cfg *models.Config, sub *xkeen.SubscriptionManager, det *xkeen.
 		blacklist:    make(map[string]time.Time),
 		badNodes:     make(map[string]time.Time),
 		trigger:      make(chan struct{}, 1),
+		probeServers: xkeen.CheckServersHTTPS,
 		health:       NewHealthChecker(cfg.HealthCheckURLs, cfg.HealthFailThreshold, cfg.HealthQuorum),
 	}
 }
@@ -139,9 +142,16 @@ func (w *Watchdog) Start(ctx context.Context) {
 }
 
 func (w *Watchdog) check() {
+	w.changeMu.Lock()
+	defer w.changeMu.Unlock()
 	// Mid-restart the core refuses connections, which says nothing about the node
 	if xkeen.IsRestarting() {
 		return
+	}
+	// A status check while the watchdog is off may restore the owner's stored
+	// choice, but must never create an automatic choice of its own.
+	if !w.IsActive() && w.poolStore != nil && w.poolStore.Get().PinManual {
+		w.superviseP(w.detector.Runtime(), w.detector.Topology())
 	}
 
 	proxy := w.proxyURL()
@@ -179,7 +189,7 @@ func (w *Watchdog) check() {
 		w.writeLog("[FAIL] Прокси не отвечает (%v), попытка %d/%d", err, w.failCount, w.config.MaxFails)
 		w.publishStatus()
 
-		if w.failCount >= w.config.MaxFails {
+		if w.IsActive() && w.failCount >= w.config.MaxFails {
 			w.handleFailover("прокси не отвечает", true)
 		}
 		return
@@ -191,7 +201,7 @@ func (w *Watchdog) check() {
 
 	// Proactive switch: the link is up but latency stays high
 	proactive := false
-	if w.config.LatencyAutoSwitch && w.config.LatencyThresholdMs > 0 && latency > w.config.LatencyThresholdMs {
+	if w.active && w.config.LatencyAutoSwitch && w.config.LatencyThresholdMs > 0 && latency > w.config.LatencyThresholdMs {
 		w.latencyHigh++
 		if w.latencyHigh >= w.config.LatencySwitchCount {
 			w.latencyHigh = 0
@@ -208,6 +218,9 @@ func (w *Watchdog) check() {
 		w.writeLog("[OK] Прокси работает (%dms)", latency)
 	}
 	w.publishStatus()
+	if !w.IsActive() {
+		return
+	}
 
 	if proactive {
 		w.handleFailover(fmt.Sprintf("высокий пинг %dms подряд", latency), false)
@@ -223,6 +236,9 @@ func (w *Watchdog) check() {
 // Connectivity alone is not enough: an exit whose IP a CDN blocks answers
 // generate_204 happily while SoundCloud returns 403 and Telegram never loads.
 func (w *Watchdog) superviseExit(proxy *url.URL) {
+	if !w.IsActive() {
+		return
+	}
 	top := w.detector.Topology()
 	if top.Mode != xkeen.TopologyPool {
 		return
@@ -282,7 +298,14 @@ func (w *Watchdog) superviseExit(proxy *url.URL) {
 //   - the core restarted and dropped the override — re-apply it
 //   - nothing is pinned yet — pin the best node
 func (w *Watchdog) superviseP(rt xkeen.Runtime, top xkeen.Topology) {
+	if w.poolStore == nil || top.Mode != xkeen.TopologyPool {
+		return
+	}
 	state := w.poolStore.Get()
+	active := w.IsActive()
+	if !active && !state.PinManual {
+		return
+	}
 
 	if state.PinnedTag == "" {
 		tag, err := w.pinBest(rt, top)
@@ -295,6 +318,14 @@ func (w *Watchdog) superviseP(rt xkeen.Runtime, top xkeen.Topology) {
 	}
 
 	if xkeen.PinDrifted(w.config.OutboundsFile, top.Selector(), state.PinnedTag, state.PinnedNode) {
+		if !active {
+			if server, ok := xkeen.ServerForNode(w.subscription.GetServers(), state.PinnedNode); ok {
+				if _, err := w.pinServerLocked(server, true, state.PinNote); err != nil {
+					w.writeLog("[PIN] Не удалось восстановить ручной выбор: %v", err)
+				}
+			}
+			return
+		}
 		w.writeLog("[PIN] %s больше не ведёт на закреплённый сервер — выбираю заново", state.PinnedTag)
 		if state.PinManual && w.keepManualPick(state) {
 			return
@@ -323,7 +354,7 @@ func (w *Watchdog) superviseP(rt xkeen.Runtime, top xkeen.Topology) {
 // reshuffles the fastest nodes is no reason to drop the owner's choice.
 func (w *Watchdog) keepManualPick(state xkeen.PoolState) bool {
 	if server, ok := xkeen.ServerForNode(w.subscription.GetServers(), state.PinnedNode); ok {
-		_, err := w.PinServer(server, true, state.PinNote)
+		_, err := w.pinServerLocked(server, true, state.PinNote)
 		if err == nil {
 			return true
 		}
@@ -340,7 +371,7 @@ func (w *Watchdog) keepManualPick(state xkeen.PoolState) bool {
 // pick is replaced from its own country first; the pool takes over only when
 // that country has nothing live left.
 func (w *Watchdog) rotateExit(rt xkeen.Runtime, top xkeen.Topology) {
-	if w.poolStore == nil {
+	if w.poolStore == nil || !w.IsActive() {
 		return
 	}
 
@@ -381,6 +412,13 @@ func (w *Watchdog) rotateExit(rt xkeen.Runtime, top xkeen.Topology) {
 
 // pinBest picks the fastest node that is not currently condemned and pins it.
 func (w *Watchdog) pinBest(rt xkeen.Runtime, top xkeen.Topology) (string, error) {
+	if xkeen.HasActiveProfile(w.config.OutboundsFile) {
+		eligible := xkeen.SelectPoolServers(w.subscription.GetServers(), xkeen.PoolSelectionFromConfig(w.config, w.geoip))
+		if len(eligible) == 0 {
+			return "", fmt.Errorf("нет самостоятельных серверов для автовыбора; профиль сохранён")
+		}
+		return w.pinServerLocked(eligible[0], false, "")
+	}
 	tag, err := xkeen.PinBestNode(rt, w.config.XrayAPIAddr, w.config.OutboundsFile, top,
 		w.subscription.GetServers(), w.excludedNodes(),
 		time.Duration(w.config.ProbeTimeoutMs)*time.Millisecond, w.config.ProbeConcurrency)
@@ -400,6 +438,8 @@ func (w *Watchdog) pinBest(rt xkeen.Runtime, top xkeen.Topology) (string, error)
 }
 
 func (w *Watchdog) PinBest() (string, error) {
+	w.changeMu.Lock()
+	defer w.changeMu.Unlock()
 	top := w.detector.Topology()
 	if top.Mode != xkeen.TopologyPool {
 		return "", fmt.Errorf("пул не включён")
@@ -463,6 +503,9 @@ func (w *Watchdog) excludedNodes() map[string]bool {
 // handleFailover reacts to a failed or slow proxy. dead means checks through the
 // proxy fail while the router's own link works — the exit node itself is down.
 func (w *Watchdog) handleFailover(reason string, dead bool) {
+	if !w.IsActive() {
+		return
+	}
 	// On Mihomo the proxy-group (url-test/fallback) switches inside the core.
 	// There is nothing to rewrite here: the proxy list is synced when the
 	// subscription updates, and a restart would only drop connections.
@@ -535,7 +578,19 @@ func (w *Watchdog) handlePoolFailover(reason string, top xkeen.Topology, dead bo
 	}
 
 	servers := w.subscription.GetServers()
-	state := xkeen.PoolState{BalancerTag: top.BalancerTag, Selector: top.Selector()}
+	checked, probeErr := w.checkCandidates(servers)
+	if probeErr != nil {
+		w.writeLog("[POOL] Проверка новых серверов не завершена: %v", probeErr)
+		return
+	}
+	w.subscription.UpdateLatencies(checked)
+	servers = checked
+	state := xkeen.PoolState{}
+	if w.poolStore != nil {
+		state = w.poolStore.Get()
+	}
+	state.BalancerTag = top.BalancerTag
+	state.Selector = top.Selector()
 
 	result, err := xkeen.RefreshPool(w.detector.Runtime(), w.config.OutboundsFile, w.config.XrayAPIAddr, servers, state,
 		xkeen.PoolSelectionFromConfig(w.config, w.geoip))
@@ -564,7 +619,7 @@ func (w *Watchdog) handlePoolFailover(reason string, top xkeen.Topology, dead bo
 }
 
 // selectBest picks the lowest-latency live server, skipping the current one,
-// blacklisted ones, non-VLESS entries and servers in avoided countries.
+// blacklisted ones, unsupported entries and servers in avoided countries.
 func (w *Watchdog) selectBest() (*models.Server, error) {
 	data := w.subscription.GetData()
 	if len(data.Servers) == 0 {
@@ -581,7 +636,7 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 		if w.isBlacklisted(s.RawURI) {
 			continue
 		}
-		if s.Protocol != "" && s.Protocol != "vless" {
+		if !xkeen.CanBuildServer(s) {
 			continue
 		}
 		if !w.isServerAllowed(s) {
@@ -599,8 +654,10 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 		return nil, fmt.Errorf("нет разрешённых серверов для авто-переключения")
 	}
 
-	timeout := time.Duration(w.config.ProbeTimeoutMs) * time.Millisecond
-	checked := xkeen.CheckAllLatencies(candidates, timeout, w.config.ProbeConcurrency)
+	checked, err := w.checkCandidates(candidates)
+	if err != nil {
+		return nil, err
+	}
 	w.subscription.UpdateLatencies(checked)
 
 	best := -1
@@ -618,6 +675,23 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 	// By RawURI, not index: a Refresh may have run between snapshot and activation
 	return w.subscription.SetActiveByRawURI(checked[best].RawURI)
 }
+
+func (w *Watchdog) checkCandidates(servers []models.Server) ([]models.Server, error) {
+	probe := w.probeServers
+	if probe == nil {
+		probe = xkeen.CheckServersHTTPS
+	}
+	return probe(w.detector.Runtime(), servers, xkeen.ProbeOptions{
+		Timeout:     time.Duration(w.config.ProbeTimeoutMs) * time.Millisecond,
+		Concurrency: w.config.ProbeConcurrency,
+		StateDir:    w.config.DataDir,
+	})
+}
+
+// LockChanges coordinates API config operations with watchdog selection and
+// probing. A caller holding it must not call PinServer, PinBest or RestartCore.
+func (w *Watchdog) LockChanges()   { w.changeMu.Lock() }
+func (w *Watchdog) UnlockChanges() { w.changeMu.Unlock() }
 
 // AllowedActiveOrBest returns the server whose outbound to apply after an
 // automatic subscription refresh. If the active one ended up in an avoided

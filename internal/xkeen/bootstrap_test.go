@@ -64,7 +64,7 @@ func TestBootstrapFreshInstall(t *testing.T) {
 		}
 		ss, _ := ob["streamSettings"].(map[string]interface{})
 		sockopt, _ := ss["sockopt"].(map[string]interface{})
-		if sockopt["mark"] != float64(255) {
+		if toInt(sockopt["mark"]) != 255 {
 			t.Errorf("%v: sockopt.mark = %v, want the integer 255 XKeen validates", ob["tag"], sockopt["mark"])
 		}
 	}

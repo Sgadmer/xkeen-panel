@@ -6,10 +6,14 @@ import { AppShell } from '@/components/appShell'
 import { HomePage } from '@/pages/homePage'
 import { ServersPage } from '@/pages/serversPage'
 import { DevicesPage } from '@/pages/devicesPage'
+import { ExclusionsPage } from '@/pages/exclusionsPage'
 import { SettingsPage } from '@/pages/settingsPage'
 import { UpdatePage } from '@/pages/updatePage'
 import { XkeenSettingsPage } from '@/pages/xkeenSettingsPage'
 import { DiagnosticsPage } from '@/pages/diagnosticsPage'
+import { AccessPage } from '@/pages/accessPage'
+import { RoutingModePage } from '@/pages/routingModePage'
+import { ComponentsPage } from '@/pages/componentsPage'
 import { WelcomePage } from '@/pages/welcomePage'
 import { ProtectedRoute } from '@/components/protectedRoute'
 import type { AuthStatus } from '@/types'
@@ -63,7 +67,11 @@ export function App() {
                             <Route index element={<HomePage />} />
                             <Route path='servers' element={<ServersPage />} />
                             <Route path='devices' element={<DevicesPage />} />
+                            <Route path='exclusions' element={<ExclusionsPage />} />
                             <Route path='settings' element={<SettingsPage />} />
+                            <Route path='settings/access' element={<AccessPage />} />
+                            <Route path='settings/routing' element={<RoutingModePage />} />
+                            <Route path='settings/components' element={<ComponentsPage />} />
                             <Route
                                 path='settings/update'
                                 element={<UpdatePage />}

@@ -24,6 +24,7 @@ type Handlers struct {
 	detector     *xkeen.Detector
 	pool         *xkeen.PoolStore
 	geoip        *geoip.Matcher
+	restartCore  func(string) (string, error) // optional deterministic test runner
 }
 
 func NewHandlers(cfg *models.Config, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, matcher *geoip.Matcher) *Handlers {
@@ -39,11 +40,7 @@ func (h *Handlers) HandleStatus(w http.ResponseWriter, r *http.Request) {
 // HandleGetSubscription — GET /api/subscription
 func (h *Handlers) HandleGetSubscription(w http.ResponseWriter, r *http.Request) {
 	data := h.subscription.GetData()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"url":          data.URL,
-		"last_updated": data.LastUpdated,
-		"server_count": len(data.Servers),
-	})
+	writeJSON(w, http.StatusOK, subscriptionView(data, h.subscription.GetImportReport()))
 }
 
 // HandleUpdateSubscription — POST /api/subscription
@@ -59,34 +56,26 @@ func (h *Handlers) HandleUpdateSubscription(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	servers, err := h.subscription.UpdateURL(req.URL)
+	resp, err := h.importSubscription(r.Context(), req.URL, false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
-	resp := map[string]interface{}{
-		"server_count": len(servers),
-		"servers":      servers,
-	}
-	h.applySubscription(servers, resp)
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // HandleRefreshSubscription — POST /api/subscription/refresh
 func (h *Handlers) HandleRefreshSubscription(w http.ResponseWriter, r *http.Request) {
-	servers, err := h.subscription.Refresh()
+	if !h.subscription.CanRefresh() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "этот источник добавлен вручную; импортируйте новую ссылку сервера или файл"})
+		return
+	}
+	resp, err := h.importSubscription(r.Context(), "", true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
-	resp := map[string]interface{}{
-		"server_count": len(servers),
-		"servers":      servers,
-	}
-	h.applySubscription(servers, resp)
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -94,22 +83,92 @@ func (h *Handlers) HandleRefreshSubscription(w http.ResponseWriter, r *http.Requ
 // applySubscription puts a fresh subscription to work: a config with no proxy
 // outbound at all (a fresh XKeen install) is built from scratch, an existing
 // pool is synced.
-func (h *Handlers) applySubscription(servers []models.Server, resp map[string]interface{}) {
+func (h *Handlers) applySubscription(servers []models.Server, resp map[string]interface{}, transaction *subscriptionApplySnapshot) error {
+	preferred, err := transaction.manualPreference(servers)
+	currentSource := h.subscription.GetData()
+	newSource := transaction.data.URL != currentSource.URL || currentSource.URL == "" && !sameSourceServers(transaction.data.Servers, currentSource.Servers)
+	if newSource {
+		preferred = nil
+		err = nil
+		resetState := h.pool.Get()
+		resetState.PinnedTag = ""
+		resetState.PinnedNode = ""
+		resetState.PinManual = false
+		resetState.PinCountry = ""
+		resetState.PinNote = ""
+		if resetErr := h.pool.Set(resetState); resetErr != nil {
+			return resetErr
+		}
+	}
+	if err != nil {
+		return err
+	}
+	rt := h.detector.Runtime()
+	needsRestart := false
 	bootstrapped, err := h.bootstrapIfEmpty(servers)
 	switch {
 	case err != nil:
-		resp["pool_error"] = err.Error()
-		return
+		return err
 	case bootstrapped:
 		resp["bootstrapped"] = true
-		return
+		needsRestart = true
 	}
 
-	if sync, err := h.refreshPool(servers); err != nil {
-		resp["pool_error"] = err.Error()
-	} else if sync.Changed {
-		resp["pool"] = sync
+	if !bootstrapped && h.detector.Topology().Mode == xkeen.TopologyPool {
+		sync, err := h.refreshPool(servers)
+		transaction.runtimeTouched = sync.Changed
+		if err != nil {
+			return err
+		} else if sync.Changed {
+			resp["pool"] = sync
+		}
+	} else if !bootstrapped && rt.Core == xkeen.CoreXray {
+		state, err := xkeen.EnablePool(rt, h.config.OutboundsFile, servers, xkeen.PoolOptions{APIAddr: h.config.XrayAPIAddr, Selection: xkeen.PoolSelectionFromConfig(h.config, h.geoip)})
+		if err != nil {
+			return err
+		}
+		if err = h.pool.Set(state); err != nil {
+			return fmt.Errorf("не удалось сохранить состояние автопула")
+		}
+		h.detector.InvalidateTopology()
+		if _, err = h.watchdog.EnsureProbe(); err != nil {
+			return err
+		}
+		needsRestart = true
 	}
+	if rt.Core != xkeen.CoreXray {
+		return nil
+	}
+	if needsRestart {
+		transaction.runtimeTouched = true
+		if err := h.restartManaged(rt.Dispatcher); err != nil {
+			return err
+		}
+		resp["restarted"] = true
+	}
+	if h.detector.Topology().Mode == xkeen.TopologyPool {
+		transaction.runtimeTouched = true
+		if err := h.waitForBalancer(rt); err != nil {
+			return err
+		}
+		if preferred == nil && len(xkeen.SelectPoolServers(servers, xkeen.PoolSelectionFromConfig(h.config, h.geoip))) == 0 {
+			for i := range servers {
+				if servers[i].ProbeKind == "https" && servers[i].Latency >= 0 && xkeen.CanBuildServer(servers[i]) {
+					selected := servers[i]
+					preferred = &selected
+					break
+				}
+			}
+		}
+		if preferred != nil {
+			if err := h.watchdog.ReapplyPreferredLocked(*preferred, transaction.pool.PinNote); err != nil {
+				return err
+			}
+		} else if err := h.watchdog.ReapplySelectionLocked(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handlers) bootstrapIfEmpty(servers []models.Server) (bool, error) {
@@ -129,25 +188,14 @@ func (h *Handlers) bootstrapIfEmpty(servers []models.Server) (bool, error) {
 	}
 
 	if err := h.pool.Set(state); err != nil {
-		log.Printf("[BOOTSTRAP] Не удалось сохранить состояние пула: %v", err)
+		return false, fmt.Errorf("не удалось сохранить состояние автопула")
 	}
 	h.detector.InvalidateTopology()
 
 	if _, err := h.watchdog.EnsureProbe(); err != nil {
-		h.watchdog.Log("[BOOTSTRAP] Проверочный вход не добавлен: %v", err)
+		return false, err
 	}
 	h.watchdog.Log("[BOOTSTRAP] Конфиг Xray собран с нуля: пул из %d нод, российский трафик напрямую", len(h.detector.Topology().PoolTags))
-
-	// A stopped core is left stopped: starting the proxy is the owner's call
-	if xkeen.IsRunning(rt.Core) {
-		go func() {
-			if _, err := xkeen.Restart(rt.Dispatcher); err != nil {
-				log.Printf("[BOOTSTRAP] Ошибка рестарта: %v", err)
-				return
-			}
-			h.pinAfterRestart(rt)
-		}()
-	}
 
 	return true, nil
 }
@@ -192,7 +240,7 @@ func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
 	servers := h.subscription.GetServers()
 	views := make([]serverView, len(servers))
 	for i, server := range servers {
-		views[i] = serverView{Server: server}
+		views[i] = serverView{Server: publicServer(server)}
 	}
 
 	// In pool mode the active entry is the pinned node, not the server the pool was built from
@@ -207,7 +255,7 @@ func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
 		// Duplicate entries of one node would all show as pooled and active otherwise
 		reps := xkeen.NodeRepresentatives(servers)
 		for i := range views {
-			key := xkeen.NodeKeyOfServer(views[i].Server)
+			key := xkeen.NodeKeyOfServer(servers[i])
 			if key == "" || reps[key] != views[i].ID {
 				views[i].Active = false
 				continue
@@ -232,10 +280,16 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[SELECT] Запрос выбора сервера ID=%d", req.ID)
 
-	server, err := h.subscription.SetActive(req.ID)
-	if err != nil {
-		log.Printf("[SELECT] Ошибка SetActive: %v", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	var server *models.Server
+	for _, candidate := range h.subscription.GetServers() {
+		if candidate.ID == req.ID {
+			value := candidate
+			server = &value
+			break
+		}
+	}
+	if server == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "сервер больше недоступен в каталоге; обновите список"})
 		return
 	}
 
@@ -263,7 +317,7 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success":    true,
-			"server":     server,
+			"server":     publicServer(*server),
 			"restarting": true,
 			"core":       rt.Core,
 			"note":       "конфигурация Mihomo синхронизирована с подпиской; активную ноду выбирает proxy-group",
@@ -282,7 +336,7 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success":    true,
-			"server":     server,
+			"server":     publicServer(*server),
 			"restarting": false,
 			"pinned":     true,
 		})
@@ -294,6 +348,10 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 	if err := xkeen.ApplyServer(rt, h.config.OutboundsFile, server); err != nil {
 		log.Printf("[SELECT] Ошибка применения конфига: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := h.subscription.SetActive(server.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось сохранить выбранный сервер"})
 		return
 	}
 
@@ -308,7 +366,7 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":    true,
-		"server":     server,
+		"server":     publicServer(*server),
 		"restarting": true,
 	})
 }
@@ -394,10 +452,14 @@ func (h *Handlers) HandleMihomoSync(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandleCheckServers(w http.ResponseWriter, r *http.Request) {
 	servers := h.subscription.GetServers()
 	timeout := time.Duration(h.config.ProbeTimeoutMs) * time.Millisecond
-	checked := xkeen.CheckAllLatencies(servers, timeout, h.config.ProbeConcurrency)
+	checked, err := xkeen.CheckServersHTTPS(h.detector.Runtime(), servers, xkeen.ProbeOptions{Context: r.Context(), Timeout: timeout, Concurrency: h.config.ProbeConcurrency, StateDir: h.config.DataDir})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	h.subscription.UpdateLatencies(checked)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"servers": checked,
+		"servers": publicServers(checked),
 	})
 }
 
@@ -533,6 +595,8 @@ func (h *Handlers) HandlePoolStatus(w http.ResponseWriter, r *http.Request) {
 // HandlePoolEnable — POST /api/pool/enable. Builds a pool from the subscription
 // and moves the routing rules onto the balancer.
 func (h *Handlers) HandlePoolEnable(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	servers := h.subscription.GetServers()
 	if len(servers) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "подписка пуста — нечего добавлять в пул"})
@@ -584,23 +648,9 @@ func (h *Handlers) pinAfterRestart(rt xkeen.Runtime) {
 	time.Sleep(3 * time.Second)
 
 	h.detector.InvalidateTopology()
-	top := h.detector.Topology()
-	if top.Mode != xkeen.TopologyPool {
-		return
-	}
-
-	tag, err := xkeen.PinBestNode(rt, h.config.XrayAPIAddr, h.config.OutboundsFile, top,
-		h.subscription.GetServers(), nil,
-		time.Duration(h.config.ProbeTimeoutMs)*time.Millisecond, h.config.ProbeConcurrency)
-	if err != nil {
+	if err := h.watchdog.ReapplySelection(); err != nil {
 		h.watchdog.Log("[PIN] Не удалось закрепить ноду: %v", err)
-		return
 	}
-
-	if err := h.pool.SetPinned(tag, xkeen.NodeKeyForTag(h.config.OutboundsFile, top.Selector(), tag), false); err != nil {
-		log.Printf("[PIN] Не удалось сохранить закрепление: %v", err)
-	}
-	h.watchdog.Log("[PIN] Трафик закреплён за нодой %s", tag)
 }
 
 func (h *Handlers) HandlePoolPin(w http.ResponseWriter, r *http.Request) {
@@ -618,7 +668,21 @@ func (h *Handlers) HandlePoolPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.pinTag(h.detector.Runtime(), top, req.Tag); err != nil {
+	var target *models.Server
+	if nodes, err := xkeen.PoolNodes(h.config.OutboundsFile, top.Selector(), h.subscription.GetServers()); err == nil {
+		for _, node := range nodes {
+			if node.Tag == req.Tag && node.Server != nil {
+				value := *node.Server
+				target = &value
+				break
+			}
+		}
+	}
+	if target == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "узел больше не доступен в пуле"})
+		return
+	}
+	if _, err := h.watchdog.PinServer(*target, true, ""); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -627,10 +691,6 @@ func (h *Handlers) HandlePoolPin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandlePoolAuto(w http.ResponseWriter, r *http.Request) {
-	if err := h.pool.DropManual(""); err != nil {
-		log.Printf("[POOL] Не удалось сохранить режим: %v", err)
-	}
-
 	tag, err := h.watchdog.PinBest()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -644,6 +704,8 @@ func (h *Handlers) HandlePoolAuto(w http.ResponseWriter, r *http.Request) {
 // HandlePoolDisable — POST /api/pool/disable. Returns the config to a single
 // outbound carrying the active server.
 func (h *Handlers) HandlePoolDisable(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	server := h.subscription.GetActiveServer()
 	if server == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "нет активного сервера, к которому можно вернуться"})
@@ -672,6 +734,8 @@ func (h *Handlers) HandlePoolDisable(w http.ResponseWriter, r *http.Request) {
 
 // HandlePoolSync — POST /api/pool/sync. Brings pool membership in line with the subscription.
 func (h *Handlers) HandlePoolSync(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	rt := h.detector.Runtime()
 	state := h.pool.Get()
 	if state.Selector == "" {

@@ -42,9 +42,10 @@ build-local: build-frontend
 # === Deploy ===
 
 # The router disk is /opt/ on the router
-ROUTER_DISK ?= /Volumes/bc89cc32-b398-4623-8c4a-e166db166e0c
+ROUTER_DISK ?=
 
 deploy-disk: build-arm64
+	@test -n "$(ROUTER_DISK)" || (echo "Set ROUTER_DISK to the mounted router volume"; exit 1)
 	mkdir -p $(ROUTER_DISK)/etc/xkeen-panel/data
 	cp build/xkeen-panel-aarch64 $(ROUTER_DISK)/sbin/xkeen-panel
 	@test -f $(ROUTER_DISK)/etc/xkeen-panel/config.yaml || cp config.yaml $(ROUTER_DISK)/etc/xkeen-panel/config.yaml

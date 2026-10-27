@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"xkeen-panel/internal/updater"
@@ -22,7 +23,7 @@ func (h *UpdateHandler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 func (h *UpdateHandler) HandleCheck(w http.ResponseWriter, r *http.Request) {
 	state, err := h.updater.Check(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		writeUpdateError(w, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, state)
@@ -31,7 +32,7 @@ func (h *UpdateHandler) HandleCheck(w http.ResponseWriter, r *http.Request) {
 // Answers as soon as the install starts: the restart into the new version ends this connection anyway.
 func (h *UpdateHandler) HandleApply(w http.ResponseWriter, r *http.Request) {
 	if err := h.updater.Apply(); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeUpdateError(w, http.StatusConflict, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, h.updater.State())
@@ -39,7 +40,7 @@ func (h *UpdateHandler) HandleApply(w http.ResponseWriter, r *http.Request) {
 
 func (h *UpdateHandler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 	if err := h.updater.Rollback(); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeUpdateError(w, http.StatusConflict, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, h.updater.State())
@@ -55,8 +56,16 @@ func (h *UpdateHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.updater.SetAuto(*req.Auto); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeUpdateError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, h.updater.State())
+}
+
+func writeUpdateError(w http.ResponseWriter, fallbackStatus int, err error) {
+	status, message := fallbackStatus, err.Error()
+	if errors.Is(err, updater.ErrLocked) {
+		status, message = http.StatusForbidden, updater.ErrLocked.Error()
+	}
+	writeJSON(w, status, map[string]string{"error": message})
 }

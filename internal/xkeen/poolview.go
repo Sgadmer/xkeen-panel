@@ -82,7 +82,7 @@ func ServerForNode(servers []models.Server, node string) (models.Server, bool) {
 func PoolTagsByNode(nodes []PoolNode) map[string]string {
 	tags := make(map[string]string, len(nodes))
 	for _, node := range nodes {
-		tags[endpoint{Address: node.Address, Port: node.Port, UUID: node.UUID}.Key()] = node.Tag
+		tags[node.NodeKey] = node.Tag
 	}
 	return tags
 }

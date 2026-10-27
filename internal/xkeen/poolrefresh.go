@@ -55,7 +55,13 @@ func RefreshPool(rt Runtime, outboundsPath, apiAddr string, servers []models.Ser
 
 	before := current
 
-	if err := SyncPool(rt, outboundsPath, wanted, state, PoolSelection{MaxNodes: len(wanted)}); err != nil {
+	syncServers := wanted
+	syncSelection := PoolSelection{MaxNodes: len(wanted)}
+	if len(wanted) == 0 {
+		syncServers = servers
+		syncSelection = sel
+	}
+	if err := SyncPool(rt, outboundsPath, syncServers, state, syncSelection); err != nil {
 		return result, err
 	}
 
@@ -103,7 +109,10 @@ func RefreshPool(rt Runtime, outboundsPath, apiAddr string, servers []models.Ser
 		}
 	}
 
-	if _, err := Restart(rt.Dispatcher); err != nil {
+	if !rt.Installed || rt.Dispatcher == "" {
+		return result, nil
+	}
+	if _, err := RestartAndWait(rt.Dispatcher); err != nil {
 		return result, fmt.Errorf("пул обновлён, но перезапуск не выполнен: %w", err)
 	}
 	result.Restarted = true
@@ -120,6 +129,15 @@ func updateObservatoryInterval(rt Runtime, selector string, nodes int) (bool, er
 
 	observatory, ok := doc.config["observatory"].(map[string]interface{})
 	if !ok {
+		return false, nil
+	}
+	owned := false
+	for _, subject := range stringList(observatory["subjectSelector"]) {
+		if subject == selector {
+			owned = true
+		}
+	}
+	if !owned {
 		return false, nil
 	}
 

@@ -1,0 +1,18 @@
+{
+  "log": {"level": "warn"},
+  "outbounds": [
+    {"type":"vless","tag":"Germany VLESS Reality","server":"vless.example.invalid","server_port":443,"uuid":"00000000-0000-4000-8000-000000000001","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"reality.example.invalid","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,"public_key":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","short_id":"0102"}}},
+    {"type":"vmess","tag":"VMess gRPC","server":"vmess.example.invalid","server_port":443,"uuid":"00000000-0000-4000-8000-000000000002","security":"aes-128-gcm","alter_id":0,"authenticated_length":true,"tls":{"enabled":true,"server_name":"tls.example.invalid","alpn":["h2"]},"transport":{"type":"grpc","service_name":"synthetic-service","idle_timeout":"30s","ping_timeout":"15s","permit_without_stream":true}},
+    {"type":"trojan","tag":"Trojan HTTPUpgrade","server":"trojan.example.invalid","server_port":443,"password":"synthetic-trojan-password","tls":{"enabled":true,"server_name":"tls.example.invalid"},"transport":{"type":"httpupgrade","path":"/synthetic","host":"cdn.example.invalid","headers":{"X-Synthetic":"fixture"}}},
+    {"type":"shadowsocks","tag":"Shadowsocks","server":"ss.example.invalid","server_port":8443,"method":"aes-128-gcm","password":"synthetic-password"},
+    {"type":"socks","tag":"SOCKS no auth","server":"socks.example.invalid","server_port":1080,"version":"5"},
+    {"type":"http","tag":"HTTP authenticated","server":"http.example.invalid","server_port":443,"username":"synthetic-user","password":"synthetic-password","headers":{"X-Synthetic":"fixture"},"tls":{"enabled":true,"server_name":"http.example.invalid"}},
+    {"type":"hysteria2","tag":"Hysteria2","server":"hy2.example.invalid","server_port":443,"server_ports":["5000:5002","8443"],"hop_interval":"20s","password":"synthetic-hy2-password","up_mbps":25,"down_mbps":100,"obfs":{"type":"salamander","password":"synthetic-obfs"},"tls":{"enabled":true,"server_name":"tls.example.invalid","alpn":["h3"]}},
+    {"type":"direct","tag":"direct"},
+    {"type":"block","tag":"block"},
+    {"type":"selector","tag":"AUTO","outbounds":["Germany VLESS Reality","Hysteria2"]}
+  ],
+  "route":{"final":"AUTO"},
+  "inbounds":[{"type":"tun","tag":"client-tun"}],
+  "dns":{"servers":[]}
+}
