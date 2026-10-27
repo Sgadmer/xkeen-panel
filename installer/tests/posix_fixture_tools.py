@@ -33,5 +33,15 @@ elif command == 'timeout':
         result = subprocess.run([os.environ['XKP_TEST_SHELL'], value, *rest], timeout=float(seconds))
         sys.exit(result.returncode)
     except subprocess.TimeoutExpired: sys.exit(124)
+elif command == 'tar':
+    # Native Windows BSD tar writes CRLF/localized listings; the production
+    # Linux command writes LF. Preserve real archive operations and normalize
+    # only the textual command output for this Windows fixture.
+    result = subprocess.run([os.environ['XKP_TEST_TAR'], *args], capture_output=True)
+    for output, target in [(result.stdout, sys.stdout), (result.stderr, sys.stderr)]:
+        try: value = output.decode('utf-8')
+        except UnicodeDecodeError: value = output.decode('mbcs', errors='replace')
+        target.buffer.write(value.replace('\r\n', '\n').encode('utf-8'))
+    sys.exit(result.returncode)
 else:
     raise SystemExit('unsupported test adapter')

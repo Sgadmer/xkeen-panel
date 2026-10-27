@@ -132,11 +132,12 @@ class InstallIntegration(unittest.TestCase):
             helper = shell_path(Path(__file__).with_name('posix_fixture_tools.py'))
             python = shell_path(sys.executable)
             self.env['XKP_TEST_SHELL'] = shutil.which('sh')
+            self.env['XKP_TEST_TAR'] = shutil.which('tar')
             actual_jq = shutil.which('jq')
             if not actual_jq:
                 self.skipTest('Windows POSIX fixture needs official jq in PATH')
             self.write(self.commands / 'jq', f'#!/bin/sh\nexec "{shell_path(actual_jq)}" -b "$@"\n')
-            for name in ['sha256sum', 'df', 'du', 'chmod', 'timeout']:
+            for name in ['sha256sum', 'df', 'du', 'chmod', 'timeout', 'tar']:
                 self.write(self.commands / name, f'#!/bin/sh\nexec "{python}" "{helper}" {name} "$@"\n')
         self.write(self.commands / 'id', '#!/bin/sh\necho 0\n')
         self.write(self.commands / 'opkg', '#!/bin/sh\necho "arch aarch64-3.10 10"\n')
