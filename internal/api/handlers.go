@@ -535,7 +535,18 @@ func (h *Handlers) HandleSetCountry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.subscription.SetCountryOverride(req.ID, req.Country); err != nil {
+	var err error
+	if h.Cards != nil {
+		_, err = h.withSubscriptionTransaction(func(_ *subscriptionApplySnapshot) (map[string]interface{}, error) {
+			if err := h.subscription.SetCountryOverride(req.ID, req.Country); err != nil {
+				return nil, err
+			}
+			return nil, h.Cards.Reconcile(r.Context())
+		})
+	} else {
+		err = h.subscription.SetCountryOverride(req.ID, req.Country)
+	}
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

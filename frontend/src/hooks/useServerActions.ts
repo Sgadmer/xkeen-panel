@@ -10,6 +10,7 @@ export function useServerActions() {
         qc.invalidateQueries({ queryKey: ['pool'] })
         qc.invalidateQueries({ queryKey: ['subscription'] })
         qc.invalidateQueries({ queryKey: ['routing-mode'] })
+        qc.invalidateQueries({ queryKey: ['service-routes'] })
     }
 
     const select = useMutation({
@@ -55,7 +56,7 @@ export function useServerActions() {
     const setCountry = useMutation({
         mutationFn: ({ id, country }: { id: number; country: string }) =>
             api.post('/api/servers/country', { id, country }),
-        onSettled: () => qc.invalidateQueries({ queryKey: ['servers'] }),
+        onSettled: refreshAll,
     })
 
     return {

@@ -147,15 +147,27 @@ func ServiceTargetID(server models.Server) string {
 }
 
 type ServiceTarget struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Country string `json:"country,omitempty"`
 }
 type ServiceRouteView struct {
 	RoutingService
-	Target    string `json:"target"`
-	Blocked   bool   `json:"blocked"`
-	RouteName string `json:"route_name,omitempty"`
+	Target         string          `json:"target"`
+	Blocked        bool            `json:"blocked"`
+	RouteName      string          `json:"route_name,omitempty"`
+	InheritedRoute *InheritedRoute `json:"inherited_route,omitempty"`
+}
+
+// InheritedRoute describes the service's own active Mihomo group in rule mode.
+type InheritedRoute struct {
+	Group    string   `json:"group"`
+	Via      []string `json:"via"`
+	Kind     string   `json:"kind"`
+	Endpoint string   `json:"endpoint,omitempty"`
+	Strategy string   `json:"strategy,omitempty"`
+	Members  []string `json:"members,omitempty"`
 }
 type ServiceRoutesView struct {
 	Services   []ServiceRouteView `json:"services"`
@@ -180,7 +192,7 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 		if len(s.RawProfile) > 0 {
 			kind = "profile"
 		}
-		view.Targets = append(view.Targets, ServiceTarget{id, s.Name, kind})
+		view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: ServerCountry(s)})
 		seen[id] = true
 	}
 	geo := serviceGeosites(rt)

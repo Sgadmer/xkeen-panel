@@ -219,6 +219,9 @@ func (c *Controller) RecoverDefault(ctx context.Context) (string, error) {
 		if len(s.RawProfile) != 0 || !strings.EqualFold(xkeen.ServerCountry(s), country) {
 			continue
 		}
+		if c.avoidCountries != nil && len(c.avoidCountries()) > 0 && !c.autoAllowed(s) {
+			continue
+		}
 		if key := xkeen.ServiceTargetID(s); key != "" && key != state.Pinned {
 			candidates = append(candidates, s)
 		}

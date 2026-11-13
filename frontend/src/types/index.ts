@@ -69,6 +69,11 @@ export type PoolNode = {
     excluded_until?: string
 }
 
+export type PanelSettings = {
+    avoid_countries: string[]
+    subscription_refresh_minutes: number
+}
+
 export type SiteNode = {
     tag: string
     server_id: number

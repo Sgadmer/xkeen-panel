@@ -1,14 +1,41 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"xkeen-panel/internal/models"
 )
+
+func TestRejectedMihomoCountryPolicyPreservesStoredPreference(t *testing.T) {
+	cfg := &models.Config{DataDir: t.TempDir(), AutoSwitchAvoidCountries: []string{"RU"}, SubscriptionRefreshInterval: 1800}
+	h := NewPanelSettingsHandler(cfg, nil, "", nil)
+	var calls []string
+	h.BindCountryPolicy(func() {}, func() {}, func(context.Context) error {
+		countries := strings.Join(cfg.AvoidCountries(), ",")
+		calls = append(calls, countries)
+		if countries == "RU,BY" {
+			return errors.New("проверка тестового ядра не прошла")
+		}
+		return nil
+	})
+	res := putSettings(h, `{"avoid_countries":["RU","BY"],"subscription_refresh_minutes":60}`)
+	if res.Code != http.StatusInternalServerError || strings.Join(calls, ";") != "RU,BY;RU" {
+		t.Fatal("failed change was reported as applied or rollback was skipped")
+	}
+	if _, err := os.Stat(panelSettingsPath(cfg.DataDir)); !os.IsNotExist(err) {
+		t.Fatal("rejected settings reached storage")
+	}
+	if strings.Join(cfg.AvoidCountries(), ",") != "RU" || cfg.RefreshInterval() != 30*time.Minute {
+		t.Fatal("rejected settings reached the runtime")
+	}
+}
 
 func putSettings(h *PanelSettingsHandler, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()

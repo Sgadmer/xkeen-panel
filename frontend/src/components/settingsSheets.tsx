@@ -4,11 +4,6 @@ import { Group, Row } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
 import { countryName } from '@/lib/format'
 
-export type PanelSettings = {
-    avoid_countries: string[]
-    subscription_refresh_minutes: number
-}
-
 const check = <IconCheck className='size-5 shrink-0 text-tint' stroke={2.6} />
 
 export function CountriesSheet({
@@ -68,7 +63,7 @@ export function CountriesSheet({
                     error ? (
                         <span className='text-destructive'>{error}</span>
                     ) : (
-                        'Панель не возьмёт серверы этих стран ни в пул, ни при автоматической замене. Вручную выбрать их по-прежнему можно.'
+                        'Выбранные страны исключены из автовыбора панели и автоматической замены сервера. Их серверы доступны вручную во вкладке «В подписке». Сборные профили используют собственные правила провайдера.'
                     )
                 }
             >

@@ -9,7 +9,17 @@ import {
     IconShield, IconWorld, type Icon,
 } from '@tabler/icons-react'
 import { PageTitle } from '@/components/ios'
+import { usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
+
+interface InheritedRoute {
+    group: string
+    via: string[]
+    kind: 'server' | 'direct' | 'reject' | 'unknown'
+    endpoint?: string
+    strategy?: 'url-test' | 'fallback' | 'load-balance'
+    members?: string[]
+}
 
 interface Service {
     id: string
@@ -17,7 +27,7 @@ interface Service {
     domains: string[]
     target: string
     blocked: boolean
-    route_name?: string
+    inherited_route?: InheritedRoute
 }
 
 interface ServiceRoutes {
@@ -27,7 +37,7 @@ interface ServiceRoutes {
     controller_ready?: boolean
     scope?: string
     services: Service[]
-    targets: { id: string; name: string; kind: 'server' | 'profile' }[]
+    targets: { id: string; name: string; kind: 'server' | 'profile'; country?: string }[]
 }
 
 const icons: Record<string, Icon> = {
@@ -39,6 +49,41 @@ const icons: Record<string, Icon> = {
     twitch: IconBrandTwitch, disney: IconBrandDisney, primevideo: IconPlayerPlay,
     amazon: IconBrandAmazon, twitter: IconBrandTwitter, hulu: IconLetterH,
     hbo: IconBrandHbo, line: IconBrandLine, google: IconBrandGoogle,
+}
+
+function InheritedRouteInfo({route}: {route: InheritedRoute}) {
+    let current = 'Ядро пока не сообщило маршрут'
+    if (route.kind === 'server' && route.endpoint) current = route.endpoint
+    if (route.kind === 'direct') current = 'Напрямую, без VPN'
+    if (route.kind === 'reject') current = 'Соединения блокируются'
+    if (route.strategy === 'load-balance' && route.kind === 'unknown') current = 'Сервер зависит от соединения'
+
+    const groupPath = [route.group, ...route.via].filter(Boolean).join(' → ')
+    const members = route.members?.filter(member => member !== 'REJECT' && member !== 'REJECT-DROP')
+    return (
+        <div className='mt-2 text-sm'>
+            <p className='break-words'><span className='text-muted-foreground'>Сейчас · </span>{current}</p>
+            <details className='mt-1.5'>
+                <summary className='cursor-pointer text-tint'>Как выбран маршрут</summary>
+                <div className='mt-2 space-y-2 text-muted-foreground'>
+                    {groupPath && <p className='break-words'>Группа Mihomo · {groupPath}</p>}
+                    {route.strategy === 'url-test' && <p>Mihomo сравнивает задержку доступных серверов и сам выбирает узел. Выбор может меняться.</p>}
+                    {route.strategy === 'fallback' && <p>Mihomo использует первый доступный сервер группы. Если он перестаёт отвечать, ядро переходит к следующему.</p>}
+                    {route.strategy === 'load-balance' && <p>Mihomo распределяет соединения между серверами группы.</p>}
+                    {!route.strategy && route.group && <p>Для этого сервиса действует выбор его группы в Mihomo. Здесь можно назначить отдельный сервер или профиль.</p>}
+                    {!route.group && <p>Для этой карточки Mihomo пока не подтвердил отдельную группу. Можно назначить сервер или профиль в списке выше.</p>}
+                    {!!members?.length && (
+                        <div>
+                            <p className='font-medium text-foreground'>Кандидаты группы · {members.length}</p>
+                            <ul className='mt-1 max-h-44 overflow-y-auto' aria-label='Кандидаты группы'>
+                                {members.map(member => <li key={member} className='break-words py-0.5'>{member === 'DIRECT' ? 'Напрямую, без VPN' : member}</li>)}
+                            </ul>
+                        </div>
+                    )}
+                </div>
+            </details>
+        </div>
+    )
 }
 
 interface ClaudeFirewall {
@@ -96,6 +141,7 @@ function ClientProxy({service}: {service: Service}) {
 
 export function ServiceRoutesPage() {
     const qc = useQueryClient()
+    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const [notice, setNotice] = useState('')
     const key = ['service-routes']
     const query = useQuery({
@@ -164,15 +210,20 @@ export function ServiceRoutesPage() {
                                             change.mutate({ service_id: service.id, target_id: e.target.value })
                                         }}
                                     >
-                                        <option value='' disabled={isClaude && !!service.target}>{service.route_name && !service.target ? 'Основной маршрут · ' + service.route_name : (isClaude ? 'VPN не выбран' : 'По основным правилам')}</option>
+                                        <option value='' disabled={isClaude}>{isClaude ? 'Выберите VPN' : (view.scope === 'mihomo' ? 'По правилам сервиса в Mihomo' : 'По правилам Xray')}</option>
                                         {!isClaude && view.scope === 'mihomo' && <option value='direct'>Напрямую</option>}
                                         {missing && <option value={service.target} disabled>Цель отсутствует в подписке</option>}
                                         {(['server', 'profile'] as const).map(kind => (
                                             <optgroup key={kind} label={kind === 'profile' ? 'Сборные профили' : 'Серверы'}>
-                                                {view.targets.filter(t => t.kind === kind).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                                {view.targets.filter(t => t.kind === kind).map(t => (
+                                                    <option key={t.id} value={t.id}>
+                                                        {t.name}{kind === 'server' && t.country && avoidCountries.includes(t.country) ? ' · только вручную' : ''}
+                                                    </option>
+                                                ))}
                                             </optgroup>
                                         ))}
                                     </select>
+                                    {!service.target && service.inherited_route && <InheritedRouteInfo route={service.inherited_route} />}
                                     {busy && <p role='status' className='mt-2 text-sm text-muted-foreground'>Применяем маршрут…</p>}
                                     {isClaude && <ClaudeApiFirewall />}
                                     {view.scope === 'mihomo' && !!service.target && service.target !== 'direct' && <ClientProxy service={service} />}

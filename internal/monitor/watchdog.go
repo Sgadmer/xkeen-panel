@@ -706,7 +706,7 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 		if !xkeen.CanBuildServer(s) {
 			continue
 		}
-		if !w.isServerAllowed(s) {
+		if !w.AutomaticServerAllowed(s) {
 			skippedGeo++
 			continue
 		}
@@ -770,7 +770,7 @@ func (w *Watchdog) AllowedActiveOrBest() *models.Server {
 	if active == nil {
 		return nil
 	}
-	if w.isServerAllowed(*active) {
+	if w.AutomaticServerAllowed(*active) {
 		return active
 	}
 
@@ -783,10 +783,10 @@ func (w *Watchdog) AllowedActiveOrBest() *models.Server {
 	return best
 }
 
-// isServerAllowed decides whether automatic switching may use a server. GeoIP is
+// AutomaticServerAllowed decides whether automatic switching may use a server. GeoIP is
 // the primary signal (it proves the server is not in a blocked country); the
 // name is the fallback.
-func (w *Watchdog) isServerAllowed(s models.Server) bool {
+func (w *Watchdog) AutomaticServerAllowed(s models.Server) bool {
 	// Manual override or name-derived country: an avoided one is an immediate no
 	effCountry := xkeen.ServerCountry(s)
 	if effCountry != "" && w.isAvoidedCountry(effCountry) {

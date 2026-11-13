@@ -17,14 +17,13 @@ import {
     CountriesSheet,
     RefreshSheet,
     intervalLabel,
-    type PanelSettings,
 } from '@/components/settingsSheets'
 import { useAuth } from '@/hooks/useAuth'
-import { useServers, useStatus, useUpdate } from '@/hooks/usePanelData'
+import { usePanelSettings, useServers, useStatus, useUpdate } from '@/hooks/usePanelData'
 import { serverCountry } from '@/lib/format'
 import { api } from '@/lib/api'
 import { passkeySupported, registerPasskey } from '@/lib/webauthn'
-import type { Status } from '@/types'
+import type { PanelSettings, Status } from '@/types'
 
 const icon = (color: string, Glyph: typeof IconCpu) => (
     <IconTile color={color}>
@@ -71,14 +70,16 @@ export function SettingsPage() {
 
     const servers = useServers().data ?? []
     const [sheet, setSheet] = useState<'countries' | 'refresh' | null>(null)
-    const settings = useQuery({
-        queryKey: ['panel-settings'],
-        queryFn: () => api.get<PanelSettings>('/api/panel/settings'),
-    })
+    const settings = usePanelSettings()
     const saveSettings = useMutation({
         mutationFn: (next: PanelSettings) =>
             api.put<PanelSettings>('/api/panel/settings', next),
-        onSuccess: data => qc.setQueryData(['panel-settings'], data),
+        onSuccess: data => {
+            qc.setQueryData(['panel-settings'], data)
+            for (const key of ['pool', 'servers', 'service-routes', 'status']) {
+                void qc.invalidateQueries({ queryKey: [key] })
+            }
+        },
     })
     const avoid = settings.data?.avoid_countries ?? []
     const refresh = settings.data?.subscription_refresh_minutes ?? 0
@@ -109,7 +110,7 @@ export function SettingsPage() {
                     <Row
                         icon={icon('#ff453a', IconBan)}
                         label='Не выбирать страны'
-                        hint={status?.core === 'mihomo' ? 'Фильтр для автовыбора Xray. В Mihomo состав группы задаёт её источник.' : undefined}
+                        hint='Исключить из автовыбора и автоматической замены'
                         detail={avoid.length ? avoid.join(', ') : 'Нет'}
                         onClick={() => setSheet('countries')}
                         disabled={!settings.data}

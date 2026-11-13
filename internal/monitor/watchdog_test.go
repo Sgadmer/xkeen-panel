@@ -99,7 +99,7 @@ func TestIsServerAllowedNilGeoIP(t *testing.T) {
 		{"override avoided", models.Server{Country: "NL", CountryOverride: "RU"}, false},
 	}
 	for _, c := range cases {
-		if got := w.isServerAllowed(c.s); got != c.want {
+		if got := w.AutomaticServerAllowed(c.s); got != c.want {
 			t.Errorf("%s: isServerAllowed = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -125,7 +125,7 @@ func TestIsServerAllowedWithGeoIP(t *testing.T) {
 		{"geoip authoritative over name", models.Server{Address: "1.2.3.5", Country: "NL"}, false},
 	}
 	for _, c := range cases {
-		if got := w.isServerAllowed(c.s); got != c.want {
+		if got := w.AutomaticServerAllowed(c.s); got != c.want {
 			t.Errorf("%s: isServerAllowed = %v, want %v", c.name, got, c.want)
 		}
 	}

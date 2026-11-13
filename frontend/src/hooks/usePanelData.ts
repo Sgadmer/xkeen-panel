@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type {
     DevicesResponse,
+    PanelSettings,
     PoolStatus,
     Server,
     SitesResponse,
@@ -31,6 +32,13 @@ export function usePool() {
     return useQuery({
         queryKey: ['pool'],
         queryFn: () => api.get<PoolStatus>('/api/pool'),
+    })
+}
+
+export function usePanelSettings() {
+    return useQuery({
+        queryKey: ['panel-settings'],
+        queryFn: () => api.get<PanelSettings>('/api/panel/settings'),
     })
 }
 

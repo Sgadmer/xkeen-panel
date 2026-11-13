@@ -216,6 +216,10 @@ func main() {
 
 	refreshReset := make(chan struct{}, 1)
 	panelSettings := api.NewPanelSettingsHandler(cfg, geoMatcher, geoPath, refreshReset)
+	if cards != nil {
+		cards.SetCountryPolicy(cfg.AvoidCountries, watchdog.AutomaticServerAllowed)
+		panelSettings.BindCountryPolicy(watchdog.LockChanges, watchdog.UnlockChanges, cards.Reconcile)
+	}
 
 	// Autostart the watchdog for unattended operation
 	if cfg.WatchdogAutoStart && len(subManager.GetServers()) > 0 {

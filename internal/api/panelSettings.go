@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,15 +45,56 @@ func LoadPanelSettings(cfg *models.Config) error {
 }
 
 type PanelSettingsHandler struct {
-	config  *models.Config
-	geoip   *geoip.Matcher
-	geoPath string
-	reset   chan<- struct{}
-	mu      sync.Mutex
+	config          *models.Config
+	geoip           *geoip.Matcher
+	geoPath         string
+	reset           chan<- struct{}
+	mu              sync.Mutex
+	lockCountries   func()
+	unlockCountries func()
+	applyCountries  func(context.Context) error
 }
 
 func NewPanelSettingsHandler(cfg *models.Config, matcher *geoip.Matcher, geoPath string, reset chan<- struct{}) *PanelSettingsHandler {
 	return &PanelSettingsHandler{config: cfg, geoip: matcher, geoPath: geoPath, reset: reset}
+}
+
+// The live group and the saved preference share the same mutation lock as
+// subscription refresh, country overrides and card assignments.
+func (h *PanelSettingsHandler) BindCountryPolicy(lock, unlock func(), apply func(context.Context) error) {
+	h.lockCountries, h.unlockCountries, h.applyCountries = lock, unlock, apply
+}
+
+func (h *PanelSettingsHandler) stageSettings(next PanelSettings) (string, error) {
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(h.config.DataDir, ".settings-*")
+	if err != nil {
+		return "", err
+	}
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func (h *PanelSettingsHandler) loadRuntime(s PanelSettings, updateGeo bool) error {
+	if updateGeo && h.geoip != nil && h.geoPath != "" {
+		if err := h.geoip.Reload(h.geoPath, s.AvoidCountries); err != nil {
+			return err
+		}
+	}
+	h.config.SetRuntime(s.AvoidCountries, s.RefreshMinutes*60)
+	return nil
 }
 
 func (h *PanelSettingsHandler) current() PanelSettings {
@@ -63,6 +106,8 @@ func (h *PanelSettingsHandler) current() PanelSettings {
 
 // HandleGet — GET /api/panel/settings
 func (h *PanelSettingsHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	writeJSON(w, http.StatusOK, h.current())
 }
 
@@ -96,24 +141,42 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.lockCountries != nil {
+		h.lockCountries()
+		defer h.unlockCountries()
+	}
 
 	next := PanelSettings{AvoidCountries: countries, RefreshMinutes: req.RefreshMinutes}
-	data, err := json.MarshalIndent(next, "", "  ")
-	if err == nil {
-		err = os.WriteFile(panelSettingsPath(h.config.DataDir), data, 0600)
-	}
+	staged, err := h.stageSettings(next)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось сохранить настройки: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось подготовить файл настроек"})
 		return
 	}
-
-	h.config.SetRuntime(next.AvoidCountries, next.RefreshMinutes*60)
-
-	if h.geoip != nil && h.geoPath != "" {
-		if err := h.geoip.Reload(h.geoPath, next.AvoidCountries); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "настройки сохранены, но GeoIP не перечитан: " + err.Error()})
-			return
+	defer os.Remove(staged)
+	previous := h.current()
+	changed := !slices.Equal(previous.AvoidCountries, next.AvoidCountries)
+	if err := h.loadRuntime(next, changed); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось прочитать GeoIP для выбранных стран"})
+		return
+	}
+	if changed && h.applyCountries != nil {
+		err = h.applyCountries(r.Context())
+	}
+	if err == nil {
+		err = os.Rename(staged, panelSettingsPath(h.config.DataDir))
+	}
+	if err != nil {
+		restoreErr := h.loadRuntime(previous, changed)
+		if restoreErr == nil && changed && h.applyCountries != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			restoreErr = h.applyCountries(ctx)
+			cancel()
 		}
+		if restoreErr != nil {
+			err = errors.Join(err, errors.New("восстановление прежнего фильтра стран не подтверждено"))
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 
 	select {

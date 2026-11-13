@@ -143,6 +143,54 @@
     }
 }
 
+/* Native pickers can render outside the page, where a translucent fill loses its backdrop. */
+.dark select {
+    color-scheme: dark;
+}
+
+.dark select,
+.dark select option,
+.dark select optgroup {
+    color: var(--popover-foreground);
+    background-color: var(--popover);
+}
+
+.dark select option:disabled {
+    color: GrayText;
+}
+
+.dark select:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+@supports (appearance: base-select) and selector(::picker(select)) {
+    .dark select,
+    .dark select::picker(select) {
+        appearance: base-select;
+    }
+
+    .dark select::picker(select) {
+        color-scheme: dark;
+        color: var(--popover-foreground);
+        background: var(--popover);
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        padding: 0.25rem;
+        max-height: min(20rem, 50dvh);
+        overflow-y: auto;
+    }
+
+    .dark select option {
+        padding: 0.375rem 0.5rem;
+    }
+
+    .dark select option:enabled:is(:checked, :hover, :focus-visible) {
+        color: var(--accent-foreground);
+        background: var(--secondary);
+    }
+}
+
 /* One background, painted on the page and again inside every glass lens */
 .bg-page {
     background:

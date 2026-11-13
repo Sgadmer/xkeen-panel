@@ -24,6 +24,7 @@ import { ServerSourceForm } from '@/components/serverSourceForm'
 import { Badge } from '@/components/ui/badge'
 import { AddSiteSheet, SiteSheet, siteSummary } from '@/components/siteSheets'
 import {
+    usePanelSettings,
     usePool,
     useServers,
     useSites,
@@ -64,6 +65,7 @@ function savedTab(): Tab {
 export function ServersPage() {
     const servers = useServers().data ?? []
     const pool = usePool().data
+    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
     const subscription = useSubscription().data
     const {
@@ -102,7 +104,7 @@ export function ServersPage() {
           )
         : ''
 
-    const isPool = pool?.mode === 'pool' && (pool.nodes?.length ?? 0) > 0
+    const isPool = pool?.mode === 'pool'
     const view: Tab = isPool ? tab : 'all'
     const setTab = (next: Tab) => {
         setTabState(next)
@@ -172,6 +174,7 @@ export function ServersPage() {
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
+        countryExcluded: avoidCountries.includes(serverCountry(s)),
         busy: select.isPending,
         onSelect: () => select.mutate(s.id),
         onSetCountry: (c: string) =>
@@ -240,7 +243,7 @@ export function ServersPage() {
                 title='Серверы'
                 subtitle={
                     hasSubscription
-                        ? `${subscription?.server_count ?? servers.length} серверов${isPool ? ` · ${pool?.nodes?.length} в пуле` : ''}${updated ? ` · обновлено ${updated} назад` : ''}`
+                        ? `В подписке ${subscription?.server_count ?? servers.length}${isPool ? ` · В автовыборе ${pool?.nodes?.length ?? 0}` : ''}${updated ? ` · обновлено ${updated} назад` : ''}`
                         : 'Добавьте ссылку на подписку'
                 }
                 action={
@@ -297,16 +300,16 @@ export function ServersPage() {
                         options={[
                             {
                                 value: 'pool',
-                                label: `Пул · ${pool?.nodes?.length ?? 0}`,
+                                label: `Автовыбор · ${pool?.nodes?.length ?? 0}`,
                             },
-                            { value: 'all', label: `Все · ${servers.length}` },
+                            { value: 'all', label: `В подписке · ${servers.length}` },
                         ]}
                     />
                 </div>
             )}
 
             {servers.some(s => s.protocol === 'xray-profile') && (
-                <Group title='Режимы провайдера' footer='Профиль применяет свои правила и выбор серверов. Для обычного автовыбора используйте пул панели.'>
+                <Group title='Режимы провайдера' footer='Состав и маршруты сборного профиля задаёт провайдер. Список исключённых стран применяется к автовыбору панели.'>
                     {servers.filter(s => s.protocol === 'xray-profile').map(server => (
                         <Row key={server.id} label={server.name}
                             hint={server.check_error || `${server.profile_nodes ?? 0} серверов · ${server.active ? 'Выбран' : server.latency_ms > 0 ? `HTTPS ${server.latency_ms} мс` : 'Не прошёл проверку'}`}
@@ -321,7 +324,7 @@ export function ServersPage() {
             {view === 'pool' && (
                 <div className='flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start'>
                     <Group
-                        title='Пул'
+                        title='Автовыбор'
                         footer={
                             isAuto
                                 ? 'Панель держит трафик на самом быстром сервере пула и сама переключается, если он перестал работать.'
@@ -364,6 +367,7 @@ export function ServersPage() {
                                 latency={r.latency}
                                 current={r.current}
                                 excludedUntil={r.node.excluded_until}
+                                countryExcluded={avoidCountries.includes(r.country ?? '')}
                                 busy={select.isPending || pin.isPending}
                                 onSelect={() =>
                                     pickNode(r.node.tag, r.node.server_id)
@@ -372,7 +376,7 @@ export function ServersPage() {
                         ))}
                         {poolRows.length === 0 && (
                             <p className='py-4 text-[15px] text-muted-foreground'>
-                                Ничего не нашлось
+                                {query ? 'Ничего не нашлось' : 'Доступных серверов для автовыбора нет'}
                             </p>
                         )}
                     </Group>
@@ -535,6 +539,7 @@ function PoolRow({
     latency,
     current,
     excludedUntil,
+    countryExcluded,
     busy,
     onSelect,
 }: {
@@ -544,11 +549,13 @@ function PoolRow({
     latency: number
     current: boolean
     excludedUntil?: string
+    countryExcluded: boolean
     busy: boolean
     onSelect: () => void
 }) {
     const notes = [
         countryName(country),
+        countryExcluded && 'Страна запрещена в настройках, но ядро включило сервер в автовыбор',
         excludedUntil &&
             `не отвечал, вернётся в ${new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`,
     ].filter(Boolean)
@@ -608,15 +615,15 @@ function byLatency(a: Server, b: Server) {
     return la - lb
 }
 
-function statusOf(server: Server) {
+function statusOf(server: Server, countryExcluded: boolean) {
 	if (server.check_error) return { label: server.check_error, className: 'text-destructive' }
     if (server.active) return { label: 'Выбран', className: 'text-tint' }
     if (server.probe_kind !== 'https')
         return { label: 'Не проверен', className: 'text-muted-foreground' }
     if (server.latency_ms === -1)
         return { label: 'Не отвечает', className: 'text-destructive' }
-    if (server.pool_tag)
-        return { label: 'В пуле', className: 'text-muted-foreground' }
+    if (server.pool_tag && !countryExcluded)
+        return { label: 'В автовыборе', className: 'text-muted-foreground' }
     return null
 }
 
@@ -664,18 +671,20 @@ function SearchField({
 
 function ServerRow({
     server,
+    countryExcluded,
     busy,
     onSelect,
     onSetCountry,
 }: {
     server: Server
+    countryExcluded: boolean
     busy: boolean
     onSelect: () => void
     onSetCountry: (country: string) => void
 }) {
     const [editing, setEditing] = useState(false)
     const [value, setValue] = useState(serverCountry(server))
-    const status = statusOf(server)
+    const status = statusOf(server, countryExcluded)
     const measured = server.probe_kind === 'https' ? server.latency_ms : 0
     const ping = measured === 0 ? '' : measured < 0 ? '—' : `${measured} мс`
 
@@ -740,6 +749,11 @@ function ServerRow({
                             )}
                         >
                             {status.label}
+                        </span>
+                    )}
+                    {countryExcluded && (
+                        <span className='mt-0.5 block text-[13px] text-muted-foreground'>
+                            Страна исключена из автовыбора · ручной выбор
                         </span>
                     )}
                 </span>

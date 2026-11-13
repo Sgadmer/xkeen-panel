@@ -35,15 +35,17 @@ type View struct {
 }
 
 type Controller struct {
-	mu       sync.Mutex
-	path     string
-	stateDir string
-	rt       xkeen.Runtime
-	catalog  func() []models.Server
-	http     *http.Client
-	validate func(context.Context, string) error
-	prepare  func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
-	pending  map[string]bool
+	mu             sync.Mutex
+	path           string
+	stateDir       string
+	rt             xkeen.Runtime
+	catalog        func() []models.Server
+	http           *http.Client
+	validate       func(context.Context, string) error
+	prepare        func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
+	pending        map[string]bool
+	avoidCountries func() []string
+	autoAllowed    func(models.Server) bool
 }
 
 func New(configPath, stateDir string, rt xkeen.Runtime, catalog func() []models.Server) *Controller {
@@ -208,14 +210,36 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 	result.GuardReady = false // packet-level fail-closed is independently verified.
 	live, err := p.api.selectors(ctx)
 	result.ControllerReady = err == nil && p.api.ruleMode(ctx)
+	var rules []liveRule
+	if result.ControllerReady {
+		rules, _ = p.api.rules(ctx)
+	}
 	_, managed := p.doc[stateKey]
-	result.Active = managed && result.ControllerReady && p.api.rulesReady(ctx, p.doc)
+	result.Active = managed && result.ControllerReady && activeRulesMatch(rules, p.doc)
+	groupRoutes := inheritedGroups(rules)
+	names := make(map[string]string, len(result.Targets))
+	for _, t := range result.Targets {
+		names[nodePrefix+t.ID] = t.Name
+	}
+	var providerNodes map[string]selector
 	for i := range result.Services {
 		s := &result.Services[i]
 		s.Target = p.assigned[s.ID]
 		s.Blocked = false
 		if !managed || s.ID != "claude" && s.Target == "" {
-			s.RouteName = live[groupNames[s.ID]].Now
+			group := groupNames[s.ID]
+			if !groupRoutes[group] && !(groupRoutes[cardPrefix+s.ID+"-inherited"] && live[cardPrefix+s.ID+"-inherited"].Now == group) {
+				group = ""
+			}
+			s.InheritedRoute = inheritedRoute(group, live, names, func(name string) selector {
+				if providerNodes == nil {
+					providerNodes = p.api.providerNodes(ctx)
+				}
+				return providerNodes[name]
+			})
+			if group != "" {
+				s.RouteName = publicRouteName(live[group].Now, names)
+			}
 			continue
 		}
 		group := live[cardPrefix+s.ID]
@@ -275,7 +299,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		return err
 	}
 	if _, enabled := p.doc[stateKey]; !enabled {
-		return nil
+		return c.reconcileCountryGroups(ctx, p)
 	}
 	_, err = c.apply(ctx, "", "", nil)
 	return err
@@ -350,6 +374,10 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	if err != nil {
 		return View{}, err
 	}
+	countryGroups, err := c.renderCountryFilter(&p, servers)
+	if err != nil {
+		return View{}, err
+	}
 	body, err := yaml.Marshal(p.doc)
 	if err != nil {
 		return View{}, errors.New("не удалось сериализовать правила")
@@ -360,8 +388,8 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	_ = yaml.Unmarshal(p.raw, &original)
 	var candidate map[string]interface{}
 	_ = yaml.Unmarshal(body, &candidate)
-	if !reflect.DeepEqual(original, candidate) || !groupsReady(selections, expected) || !p.api.rulesReady(ctx, candidate) {
-		if err = c.install(ctx, p, body, candidate, selections, expected); err != nil {
+	if !reflect.DeepEqual(original, candidate) || !groupsReady(selections, expected) || !countryGroups.ready(selections, nil) || !p.api.rulesReady(ctx, candidate) {
+		if err = c.install(ctx, p, body, candidate, selections, expected, countryGroups); err != nil {
 			return View{}, err
 		}
 	}
@@ -474,16 +502,26 @@ func (c *Controller) keepOriginal(raw []byte) error {
 // The controller's live rule list must start with exactly the managed groups
 // compiled into this configuration, before any pre-existing direct rule.
 func (a coreAPI) rulesReady(ctx context.Context, doc map[string]interface{}) bool {
+	rules, err := a.rules(ctx)
+	return err == nil && activeRulesMatch(rules, doc)
+}
+
+type liveRule struct {
+	Type    string
+	Proxy   string
+	Payload string
+	Extra   struct{ Disabled bool }
+}
+
+func (a coreAPI) rules(ctx context.Context) ([]liveRule, error) {
 	var response struct {
-		Rules []struct {
-			Proxy   string
-			Payload string
-			Extra   struct{ Disabled bool }
-		}
+		Rules []liveRule
 	}
-	if a.request(ctx, "GET", "/rules", nil, &response) != nil {
-		return false
-	}
+	err := a.request(ctx, "GET", "/rules", nil, &response)
+	return response.Rules, err
+}
+
+func activeRulesMatch(rules []liveRule, doc map[string]interface{}) bool {
 	count := 0
 	entries, _, err := managedExclusions(doc)
 	if err != nil {
@@ -498,10 +536,10 @@ func (a coreAPI) rulesReady(ctx context.Context, doc map[string]interface{}) boo
 		if end < 1 || !strings.HasPrefix(parts[end], cardPrefix) && !manual[str(raw)] {
 			continue
 		}
-		if i >= len(response.Rules) {
+		if i >= len(rules) {
 			return false
 		}
-		actual := response.Rules[i]
+		actual := rules[i]
 		if actual.Proxy != parts[end] || actual.Extra.Disabled {
 			return false
 		}
@@ -516,7 +554,7 @@ func (a coreAPI) rulesReady(ctx context.Context, doc map[string]interface{}) boo
 	return count > 0
 }
 
-func (c *Controller) install(ctx context.Context, p profile, body []byte, candidate map[string]interface{}, selections map[string]selector, expected map[string]string) error {
+func (c *Controller) install(ctx context.Context, p profile, body []byte, candidate map[string]interface{}, selections map[string]selector, expected map[string]string, countryGroups autoCountryGroups) error {
 	dir := filepath.Dir(c.path)
 	next, err := stage(dir, body)
 	if err != nil {
@@ -559,7 +597,8 @@ func (c *Controller) install(ctx context.Context, p profile, body []byte, candid
 		return fail()
 	}
 	after, err := p.api.selectors(ctx)
-	if err != nil || !groupsReady(after, expected) || !p.api.rulesReady(ctx, candidate) || restoreSelectors(ctx, p.api, selections, after) != nil || !p.api.ruleMode(ctx) {
+	_, managed := candidate[stateKey]
+	if err != nil || !groupsReady(after, expected) || !countryGroups.ready(after, selections) || managed && !p.api.rulesReady(ctx, candidate) || restoreSelectors(ctx, p.api, selections, after) != nil || !p.api.ruleMode(ctx) {
 		return fail()
 	}
 	return nil
