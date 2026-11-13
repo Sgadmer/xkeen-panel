@@ -9,6 +9,7 @@ import (
 	"time"
 	"xkeen-panel/internal/api"
 	"xkeen-panel/internal/auth"
+	"xkeen-panel/internal/cardcontroller"
 	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/keenetic"
 	"xkeen-panel/internal/models"
@@ -22,6 +23,8 @@ import (
 )
 
 type Server struct {
+	Cards        *cardcontroller.Controller
+	CardsHost    string
 	config       *models.Config
 	userManager  *auth.UserManager
 	subscription *xkeen.SubscriptionManager
@@ -53,11 +56,21 @@ func New(cfg *models.Config, um *auth.UserManager, sub *xkeen.SubscriptionManage
 	}
 }
 
+// EventSource authenticates using a query token. Log only the request path.
+type pathLogFormatter struct{ middleware.DefaultLogFormatter }
+
+func (f *pathLogFormatter) NewLogEntry(r *http.Request) middleware.LogEntry {
+	logged := new(http.Request)
+	*logged = *r
+	logged.RequestURI = r.URL.EscapedPath()
+	return f.DefaultLogFormatter.NewLogEntry(logged)
+}
+
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware
-	r.Use(middleware.Logger)
+	r.Use(middleware.RequestLogger(&pathLogFormatter{middleware.DefaultLogFormatter{Logger: log.Default(), NoColor: true}}))
 	r.Use(middleware.Recoverer)
 
 	// Login rate limiter: 5 attempts per minute
@@ -71,10 +84,12 @@ func (s *Server) Handler() http.Handler {
 	setupHandler := api.NewSetupHandler(s.detector, s.subscription, s.watchdog, devicesHandler)
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool, s.geoip)
+	handlers.Cards = s.Cards
 	componentsHandler := api.NewComponentsHandler(handlers)
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		r.Use(middleware.NoCache)
 		// Authentication, no JWT required
 		r.Route("/auth", func(r chi.Router) {
 			r.Get("/status", authHandler.HandleAuthStatus)
@@ -103,8 +118,15 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/sources/import", handlers.HandleImportSource)
 			r.Get("/routing-mode", handlers.HandleGetRoutingPolicy)
 			r.Put("/routing-mode", handlers.HandlePutRoutingPolicy)
-			r.Get("/service-routes", handlers.HandleGetServiceRoutes)
-			r.Put("/service-routes", handlers.HandlePutServiceRoutes)
+			if s.Cards == nil {
+				r.Get("/service-routes", handlers.HandleGetServiceRoutes)
+				r.Put("/service-routes", handlers.HandlePutServiceRoutes)
+				r.Get("/exclusions", handlers.HandleGetExclusions)
+				r.Post("/exclusions", handlers.HandleCreateExclusion)
+				r.Delete("/exclusions/{id}", handlers.HandleDeleteExclusion)
+			} else {
+				handlers.MountMihomoCards(r, s.CardsHost)
+			}
 			r.Get("/service-routes/claude-api-firewall", handlers.HandleClaudeFirewallStatus)
 			r.Post("/service-routes/claude-api-firewall", handlers.HandleInstallClaudeFirewall)
 			r.Get("/components", componentsHandler.HandleState)
@@ -113,9 +135,6 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/components/apply", componentsHandler.HandleApply)
 			r.Post("/components/rollback", componentsHandler.HandleRollback)
 			r.Put("/components/geodata", componentsHandler.HandleGeodata)
-			r.Get("/exclusions", handlers.HandleGetExclusions)
-			r.Post("/exclusions", handlers.HandleCreateExclusion)
-			r.Delete("/exclusions/{id}", handlers.HandleDeleteExclusion)
 
 			r.Get("/subscription", handlers.HandleGetSubscription)
 			r.Post("/subscription", handlers.HandleUpdateSubscription)

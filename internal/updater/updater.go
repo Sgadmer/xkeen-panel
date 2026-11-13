@@ -58,36 +58,38 @@ type State struct {
 }
 
 type Options struct {
-	Locked     bool // immutable build policy; never read from YAML or update.json
-	Current    string
-	BinPath    string
-	DataDir    string
-	InitScript string
-	AutoHour   int
-	Repo       string
-	APIBase    string
-	Client     *http.Client
-	Log        func(format string, args ...interface{})
-	Publish    func(State)
-	Restart    func() error
-	Busy       func() bool // the core is restarting; not the moment to restart the panel too
+	Locked       bool // immutable build policy; never read from YAML or update.json
+	Current      string
+	BinPath      string
+	DataDir      string
+	InitScript   string
+	RequiredFlag string // command-line option used by the installed init script
+	AutoHour     int
+	Repo         string
+	APIBase      string
+	Client       *http.Client
+	Log          func(format string, args ...interface{})
+	Publish      func(State)
+	Restart      func() error
+	Busy         func() bool // the core is restarting; not the moment to restart the panel too
 }
 
 type Updater struct {
-	locked     bool // copied once at construction; there is intentionally no setter
-	current    string
-	binPath    string
-	dataDir    string
-	initScript string
-	autoHour   int
-	repo       string
-	apiBase    string
-	asset      string
-	client     *http.Client
-	logf       func(format string, args ...interface{})
-	publish    func(State)
-	restart    func() error
-	busy       func() bool
+	locked       bool // copied once at construction; there is intentionally no setter
+	current      string
+	binPath      string
+	dataDir      string
+	initScript   string
+	requiredFlag string
+	autoHour     int
+	repo         string
+	apiBase      string
+	asset        string
+	client       *http.Client
+	logf         func(format string, args ...interface{})
+	publish      func(State)
+	restart      func() error
+	busy         func() bool
 
 	guardDelay   time.Duration
 	confirmAfter time.Duration
@@ -105,22 +107,23 @@ type Updater struct {
 
 func New(opts Options) *Updater {
 	u := &Updater{
-		locked:     opts.Locked,
-		current:    opts.Current,
-		binPath:    opts.BinPath,
-		dataDir:    opts.DataDir,
-		initScript: opts.InitScript,
-		autoHour:   opts.AutoHour,
-		repo:       opts.Repo,
-		apiBase:    opts.APIBase,
-		asset:      currentAsset(),
-		client:     opts.Client,
-		logf:       opts.Log,
-		publish:    opts.Publish,
-		restart:    opts.Restart,
-		busy:       opts.Busy,
-		settings:   Settings{Auto: false},
-		attempted:  map[string]time.Time{},
+		locked:       opts.Locked,
+		current:      opts.Current,
+		binPath:      opts.BinPath,
+		dataDir:      opts.DataDir,
+		initScript:   opts.InitScript,
+		requiredFlag: opts.RequiredFlag,
+		autoHour:     opts.AutoHour,
+		repo:         opts.Repo,
+		apiBase:      opts.APIBase,
+		asset:        currentAsset(),
+		client:       opts.Client,
+		logf:         opts.Log,
+		publish:      opts.Publish,
+		restart:      opts.Restart,
+		busy:         opts.Busy,
+		settings:     Settings{Auto: false},
+		attempted:    map[string]time.Time{},
 
 		guardDelay:   guardDelay,
 		confirmAfter: confirmAfter,
@@ -342,6 +345,12 @@ func (u *Updater) Rollback() error {
 	if previous == "" {
 		u.mu.Unlock()
 		return fmt.Errorf("предыдущей версии нет на диске")
+	}
+	if u.requiredFlag != "" {
+		if err := u.checkRequiredFlag(context.Background(), u.prevPath()); err != nil {
+			u.mu.Unlock()
+			return err
+		}
 	}
 	if err := u.rollbackBinary(); err != nil {
 		u.mu.Unlock()

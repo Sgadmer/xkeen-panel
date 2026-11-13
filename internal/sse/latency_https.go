@@ -15,7 +15,12 @@ type httpsLatencyProbe func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) 
 // HandleStreamHTTPSLatency keeps the familiar finite SSE stream while testing
 // HTTPS through each real outbound, including UDP-based Hysteria2 endpoints.
 func HandleStreamHTTPSLatency(sub *xkeen.SubscriptionManager, detector *xkeen.Detector, stateDir string, concurrency int, timeout time.Duration) http.HandlerFunc {
-	return newHTTPSLatencyHandler(sub, detector.Runtime, stateDir, concurrency, timeout, xkeen.CheckServersHTTPS)
+	return newHTTPSLatencyHandler(sub, detector.Runtime, stateDir, concurrency, timeout, func(rt xkeen.Runtime, servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
+		if rt.Core == xkeen.CoreMihomo {
+			return xkeen.CheckCardServersHTTPS(rt, servers, options)
+		}
+		return xkeen.CheckServersHTTPS(rt, servers, options)
+	})
 }
 
 func newHTTPSLatencyHandler(sub *xkeen.SubscriptionManager, runtime func() xkeen.Runtime, stateDir string, concurrency int, timeout time.Duration, probe httpsLatencyProbe) http.HandlerFunc {

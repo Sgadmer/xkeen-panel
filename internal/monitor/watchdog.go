@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -49,13 +50,17 @@ type Watchdog struct {
 	geoip        *geoip.Matcher
 	blacklist    map[string]time.Time // keyed by RawURI, which survives reindexing
 
-	health       *HealthChecker
-	ticks        int
-	badNodes     map[string]time.Time // pool tags an exit check condemned, by expiry
-	lastRotation time.Time
-	poolStore    *xkeen.PoolStore
-	trigger      chan struct{}
-	probeServers func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
+	health         *HealthChecker
+	ticks          int
+	badNodes       map[string]time.Time // pool tags an exit check condemned, by expiry
+	lastRotation   time.Time
+	poolStore      *xkeen.PoolStore
+	trigger        chan struct{}
+	probeServers   func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
+	mihomoProbe    func(context.Context, string) (string, string, int, error)
+	mihomoRecovery func(context.Context) (string, error)
+	mihomoName     string
+	mihomoProtocol string
 }
 
 func NewWatchdog(cfg *models.Config, sub *xkeen.SubscriptionManager, det *xkeen.Detector) *Watchdog {
@@ -78,6 +83,18 @@ func NewWatchdog(cfg *models.Config, sub *xkeen.SubscriptionManager, det *xkeen.
 // Xray restart — the balancer override lives only in the core's memory.
 func (w *Watchdog) SetPoolStore(store *xkeen.PoolStore) {
 	w.poolStore = store
+}
+
+func (w *Watchdog) SetMihomoProbe(probe func(context.Context, string) (string, string, int, error)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.mihomoProbe = probe
+}
+
+func (w *Watchdog) SetMihomoRecovery(recover func(context.Context) (string, error)) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.mihomoRecovery = recover
 }
 
 // SetEventBus wires the SSE event bus.
@@ -146,6 +163,56 @@ func (w *Watchdog) check() {
 	defer w.changeMu.Unlock()
 	// Mid-restart the core refuses connections, which says nothing about the node
 	if xkeen.IsRestarting() {
+		return
+	}
+	w.mu.RLock()
+	probe := w.mihomoProbe
+	w.mu.RUnlock()
+	if probe != nil && w.detector.Runtime().Core == xkeen.CoreMihomo {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		name, protocol, latency, err := probe(ctx, w.config.CheckURL)
+		cancel()
+		internet := err == nil
+		if err != nil {
+			// Never retry a user-configured VPN health URL over the uplink.
+			conn, directErr := net.DialTimeout("tcp", "1.1.1.1:443", 5*time.Second)
+			internet = directErr == nil
+			if conn != nil {
+				conn.Close()
+			}
+		}
+		w.mu.Lock()
+		w.lastCheck, w.mihomoName, w.mihomoProtocol = time.Now(), name, protocol
+		w.connected, w.lastLatency, w.internet = err == nil, latency, internet
+		w.proxyChecked = name != "" && name != "DIRECT" && name != "REJECT" && name != "PASS"
+		recover := w.mihomoRecovery
+		if err != nil && internet && w.active && recover != nil {
+			w.failCount++
+		} else {
+			w.failCount = 0
+		}
+		tryRecovery := w.failCount > 0 && w.failCount >= w.config.MaxFails
+		if tryRecovery {
+			w.failCount = 0
+		}
+		w.mu.Unlock()
+		if err != nil {
+			w.writeLog("[MIHOMO] Проверка общего маршрута: %v", err)
+		} else {
+			w.writeLog("[OK] Общий маршрут Mihomo работает (%dms)", latency)
+		}
+		w.publishStatus()
+		if tryRecovery {
+			attempt, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			replacement, err := recover(attempt)
+			cancel()
+			if err != nil {
+				w.writeLog("[MIHOMO] Общий маршрут сохранён: %v", err)
+			} else if replacement != "" {
+				w.writeLog("[MIHOMO] Выбран проверенный резерв той же страны: %s", replacement)
+				w.CheckNow()
+			}
+		}
 		return
 	}
 	// A status check while the watchdog is off may restore the owner's stored
@@ -882,7 +949,9 @@ func (w *Watchdog) GetStatus() models.Status {
 	}
 
 	// In pool mode traffic goes through the pinned node, not the subscription's active entry
-	if server := w.currentServer(); server != nil {
+	if w.mihomoProbe != nil && rt.Core == xkeen.CoreMihomo {
+		status.CurrentServer, status.Protocol = w.mihomoName, w.mihomoProtocol
+	} else if server := w.currentServer(); server != nil {
 		status.CurrentServer = server.Name
 		status.Protocol = server.Protocol
 	}

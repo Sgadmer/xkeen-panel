@@ -28,7 +28,7 @@ case "${1:-}" in
         printf '%s\n' "$p" > "$pidfile"
         for i in 1 2 3 4 5 6 7 8 9 10; do
             owned || exit 1
-            if curl --noproxy '*' -fsS --max-time 2 "http://$listen/api/auth/status" 2>/dev/null | grep -q '"cards_panel":true'; then exit 0; fi
+            if curl --noproxy '*' -fsS --max-time 2 "http://$listen/api/auth/status" 2>/dev/null | grep -q '"setup_required"'; then exit 0; fi
             sleep 1
         done
         exit 1 ;;

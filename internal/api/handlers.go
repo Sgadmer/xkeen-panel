@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"xkeen-panel/internal/cardcontroller"
 	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/mihomo"
 	"xkeen-panel/internal/models"
@@ -18,6 +19,7 @@ import (
 )
 
 type Handlers struct {
+	Cards        *cardcontroller.Controller
 	config       *models.Config
 	subscription *xkeen.SubscriptionManager
 	watchdog     *monitor.Watchdog
@@ -250,7 +252,20 @@ func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// In pool mode the active entry is the pinned node, not the server the pool was built from
-	if top := h.detector.Topology(); top.Mode == xkeen.TopologyPool {
+	if h.Cards != nil {
+		state, _ := h.Cards.Default(r.Context())
+		for i := range views {
+			key := xkeen.ServiceTargetID(servers[i])
+			views[i].Active = key != "" && state.Current == key
+		}
+		tags := map[int]string{}
+		for _, node := range state.Nodes {
+			tags[node.ServerID] = node.Tag
+		}
+		for i := range views {
+			views[i].PoolTag = tags[views[i].ID]
+		}
+	} else if top := h.detector.Topology(); top.Mode == xkeen.TopologyPool {
 		pinned := h.pool.Get().PinnedNode
 
 		var tags map[string]string
@@ -300,6 +315,15 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[SELECT] Сервер: %s (%s:%d), RawURI len=%d", server.Name, server.Address, server.Port, len(server.RawURI))
+	if h.Cards != nil {
+		key := xkeen.ServiceTargetID(*server)
+		if key == "" {
+			writeJSON(w, 400, map[string]string{"error": "тип сервера не поддерживается"})
+			return
+		}
+		h.setMihomoDefault(w, r, key)
+		return
+	}
 
 	// A manual pick clears the server from the failover blacklist
 	h.watchdog.ClearBlacklist(server.RawURI)
@@ -434,6 +458,10 @@ func (h *Handlers) syncMihomo(rt xkeen.Runtime) error {
 
 // HandleMihomoSync — POST /api/mihomo/sync
 func (h *Handlers) HandleMihomoSync(w http.ResponseWriter, r *http.Request) {
+	if h.Cards != nil {
+		h.reconcileCards(w, r)
+		return
+	}
 	rt := h.detector.Runtime()
 	if rt.Core != xkeen.CoreMihomo {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -456,11 +484,39 @@ func (h *Handlers) HandleMihomoSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "restarting": true})
 }
 
+func (h *Handlers) setMihomoDefault(w http.ResponseWriter, r *http.Request, key string) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
+	if err := h.Cards.SetDefault(r.Context(), key); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	h.watchdog.CheckNow()
+	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "restarting": false, "pinned": key != "", "pinned_tag": key, "core": xkeen.CoreMihomo})
+}
+
+func (h *Handlers) reconcileCards(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
+	if err := h.Cards.SyncProviders(r.Context(), h.subscription.GetData().URL); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "live": true, "restarting": false})
+}
+
 // HandleCheckServers — POST /api/servers/check
 func (h *Handlers) HandleCheckServers(w http.ResponseWriter, r *http.Request) {
 	servers := h.subscription.GetServers()
 	timeout := time.Duration(h.config.ProbeTimeoutMs) * time.Millisecond
-	checked, err := xkeen.CheckServersHTTPS(h.detector.Runtime(), servers, xkeen.ProbeOptions{Context: r.Context(), Timeout: timeout, Concurrency: h.config.ProbeConcurrency, StateDir: h.config.DataDir})
+	options := xkeen.ProbeOptions{Context: r.Context(), Timeout: timeout, Concurrency: h.config.ProbeConcurrency, StateDir: h.config.DataDir}
+	var checked []models.Server
+	var err error
+	if h.Cards != nil {
+		checked, err = h.Cards.CheckServers(servers, options)
+	} else {
+		checked, err = xkeen.CheckServersHTTPS(h.detector.Runtime(), servers, options)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -572,6 +628,23 @@ func (h *Handlers) HandleSelfTest(w http.ResponseWriter, r *http.Request) {
 
 // HandlePoolStatus — GET /api/pool
 func (h *Handlers) HandlePoolStatus(w http.ResponseWriter, r *http.Request) {
+	if h.Cards != nil {
+		state, err := h.Cards.Default(r.Context())
+		if err != nil {
+			writeJSON(w, 503, map[string]string{"error": err.Error()})
+			return
+		}
+		tags := make([]string, 0, len(state.Nodes))
+		for _, n := range state.Nodes {
+			tags = append(tags, n.Tag)
+		}
+		mode := "single"
+		if state.Auto != "" {
+			mode = "pool"
+		}
+		writeJSON(w, 200, map[string]interface{}{"mode": mode, "balancer_tag": state.Auto, "pool_tags": tags, "nodes": state.Nodes, "pinned_tag": state.Pinned, "pin_manual": state.Pinned != "", "current_tag": state.Current, "api_available": true, "core": xkeen.CoreMihomo})
+		return
+	}
 	rt := h.detector.Runtime()
 	top := h.detector.Topology()
 	state := h.pool.Get()
@@ -609,6 +682,10 @@ func (h *Handlers) HandlePoolStatus(w http.ResponseWriter, r *http.Request) {
 // HandlePoolEnable — POST /api/pool/enable. Builds a pool from the subscription
 // and moves the routing rules onto the balancer.
 func (h *Handlers) HandlePoolEnable(w http.ResponseWriter, r *http.Request) {
+	if h.Cards != nil {
+		h.setMihomoDefault(w, r, "")
+		return
+	}
 	h.watchdog.LockChanges()
 	defer h.watchdog.UnlockChanges()
 	servers := h.subscription.GetServers()
@@ -676,6 +753,10 @@ func (h *Handlers) HandlePoolPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.Cards != nil {
+		h.setMihomoDefault(w, r, req.Tag)
+		return
+	}
 	top := h.detector.Topology()
 	if top.Mode != xkeen.TopologyPool {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "пул не включён"})
@@ -705,6 +786,10 @@ func (h *Handlers) HandlePoolPin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) HandlePoolAuto(w http.ResponseWriter, r *http.Request) {
+	if h.Cards != nil {
+		h.setMihomoDefault(w, r, "")
+		return
+	}
 	tag, err := h.watchdog.PinBest()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -718,6 +803,15 @@ func (h *Handlers) HandlePoolAuto(w http.ResponseWriter, r *http.Request) {
 // HandlePoolDisable — POST /api/pool/disable. Returns the config to a single
 // outbound carrying the active server.
 func (h *Handlers) HandlePoolDisable(w http.ResponseWriter, r *http.Request) {
+	if h.Cards != nil {
+		state, err := h.Cards.Default(r.Context())
+		if err != nil || state.Current == "" {
+			writeJSON(w, 409, map[string]string{"error": "текущий узел отсутствует в подписке"})
+			return
+		}
+		h.setMihomoDefault(w, r, state.Current)
+		return
+	}
 	h.watchdog.LockChanges()
 	defer h.watchdog.UnlockChanges()
 	server := h.subscription.GetActiveServer()
@@ -748,6 +842,10 @@ func (h *Handlers) HandlePoolDisable(w http.ResponseWriter, r *http.Request) {
 
 // HandlePoolSync — POST /api/pool/sync. Brings pool membership in line with the subscription.
 func (h *Handlers) HandlePoolSync(w http.ResponseWriter, r *http.Request) {
+	if h.Cards != nil {
+		h.reconcileCards(w, r)
+		return
+	}
 	h.watchdog.LockChanges()
 	defer h.watchdog.UnlockChanges()
 	rt := h.detector.Runtime()

@@ -104,14 +104,31 @@ func TestMihomoRejectsUnsupportedUDPBeforeDirect(t *testing.T) {
 		defer relay.Close()
 		dgram := []byte{0, 0, 0, 1, 127, 0, 0, 1, 0, 0, 42}
 		binary.BigEndian.PutUint16(dgram[8:10], uint16(dst.LocalAddr().(*net.UDPAddr).Port))
-		if _, err = relay.Write(dgram); err != nil {
-			t.Fatal(err)
-		}
-		dst.SetReadDeadline(time.Now().Add(time.Second))
-		var byteBuf [8]byte
-		n, _, readErr := dst.ReadFromUDP(byteBuf[:])
-		if dst == control && (readErr != nil || n != 1 || byteBuf[0] != 42) {
-			t.Fatal("DIRECT control packet failed", readErr)
+		// Mihomo can accept the SOCKS handshake before its UDP rule engine is
+		// running. Use the DIRECT control as the readiness probe.
+		until = time.Now().Add(5 * time.Second)
+		var readErr error
+		for {
+			if _, err = relay.Write(dgram); err != nil {
+				t.Fatal(err)
+			}
+			window := time.Second
+			if dst == control {
+				window = 200 * time.Millisecond
+			}
+			dst.SetReadDeadline(time.Now().Add(window))
+			var byteBuf [8]byte
+			var n int
+			n, _, readErr = dst.ReadFromUDP(byteBuf[:])
+			if dst != control || readErr == nil {
+				if dst == control && (n != 1 || byteBuf[0] != 42) {
+					t.Fatal("invalid DIRECT control packet")
+				}
+				break
+			}
+			if timeout, ok := readErr.(net.Error); !ok || !timeout.Timeout() || time.Now().After(until) {
+				t.Fatal("DIRECT control packet failed", readErr)
+			}
 		}
 		if dst == blocked {
 			if e, ok := readErr.(net.Error); !ok || !e.Timeout() {

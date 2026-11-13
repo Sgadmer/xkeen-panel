@@ -125,7 +125,25 @@ func (u *Updater) smokeTest(ctx context.Context, path, tag string) error {
 	if got := strings.TrimSpace(string(out)); got != tag {
 		return fmt.Errorf("новый бинарь сообщает версию %q, ожидалась %s", got, tag)
 	}
-	return nil
+	return u.checkRequiredFlag(ctx, path)
+}
+
+func (u *Updater) checkRequiredFlag(ctx context.Context, path string) error {
+	if u.requiredFlag == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "-help").CombinedOutput()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 0 && fields[0] == u.requiredFlag {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("эта сборка не поддерживает параметр запуска %s", u.requiredFlag)
 }
 
 // Runs detached: the process starting it is about to be replaced and may never come back.

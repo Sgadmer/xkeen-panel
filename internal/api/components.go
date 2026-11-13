@@ -53,7 +53,7 @@ func NewComponentsHandler(h *Handlers) *ComponentsHandler {
 		Log:      h.watchdog.Log,
 	})
 	handler := &ComponentsHandler{manager: manager}
-	if runtime.GOOS == "linux" && h.detector.Root == "" {
+	if runtime.GOOS == "linux" && h.detector.Root == "" && h.Cards == nil {
 		go manager.Start(context.Background())
 	}
 	return handler

@@ -66,7 +66,7 @@ func TestLiveCardExclusions(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	r := chi.NewRouter()
-	c.MountExclusions(r, dir)
+	r.Route("/api", func(r chi.Router) { c.MountExclusions(r, dir) })
 	ask := func(method, path, body string) (int, xkeen.Exclusions) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))

@@ -228,11 +228,11 @@ func (c *Controller) MountExclusions(r chi.Router, dir string) {
 		}
 		_ = json.NewEncoder(w).Encode(entries)
 	}
-	r.Get("/api/exclusions", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/exclusions", func(w http.ResponseWriter, r *http.Request) {
 		v, e := c.updateExclusions(r.Context(), dir, nil)
 		send(w, v, e)
 	})
-	r.Post("/api/exclusions", func(w http.ResponseWriter, r *http.Request) {
+	r.Post("/exclusions", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Value   string `json:"value"`
 			Comment string `json:"comment"`
@@ -262,7 +262,7 @@ func (c *Controller) MountExclusions(r chi.Router, dir string) {
 		})
 		send(w, v, e)
 	})
-	r.Delete("/api/exclusions/{id}", func(w http.ResponseWriter, r *http.Request) {
+	r.Delete("/exclusions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		v, e := c.updateExclusions(r.Context(), dir, func(s *xkeen.Exclusions) error {
 			for i, entry := range s.Entries {

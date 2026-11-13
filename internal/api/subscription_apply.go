@@ -77,6 +77,13 @@ func (h *Handlers) verifyAndApplySource(ctx context.Context, servers []models.Se
 		}
 	}
 	response = map[string]interface{}{"server_count": len(servers), "servers": publicServers(servers), "import_report": h.subscription.GetImportReport()}
+	if h.Cards != nil {
+		if err = h.Cards.Reconcile(ctx); err != nil {
+			return nil, err
+		}
+		h.watchdog.CheckNow()
+		return response, nil
+	}
 	if err = h.applySubscription(servers, response, transaction); err != nil {
 		return nil, err
 	}

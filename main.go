@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 	"xkeen-panel/internal/api"
 	"xkeen-panel/internal/auth"
+	"xkeen-panel/internal/cardcontroller"
 	"xkeen-panel/internal/demo"
 	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/localtz"
@@ -52,12 +54,6 @@ func main() {
 		log.Print("Демонстрационные данные: http://127.0.0.1:3300; роутер не используется")
 		log.Fatal(http.ListenAndServe("127.0.0.1:3300", demo.Handler(frontend)))
 	}
-	if *cardsListen != "" {
-		if err := runCardsPanel(*configPath, *cardsListen); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
 
 	if rule, ok := localtz.Apply("/etc/localtime"); ok {
 		log.Printf("Часовой пояс взят из /etc/localtime: %s", rule)
@@ -88,16 +84,47 @@ func main() {
 		log.Fatalf("Ошибка загрузки пользователя: %v", err)
 	}
 
+	if *cardsListen != "" && userManager.SetupRequired() {
+		log.Fatal("Для запуска панели с -cards-listen требуется сохранённая учётная запись")
+	}
+
 	// Subscription manager
 	subManager := xkeen.NewSubscriptionManager(cfg.DataDir)
 	if err := subManager.Load(); err != nil {
+		if *cardsListen != "" {
+			log.Fatal("Сохранённая подписка не загружена")
+		}
 		log.Printf("Предупреждение: ошибка загрузки подписки: %v", err)
+	}
+
+	if *cardsListen != "" && len(subManager.GetServers()) == 0 {
+		log.Fatal("Сохранённая подписка панели пуста")
 	}
 
 	// Detect the XKeen layout: generation (S05xkeen/S24xray), core, mode, version
 	detector := xkeen.NewDetector("", cfg.XKeenPath, cfg.InitScript,
 		cfg.XrayConfigDir, cfg.RoutingFile, cfg.MihomoConfig, cfg.XkeenJSON)
 	rt := detector.Runtime()
+	listenAddr := fmt.Sprintf(":%d", cfg.Port)
+	healthAddr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+	initScript := panelInitScript
+	var cardsHost, requiredFlag string
+	var cards *cardcontroller.Controller
+	if *cardsListen != "" {
+		cardsHost, err = cardsBindHost(*cardsListen)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if rt.Core != xkeen.CoreMihomo {
+			log.Fatal("Для запуска с -cards-listen требуется действующее ядро Mihomo")
+		}
+		cards, err = newCardsController(cfg.DataDir, rt.MihomoConf, subManager)
+		if err != nil {
+			log.Fatal(err)
+		}
+		listenAddr, healthAddr = *cardsListen, *cardsListen
+		initScript, requiredFlag = "/opt/etc/init.d/S98xkeen-service-cards", "-cards-listen"
+	}
 	if !rt.Installed {
 		log.Printf("XKeen не найден (%s) — управление ядром недоступно", rt.InitScript)
 	} else {
@@ -116,6 +143,10 @@ func main() {
 	eventBus := sse.NewEventBus()
 	watchdog.SetEventBus(eventBus)
 	watchdog.SetPoolStore(poolStore)
+	if cards != nil {
+		watchdog.SetMihomoProbe(cards.ProbeDefault)
+		watchdog.SetMihomoRecovery(cards.RecoverDefault)
+	}
 
 	siteStore := xkeen.NewSiteStore(cfg.DataDir)
 	if err := siteStore.Load(); err != nil {
@@ -132,34 +163,42 @@ func main() {
 	xkeen.Log = watchdog.Log
 	// Every dispatcher entry point, including the watchdog, must verify the
 	// independent network policy before a stop, start or restart can run.
-	xkeen.BeforeServiceControl = func() error {
+	xkeen.BeforeServiceControl = func(verb string) error {
+		if cards != nil {
+			if verb == "-start" {
+				return nil
+			}
+			return cards.CheckCoreInterruption()
+		}
 		runtime := detector.Runtime()
 		if xkeen.ServiceRoutesArmed(runtime) && !xkeen.ServiceGuardReady(runtime) {
 			return fmt.Errorf("защита выбранных сервисов не подтверждена")
 		}
 		return nil
 	}
-	if err := api.NewHandlers(cfg, subManager, watchdog, detector, poolStore, nil).InitializeServiceRoutes(); err != nil {
-		log.Printf("Восстановление маршрутов сервисов не подтверждено: %v", err)
-	}
+	if rt.Core == xkeen.CoreXray {
+		if err := api.NewHandlers(cfg, subManager, watchdog, detector, poolStore, nil).InitializeServiceRoutes(); err != nil {
+			log.Printf("Восстановление маршрутов сервисов не подтверждено: %v", err)
+		}
 
-	// Both migrations need a core restart; doing them together keeps it to one
-	restartCore := false
-	if migrated, err := xkeen.EnsureAPIConfig(poolStore.Get(), cfg.XrayAPIAddr); err != nil {
-		log.Printf("Не удалось обновить api-блок Xray: %v", err)
-	} else if migrated {
-		log.Printf("api-блок Xray приведён к текущей форме")
-		restartCore = true
-	}
-	if changed, err := watchdog.EnsureProbe(); err != nil {
-		log.Printf("Не удалось добавить проверочный вход в Xray — статус будет проверяться мимо прокси: %v", err)
-	} else if changed {
-		log.Printf("В Xray добавлен проверочный вход %s", cfg.ProbeAddr)
-		restartCore = true
-	}
-	if restartCore && rt.Installed {
-		log.Printf("Конфиг Xray изменён при запуске — перезапускаю ядро")
-		xkeen.Restart(rt.Dispatcher)
+		// Both migrations need a core restart; doing them together keeps it to one
+		restartCore := false
+		if migrated, err := xkeen.EnsureAPIConfig(poolStore.Get(), cfg.XrayAPIAddr); err != nil {
+			log.Printf("Не удалось обновить api-блок Xray: %v", err)
+		} else if migrated {
+			log.Printf("api-блок Xray приведён к текущей форме")
+			restartCore = true
+		}
+		if changed, err := watchdog.EnsureProbe(); err != nil {
+			log.Printf("Не удалось добавить проверочный вход в Xray — статус будет проверяться мимо прокси: %v", err)
+		} else if changed {
+			log.Printf("В Xray добавлен проверочный вход %s", cfg.ProbeAddr)
+			restartCore = true
+		}
+		if restartCore && rt.Installed {
+			log.Printf("Конфиг Xray изменён при запуске — перезапускаю ядро")
+			xkeen.Restart(rt.Dispatcher)
+		}
 	}
 
 	// GeoIP reuses the geoip.dat already installed for Xray
@@ -211,29 +250,38 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Run the watchdog
-	watchdogDone := make(chan struct{})
+	// A reload may need to restore a working configuration after cancellation.
+	// Wait for all configuration-writing workers before replacing the panel.
+	var workers sync.WaitGroup
+	workers.Add(3)
+	go func() { defer workers.Done(); watchdog.Start(ctx) }()
+	go func() { defer workers.Done(); sites.Run(ctx) }()
 	go func() {
-		watchdog.Start(ctx)
-		close(watchdogDone)
+		defer workers.Done()
+		runSubscriptionRefresh(ctx, cfg, subManager, watchdog, detector, poolStore, geoMatcher, eventBus, refreshReset, cards)
 	}()
-
-	go sites.Run(ctx)
-
-	// Periodic subscription refresh
-	go runSubscriptionRefresh(ctx, cfg, subManager, watchdog, detector, poolStore, geoMatcher, eventBus, refreshReset)
+	if cards != nil {
+		workers.Add(1)
+		go func() { defer workers.Done(); maintainCardRoutes(ctx, cards, watchdog) }()
+	}
+	workersDone := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(workersDone)
+	}()
 
 	// The process is replaced only after the HTTP server and the watchdog have stopped
 	reexec := make(chan struct{}, 1)
 	upd := updater.New(updater.Options{
-		Locked:     false,
-		Repo:       updater.DefaultRepo,
-		Current:    version.Version,
-		BinPath:    binPath,
-		DataDir:    cfg.DataDir,
-		InitScript: panelInitScript,
-		AutoHour:   cfg.AutoUpdateHour,
-		Log:        watchdog.Log,
+		Locked:       false,
+		Repo:         updater.DefaultRepo,
+		Current:      version.Version,
+		BinPath:      binPath,
+		DataDir:      cfg.DataDir,
+		InitScript:   initScript,
+		RequiredFlag: requiredFlag,
+		AutoHour:     cfg.AutoUpdateHour,
+		Log:          watchdog.Log,
 		Publish: func(state updater.State) {
 			eventBus.Publish(sse.Event{Type: "update", Data: state})
 		},
@@ -246,7 +294,7 @@ func main() {
 		},
 		Busy: xkeen.IsRestarting,
 	})
-	upd.Startup(ctx, func() bool { return panelResponds(cfg.Port) })
+	upd.Startup(ctx, func() bool { return panelResponds(healthAddr) })
 	go upd.Run(ctx)
 
 	// Frontend assets
@@ -260,9 +308,12 @@ func main() {
 
 	// HTTP server
 	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, geoMatcher, eventBus, upd, panelSettings, frontendFS)
+	srv.Cards, srv.CardsHost = cards, cardsHost
 	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: srv.Handler(),
+		Addr:              listenAddr,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		Handler:           srv.Handler(),
 		// SSE streams never go idle, so Shutdown would wait out its timeout unless cancelling ctx ends them
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
@@ -292,15 +343,15 @@ func main() {
 
 		// A watchdog cut off mid-check could leave a core config half-applied
 		select {
-		case <-watchdogDone:
+		case <-workersDone:
 		case <-time.After(60 * time.Second):
-			log.Println("Watchdog не остановился за минуту — продолжаю")
+			log.Println("Фоновые задачи не остановились за минуту — продолжаю")
 		}
 
 		stopped <- restart
 	}()
 
-	log.Printf("XKeen Panel %s запущена на порту %d (xkeen=%s, outbounds=%s)", version.Version, cfg.Port, cfg.XKeenPath, cfg.OutboundsFile)
+	log.Printf("XKeen Panel %s запущена на %s (xkeen=%s, outbounds=%s)", version.Version, listenAddr, cfg.XKeenPath, cfg.OutboundsFile)
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Ошибка сервера: %v", err)
 	}
@@ -314,9 +365,9 @@ func main() {
 	log.Println("Сервер остановлен")
 }
 
-func panelResponds(port int) bool {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/auth/status", port))
+func panelResponds(address string) bool {
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + address + "/api/auth/status")
 	if err != nil {
 		return false
 	}
@@ -327,8 +378,9 @@ func panelResponds(port int) bool {
 // runSubscriptionRefresh refreshes the subscription on a timer. The core is
 // restarted only when the active server was actually replaced (it vanished from
 // the subscription) — a refresh must not drop a working connection.
-func runSubscriptionRefresh(ctx context.Context, cfg *models.Config, sm *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, matcher *geoip.Matcher, bus *sse.EventBus, reset <-chan struct{}) {
+func runSubscriptionRefresh(ctx context.Context, cfg *models.Config, sm *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, matcher *geoip.Matcher, bus *sse.EventBus, reset <-chan struct{}, cards *cardcontroller.Controller) {
 	handler := api.NewHandlers(cfg, sm, wd, det, pool, matcher)
+	handler.Cards = cards
 	for {
 		var tick <-chan time.Time
 		if interval := cfg.RefreshInterval(); interval > 0 {

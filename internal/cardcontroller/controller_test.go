@@ -64,6 +64,9 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 	if err = p.api.request(ctx, "PUT", "/proxies/AI", map[string]string{"name": "DIRECT"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err = c.CheckCoreInterruption(); err != nil {
+		t.Fatal("unmanaged profile should allow ordinary core control", err)
+	}
 	id := xkeen.ServiceTargetID(item)
 	view, err := c.Set(ctx, "claude", id)
 	if err != nil {
@@ -71,6 +74,9 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 	}
 	if !view.Active || view.GuardReady || view.Services[0].Target != id || view.Services[0].Blocked {
 		t.Fatalf("unexpected view active=%t blocked=%t", view.Active, view.Services[0].Blocked)
+	}
+	if c.CheckCoreInterruption() == nil {
+		t.Fatal("managed Claude route allowed the dispatcher to remove interception")
 	}
 	check := func() {
 		live, e := p.api.selectors(ctx)
@@ -229,4 +235,33 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 		t.Fatal("missing endpoint was not blocked")
 	}
 	check()
+	// Changing the default must preserve Claude's assignment and original
+	// exceptions, also when the pinned node disappears on a refresh.
+	servers = []models.Server{item}
+	if err = c.SetDefault(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	state, err := c.Default(ctx)
+	if err != nil || state.Current != id || state.Pinned != id {
+		t.Fatal("default is not pinned", err)
+	}
+	saved, err = c.read()
+	if err != nil || saved.assigned["claude"] != id {
+		t.Fatal("Claude assignment changed")
+	}
+	rules := list(saved.doc["rules"])
+	if len(rules) < 3 || str(rules[len(rules)-3]) != "MATCH,XKP-card-default" || str(rules[len(rules)-2]) != "MATCH,XKP-card-reject" || str(rules[len(rules)-1]) != "MATCH,DIRECT" {
+		t.Fatal("default is not guarded")
+	}
+	if _, err = c.Set(ctx, defaultID, directTarget); err == nil {
+		t.Fatal("default exposed as regular service")
+	}
+	servers = nil
+	if err = c.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err = c.Default(ctx)
+	if err != nil || state.Name != "REJECT" || state.Pinned != id {
+		t.Fatal("lost default did not fail closed")
+	}
 }

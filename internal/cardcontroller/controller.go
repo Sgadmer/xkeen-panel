@@ -166,7 +166,7 @@ func (c *Controller) read() (profile, error) {
 		}
 		for id, v := range m {
 			val, ok := v.(string)
-			if !ok || !validAssignment(id, val) || groupNames[id] == "" {
+			if !ok || !validAssignment(id, val) || groupNames[id] == "" && !(id == defaultID && validHash(val)) {
 				return p, errors.New("повреждено назначение карточки")
 			}
 			p.assigned[id] = val
@@ -241,6 +241,22 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		}
 	}
 	return result, nil
+}
+
+// A dispatcher stop (including the stop phase of restart) removes the
+// transparent interception rules. The managed profile always protects Claude,
+// including when it has no selected endpoint and resolves to REJECT.
+func (c *Controller) CheckCoreInterruption() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return err
+	}
+	if _, managed := p.doc[stateKey]; managed {
+		return errors.New("остановка или перезапуск XKeen снимет перехват защищённых сервисов. Назначения серверов применяются без остановки ядра")
+	}
+	return nil
 }
 
 func (c *Controller) Set(ctx context.Context, id, target string) (View, error) {
@@ -363,6 +379,15 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 			} else {
 				delete(c.pending, service.ID)
 			}
+		}
+	}
+	want := expected[cardPrefix+defaultID]
+	before := selections[cardPrefix+defaultID].Now
+	if c.pending[defaultID] || before != want || id == defaultID {
+		if c.drain(ctx, p.api, defaultID, want, nil) {
+			delete(c.pending, defaultID)
+		} else {
+			c.pending[defaultID] = true
 		}
 	}
 	result.ActiveConnectionsPending = len(c.pending) > 0

@@ -564,6 +564,9 @@ func (m *Manager) apply(plan Plan, id string) {
 }
 
 func (m *Manager) Rollback(id string) (Job, error) {
+	if reason := m.support(); reason != "" {
+		return Job{}, fmt.Errorf("%s", reason)
+	}
 	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
 		return Job{}, fmt.Errorf("неверная резервная копия")
 	}

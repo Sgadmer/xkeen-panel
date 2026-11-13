@@ -124,3 +124,11 @@ func PruneCardProxies(rt Runtime, keep map[string]bool) error {
 	}
 	return PruneServiceProfiles(worker, keep)
 }
+
+func CheckCardServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions) ([]models.Server, error) {
+	worker, err := cardWorkerRuntime(rt)
+	if err != nil {
+		return nil, err
+	}
+	return CheckServersHTTPS(worker, servers, options)
+}

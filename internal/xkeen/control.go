@@ -17,7 +17,7 @@ var (
 	restartMu            sync.Mutex
 	restarting           bool
 	OnRestartStateChange func(restarting bool)
-	BeforeServiceControl func() error
+	BeforeServiceControl func(verb string) error
 
 	runningMu        sync.Mutex
 	runningCached    bool
@@ -45,7 +45,7 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 	}
 	controlled := len(args) > 0 && (args[0] == "-restart" || args[0] == "-stop" || args[0] == "-start")
 	if controlled && BeforeServiceControl != nil {
-		if err := BeforeServiceControl(); err != nil {
+		if err := BeforeServiceControl(args[0]); err != nil {
 			return "", err
 		}
 	}
@@ -76,7 +76,7 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 	}
 
 	if runErr == nil && controlled && BeforeServiceControl != nil {
-		runErr = BeforeServiceControl()
+		runErr = BeforeServiceControl(args[0])
 	}
 	return text, runErr
 }

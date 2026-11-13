@@ -76,6 +76,21 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]xkee
 		return nil, err
 	}
 	used := map[string]bool{}
+	adapter := func(key string) string {
+		if key == directTarget {
+			return "DIRECT"
+		}
+		peer, ok := peers[key]
+		if !ok {
+			return "REJECT"
+		}
+		name := nodePrefix + key
+		if !used[key] {
+			nodes = append(nodes, map[string]interface{}{"name": name, "type": "vless", "server": "127.0.0.1", "port": peer.Port, "uuid": peer.UUID, "network": "tcp", "tls": true, "servername": peer.ServerName, "fingerprint": peer.Fingerprint, "udp": true})
+			used[key] = true
+		}
+		return name
+	}
 	expected := map[string]string{}
 	rejectGroup := cardPrefix + "reject"
 	groups = append(groups, map[string]interface{}{"name": rejectGroup, "type": "select", "proxies": []string{"REJECT"}})
@@ -131,16 +146,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]xkee
 			continue
 		}
 		name := cardPrefix + id
-		route := "REJECT"
-		if key == directTarget {
-			route = "DIRECT"
-		} else if peer, ok := peers[key]; ok {
-			route = nodePrefix + key
-			if !used[key] {
-				nodes = append(nodes, map[string]interface{}{"name": route, "type": "vless", "server": "127.0.0.1", "port": peer.Port, "uuid": peer.UUID, "network": "tcp", "tls": true, "servername": peer.ServerName, "fingerprint": peer.Fingerprint, "udp": true})
-				used[key] = true
-			}
-		}
+		route := adapter(key)
 		if protectChild {
 			name += "-inherited"
 			route = groupNames[id]
@@ -218,7 +224,29 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]xkee
 	rules = append(rules, priority[:claudeRuleCount]...)
 	rules = append(rules, original[:head]...)
 	rules = append(rules, priority[claudeRuleCount:]...)
-	rules = append(rules, original[head:]...)
+	if key := p.assigned[defaultID]; key != "" {
+		name := cardPrefix + defaultID
+		route := adapter(key)
+		groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{route}})
+		expected[name] = route
+		found := false
+		for _, r := range original[head:] {
+			parts, end := targetPart(r)
+			if parts[0] == "MATCH" {
+				parts[end] = name
+				rules = append(rules, strings.Join(parts, ","))
+				parts[end] = rejectGroup
+				rules = append(rules, strings.Join(parts, ","))
+				found = true
+			}
+			rules = append(rules, r)
+		}
+		if !found {
+			return nil, errors.New("в профиле отсутствует правило MATCH для общего маршрута")
+		}
+	} else {
+		rules = append(rules, original[head:]...)
+	}
 	p.doc[stateKey] = p.assigned
 	p.doc["proxies"], p.doc["proxy-groups"], p.doc["rules"] = nodes, groups, rules
 	return expected, nil
@@ -229,6 +257,7 @@ func (c *Controller) drain(ctx context.Context, a coreAPI, id, want string, serv
 		Connections []struct {
 			ID       string
 			Chains   []string
+			Rule     string
 			Metadata struct {
 				Host          string
 				SniffHost     string
@@ -249,8 +278,11 @@ func (c *Controller) drain(ctx context.Context, a coreAPI, id, want string, serv
 	}
 	for _, flow := range snapshot.Connections {
 		relevant, current := false, false
+		if id == defaultID && strings.EqualFold(flow.Rule, "Match") {
+			relevant = true
+		}
 		for _, chain := range flow.Chains {
-			if chain == cardPrefix+id || chain == groupNames[id] || chain == dedicatedGroup(id) {
+			if chain == cardPrefix+id || chain != "" && chain == groupNames[id] || chain == dedicatedGroup(id) {
 				relevant = true
 			}
 			if chain == want {

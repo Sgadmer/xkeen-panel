@@ -33,6 +33,16 @@ type subscriptionApplySnapshot struct {
 func (h *Handlers) withSubscriptionTransaction(apply func(*subscriptionApplySnapshot) (map[string]interface{}, error)) (map[string]interface{}, error) {
 	h.watchdog.LockChanges()
 	defer h.watchdog.UnlockChanges()
+	if h.Cards != nil {
+		snapshot := &subscriptionApplySnapshot{runtime: h.detector.Runtime(), data: h.subscription.GetData()}
+		response, err := apply(snapshot)
+		if err != nil && !reflect.DeepEqual(h.subscription.GetData(), snapshot.data) {
+			if restoreErr := h.subscription.RestoreData(snapshot.data); restoreErr != nil {
+				return nil, fmt.Errorf("%w; восстановление подписки не подтверждено", err)
+			}
+		}
+		return response, err
+	}
 	transaction, err := h.snapshotSubscriptionApply()
 	if err != nil {
 		return nil, err

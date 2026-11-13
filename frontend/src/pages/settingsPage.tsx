@@ -11,6 +11,7 @@ import {
     IconDownload,
     IconFingerprint,
     IconWand,
+    IconLayoutGrid,
 } from '@tabler/icons-react'
 import { Group, IconTile, PageTitle, Row, Switch } from '@/components/ios'
 import {
@@ -90,7 +91,9 @@ export function SettingsPage() {
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <Group
                     title='Автоматика'
-                    footer='Панель проверяет связь через VPN каждые 2 минуты. Если сервер перестал работать, она переключится на другой — при ручном выборе на сервер той же страны.'
+                    footer={status?.core === 'mihomo'
+                        ? 'Автовыбором управляет Mihomo. Если включить замену, панель сможет заменить недоступный общий сервер проверенным сервером той же страны. Карточки сервисов и сборные профили сохраняют выбранный маршрут.'
+                        : 'Панель проверяет связь через VPN каждые 2 минуты. Если сервер перестал работать, она переключится на другой — при ручном выборе на сервер той же страны.'}
                 >
                     <Row
                         icon={icon('#30d158', IconArrowsExchange)}
@@ -148,6 +151,7 @@ export function SettingsPage() {
 
                 <Group title='XKeen'>
                     <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint='Выбранные сервисы или весь трафик' to='/settings/routing' />
+                    <Row icon={icon('#5856d6', IconLayoutGrid)} label='Маршруты сервисов' hint='Сервер или профиль подписки для каждого сервиса' to='/services' />
                     <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint='Версии XKeen/Xray, обновления и геоданные' to='/settings/components' />
                     <Row
                         icon={icon('#30d158', IconArrowsExchange)}

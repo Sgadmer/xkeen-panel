@@ -10,7 +10,6 @@ import {
 } from '@tabler/icons-react'
 import { PageTitle } from '@/components/ios'
 import { api } from '@/lib/api'
-import { Link } from 'react-router-dom'
 
 interface Service {
     id: string
@@ -121,7 +120,7 @@ export function ServiceRoutesPage() {
 
     return (
         <>
-            <PageTitle title='Сервисы' subtitle='Выберите для сервиса отдельный сервер или сборный профиль из подписки.' />
+            <PageTitle title='Маршруты сервисов' back={{ to: '/settings', label: 'Настройки' }} subtitle='Выберите для сервиса отдельный сервер или сборный профиль из подписки.' />
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
             {view && (
@@ -191,46 +190,6 @@ export function ServiceRoutesPage() {
                     <p role='status' className='text-sm text-muted-foreground'>{notice}</p>
                 </>
             )}
-        </>
-    )
-}
-
-export function CardSubscriptionPage() {
-    const qc = useQueryClient()
-    const routes = useQuery({
-        queryKey: ['service-routes'], queryFn: () => api.get<ServiceRoutes>('/api/service-routes'),
-    })
-    const [notice,setNotice] = useState('')
-    const refresh = useMutation({
-        mutationFn: () => api.post<{count:number}>('/api/subscription/refresh'),
-        onSuccess: async result => {
-            await qc.invalidateQueries({queryKey:['service-routes']})
-            setNotice('Подписка обновлена. Доступно целей: ' + result.count)
-        },
-    })
-    const error = refresh.error ?? routes.error
-    return (
-        <>
-            <PageTitle title='Серверы подписки' action={
-                <button type='button' disabled={refresh.isPending} className='min-h-11 rounded-xl bg-card px-4 text-sm font-semibold text-tint disabled:opacity-50' onClick={() => refresh.mutate()}>
-                    {refresh.isPending ? 'Обновляем…' : 'Обновить подписку'}
-                </button>
-            } />
-            <Link to='/services' className='w-fit text-sm text-tint'>Перейти к выбору маршрутов по сервисам</Link>
-            {error && <p role='alert' className='text-destructive'>{error.message}</p>}
-            {notice && <p role='status'>{notice}</p>}
-            {routes.isPending && <p role='status'>Загружаем подписку…</p>}
-            {routes.data && (['profile','server'] as const).map(kind => {
-                const targets = routes.data.targets.filter(t => t.kind === kind)
-                return <section key={kind}>
-                    <h2 className='mb-2 px-2 text-sm font-semibold text-muted-foreground'>{kind === 'profile' ? 'Сборные профили' : 'Серверы'} · {targets.length}</h2>
-                    <ul className='divide-y divide-white/10 rounded-card bg-card px-4'>{targets.map(target =>
-                        <li className='flex flex-wrap items-center justify-between gap-2 py-3' key={target.id}>
-                            <span>{target.name}</span>
-                            <span className='text-sm text-muted-foreground'>{routes.data.services.filter(s => s.target === target.id).map(s => s.name).join(' · ')}</span>
-                        </li>)}</ul>
-                </section>
-            })}
         </>
     )
 }
