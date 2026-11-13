@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,6 +29,8 @@ type subscriptionApplySnapshot struct {
 	pool           xkeen.PoolState
 	probeAddr      string
 	runtimeTouched bool
+	sourceScoped   bool
+	restoreNative  func(context.Context) error
 }
 
 func (h *Handlers) withSubscriptionTransaction(apply func(*subscriptionApplySnapshot) (map[string]interface{}, error)) (map[string]interface{}, error) {
@@ -36,9 +39,21 @@ func (h *Handlers) withSubscriptionTransaction(apply func(*subscriptionApplySnap
 	if h.Cards != nil {
 		snapshot := &subscriptionApplySnapshot{runtime: h.detector.Runtime(), data: h.subscription.GetData()}
 		response, err := apply(snapshot)
-		if err != nil && !reflect.DeepEqual(h.subscription.GetData(), snapshot.data) {
-			if restoreErr := h.subscription.RestoreData(snapshot.data); restoreErr != nil {
-				return nil, fmt.Errorf("%w; восстановление подписки не подтверждено", err)
+		if err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			var recovery []error
+			if !reflect.DeepEqual(h.subscription.GetData(), snapshot.data) {
+				recovery = append(recovery, h.subscription.RestoreData(snapshot.data))
+			}
+			if snapshot.restoreNative != nil {
+				recovery = append(recovery, snapshot.restoreNative(ctx))
+			}
+			if snapshot.runtimeTouched {
+				recovery = append(recovery, h.Cards.Reconcile(ctx))
+			}
+			if errors.Join(recovery...) != nil {
+				return nil, fmt.Errorf("%w; восстановление подписки и маршрутов Mihomo не подтверждено", err)
 			}
 		}
 		return response, err
@@ -200,6 +215,9 @@ func (snapshot *subscriptionApplySnapshot) manualPreference(fresh []models.Serve
 	}
 	var matching *models.Server
 	for _, candidate := range fresh {
+		if snapshot.sourceScoped && previous.SourceID != "" && candidate.SourceID != previous.SourceID {
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(candidate.Name), strings.TrimSpace(previous.Name)) ||
 			!strings.EqualFold(xkeen.ServerCountry(candidate), xkeen.ServerCountry(previous)) ||
 			!strings.EqualFold(candidate.Protocol, previous.Protocol) {

@@ -12,13 +12,7 @@ import (
 )
 
 // ImportReport describes skipped profiles without including credentials or URLs.
-type ImportReport struct {
-	Imported           int      `json:"imported"`
-	ImportedProfiles   int      `json:"imported_profiles,omitempty"`
-	SkippedComposite   int      `json:"skipped_composite"`
-	SkippedUnsupported int      `json:"skipped_unsupported"`
-	Warnings           []string `json:"warnings,omitempty"`
-}
+type ImportReport = models.ImportReport
 
 const maxSubscriptionBody = 16 << 20
 

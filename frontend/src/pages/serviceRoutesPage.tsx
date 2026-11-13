@@ -11,6 +11,7 @@ import {
 import { PageTitle } from '@/components/ios'
 import { usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
+import { withCountryFlag } from '@/lib/format'
 
 interface InheritedRoute {
     group: string
@@ -37,7 +38,7 @@ interface ServiceRoutes {
     controller_ready?: boolean
     scope?: string
     services: Service[]
-    targets: { id: string; name: string; kind: 'server' | 'profile'; country?: string }[]
+    targets: { id: string; name: string; kind: 'server' | 'profile' | 'pool'; country?: string; sources?: string[] }[]
 }
 
 const icons: Record<string, Icon> = {
@@ -163,10 +164,12 @@ export function ServiceRoutesPage() {
     })
     const view = query.data
     const error = change.error ?? query.error
+    const showSources = new Set(view?.targets.flatMap(t => t.sources ?? [])).size > 1
+    const groups = { server: 'Серверы', profile: 'Сборные профили', pool: 'Мультипулы' }
 
     return (
         <>
-            <PageTitle title='Маршруты сервисов' subtitle='Выберите для сервиса отдельный сервер или сборный профиль из подписки.' />
+            <PageTitle title='Маршруты сервисов' subtitle='Выберите для каждого сервиса сервер, профиль подписки или свой мультипул.' />
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
             {view && (
@@ -213,11 +216,11 @@ export function ServiceRoutesPage() {
                                         <option value='' disabled={isClaude}>{isClaude ? 'Выберите VPN' : (view.scope === 'mihomo' ? 'По правилам сервиса в Mihomo' : 'По правилам Xray')}</option>
                                         {!isClaude && view.scope === 'mihomo' && <option value='direct'>Напрямую</option>}
                                         {missing && <option value={service.target} disabled>Цель отсутствует в подписке</option>}
-                                        {(['server', 'profile'] as const).map(kind => (
-                                            <optgroup key={kind} label={kind === 'profile' ? 'Сборные профили' : 'Серверы'}>
+                                        {(['server', 'profile', 'pool'] as const).filter(kind => view.targets.some(t => t.kind === kind)).map(kind => (
+                                            <optgroup key={kind} label={groups[kind]}>
                                                 {view.targets.filter(t => t.kind === kind).map(t => (
                                                     <option key={t.id} value={t.id}>
-                                                        {t.name}{kind === 'server' && t.country && avoidCountries.includes(t.country) ? ' · только вручную' : ''}
+                                                        {withCountryFlag(t.name, t.country)}{showSources && t.sources?.length ? ' · ' + t.sources.join(', ') : ''}{kind === 'server' && t.country && avoidCountries.includes(t.country) ? ' · только вручную' : ''}
                                                     </option>
                                                 ))}
                                             </optgroup>

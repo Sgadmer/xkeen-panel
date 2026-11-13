@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"time"
 	"xkeen-panel/internal/models"
 )
@@ -147,10 +148,11 @@ func ServiceTargetID(server models.Server) string {
 }
 
 type ServiceTarget struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Country string `json:"country,omitempty"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Country string   `json:"country,omitempty"`
+	Sources []string `json:"sources,omitempty"`
 }
 type ServiceRouteView struct {
 	RoutingService
@@ -182,23 +184,31 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 	if err != nil {
 		return view, err
 	}
-	seen := map[string]bool{}
+	positions := map[string]int{}
 	for _, s := range servers {
 		id := ServiceTargetID(s)
-		if id == "" || seen[id] {
+		if id == "" {
 			continue
 		}
-		kind := "server"
-		if len(s.RawProfile) > 0 {
-			kind = "profile"
+		i, exists := positions[id]
+		if !exists {
+			kind := "server"
+			if len(s.RawProfile) > 0 {
+				kind = "profile"
+			}
+			i = len(view.Targets)
+			positions[id] = i
+			view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: ServerCountry(s)})
 		}
-		view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: ServerCountry(s)})
-		seen[id] = true
+		if s.SourceName != "" && !slices.Contains(view.Targets[i].Sources, s.SourceName) {
+			view.Targets[i].Sources = append(view.Targets[i].Sources, s.SourceName)
+		}
 	}
 	geo := serviceGeosites(rt)
 	for i, s := range serviceCatalog {
 		id := state.Assignments[s.id]
-		blocked := view.Active && (s.id == "claude" || id != "") && (!seen[id] || state.Outbounds[id] == nil)
+		_, present := positions[id]
+		blocked := view.Active && (s.id == "claude" || id != "") && (!present || state.Outbounds[id] == nil)
 		view.Services = append(view.Services, ServiceRouteView{RoutingService: RoutingService{s.id, s.name, serviceDomains(i, geo)}, Target: id, Blocked: blocked})
 	}
 	return view, nil

@@ -50,6 +50,9 @@ export function useEventSource() {
             es.addEventListener('subscription', () => {
                 qc.invalidateQueries({ queryKey: ['subscription'] })
                 qc.invalidateQueries({ queryKey: ['servers'] })
+                qc.invalidateQueries({ queryKey: ['sources'] })
+                qc.invalidateQueries({ queryKey: ['multipools'] })
+                qc.invalidateQueries({ queryKey: ['service-routes'] })
             })
 
             es.addEventListener('update', e => {

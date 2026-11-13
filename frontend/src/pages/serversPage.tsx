@@ -4,6 +4,7 @@ import {
     IconCheck,
     IconChevronRight,
     IconLink,
+    IconLayersLinked,
     IconPencil,
     IconPlus,
     IconRefresh,
@@ -19,25 +20,29 @@ import {
     Segmented,
     Switch,
 } from '@/components/ios'
-import { Sheet } from '@/components/sheet'
-import { ServerSourceForm } from '@/components/serverSourceForm'
+import { MultiPoolsSheet, SourcesSheet } from '@/components/serverCatalogSheets'
 import { Badge } from '@/components/ui/badge'
 import { AddSiteSheet, SiteSheet, siteSummary } from '@/components/siteSheets'
 import {
+    useMultiPools,
     usePanelSettings,
     usePool,
     useServers,
+    useServerSources,
     useSites,
+    useStatus,
     useSubscription,
 } from '@/hooks/usePanelData'
 import { useServerActions } from '@/hooks/useServerActions'
 import { useStreamLatency } from '@/hooks/useStreamLatency'
 import {
     countryName,
+    countryLabel,
     latencyTone,
     serverCountry,
     timeAgo,
     toneText,
+    withCountryFlag,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { importWarnings, safeNotice } from '@/lib/subscription'
@@ -65,6 +70,11 @@ function savedTab(): Tab {
 export function ServersPage() {
     const servers = useServers().data ?? []
     const pool = usePool().data
+    const sources = useServerSources().data
+    const status = useStatus().data
+    const mihomo = status?.core === 'mihomo' || pool?.core === 'mihomo'
+    const multipools = useMultiPools(mihomo).data
+    const activeMultiPool = multipools?.find(item => item.id === pool?.pinned_tag)
     const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
     const subscription = useSubscription().data
@@ -73,13 +83,12 @@ export function ServersPage() {
         pin,
         auto,
         refreshSubscription,
-        setSubscription,
         setCountry,
     } = useServerActions()
     const { check, checking, error: checkError, progress } = useStreamLatency()
     const [query, setQuery] = useState('')
     const [country, setCountryFilter] = useState('all')
-    const [sheetOpen, setSheetOpen] = useState(false)
+    const [catalogSheet, setCatalogSheet] = useState<'sources' | 'pools' | null>(null)
     const [tab, setTabState] = useState<Tab>(savedTab)
     const [addingSite, setAddingSite] = useState(false)
     const [siteId, setSiteId] = useState<number | null>(null)
@@ -88,7 +97,6 @@ export function ServersPage() {
     )
     const warnings = importWarnings(
         subscription?.import_report ??
-            setSubscription.data?.import_report ??
             refreshSubscription.data?.import_report,
     )
     const rawActionError =
@@ -127,7 +135,7 @@ export function ServersPage() {
         servers.forEach(s => {
             const c = serverCountry(s) || OTHER
             if (country !== 'all' && c !== country) return
-            if (!matches(query, s.name, c)) return
+            if (!matches(query, s.name, c, s.source_name)) return
             byCountry.set(c, [...(byCountry.get(c) ?? []), s])
         })
         const hasActive = (g: CountryGroup) =>
@@ -153,6 +161,7 @@ export function ServersPage() {
                     node: n,
                     country: server ? serverCountry(server) : n.country,
                     protocol: server?.protocol,
+                    source: server?.source_name,
                     latency: server
                         ? server.probe_kind === 'https'
                             ? server.latency_ms
@@ -162,7 +171,7 @@ export function ServersPage() {
                     excluded: !!n.excluded_until,
                 }
             })
-            .filter(r => matches(query, r.node.name, r.country))
+            .filter(r => matches(query, r.node.name, r.country, r.source))
             .sort(
                 (a, b) =>
                     Number(b.current) - Number(a.current) ||
@@ -194,14 +203,14 @@ export function ServersPage() {
                             <IconLink className='size-[17px]' stroke={2.2} />
                         </IconTile>
                     }
-                    label={hasSubscription ? 'Источник серверов' : 'Добавить серверы'}
+                    label='Подписки и источники'
                     tone={hasSubscription ? undefined : 'tint'}
                     hint={
-                        hasSubscription
-                            ? `${subscription?.host || 'Ручной источник'}${updated ? ` · обновлена ${updated} назад` : ''}`
-                            : 'Подписка, ссылка сервера или файл'
+                        sources?.length
+                            ? sources.length === 1 ? sources[0].name : 'Источников: ' + sources.length
+                            : 'Добавить подписку, ссылку сервера или файл'
                     }
-                    onClick={() => setSheetOpen(true)}
+                    onClick={() => setCatalogSheet('sources')}
                     trailing={
                         <IconChevronRight
                             className='size-4 shrink-0 text-label-tertiary'
@@ -210,6 +219,11 @@ export function ServersPage() {
                     }
                 />
             </div>
+            {mihomo && <div className={TILE}>
+                <Row icon={<IconTile color='#5856d6'><IconLayersLinked className='size-[17px]' stroke={2.2} /></IconTile>}
+                    label='Мультипулы' hint={multipools?.length ? 'Пулов: ' + multipools.length : 'Объединить серверы из разных подписок'}
+                    onClick={() => setCatalogSheet('pools')} trailing={<IconChevronRight className='size-4 shrink-0 text-label-tertiary' />} />
+            </div>}
             {hasSubscription && (
                 <div className={TILE}>
                     <Row
@@ -243,7 +257,7 @@ export function ServersPage() {
                 title='Серверы'
                 subtitle={
                     hasSubscription
-                        ? `В подписке ${subscription?.server_count ?? servers.length}${isPool ? ` · В автовыборе ${pool?.nodes?.length ?? 0}` : ''}${updated ? ` · обновлено ${updated} назад` : ''}`
+                        ? `Серверов: ${subscription?.server_count ?? servers.length}${isPool ? ` · В автовыборе ${pool?.nodes?.length ?? 0}` : ''}${updated ? ` · обновлено ${updated}${updated === 'только что' ? '' : ' назад'}` : ''}`
                         : 'Добавьте ссылку на подписку'
                 }
                 action={
@@ -255,7 +269,7 @@ export function ServersPage() {
                         />
                         {hasSubscription && subscription?.can_refresh !== false && (
                             <CircleButton
-                                label='Обновить подписку'
+                                label='Обновить все подписки'
                                 onClick={() => refreshSubscription.mutate()}
                                 disabled={refreshSubscription.isPending}
                             >
@@ -302,7 +316,7 @@ export function ServersPage() {
                                 value: 'pool',
                                 label: `Автовыбор · ${pool?.nodes?.length ?? 0}`,
                             },
-                            { value: 'all', label: `В подписке · ${servers.length}` },
+                            { value: 'all', label: `Все серверы · ${servers.length}` },
                         ]}
                     />
                 </div>
@@ -312,7 +326,7 @@ export function ServersPage() {
                 <Group title='Режимы провайдера' footer='Состав и маршруты сборного профиля задаёт провайдер. Список исключённых стран применяется к автовыбору панели.'>
                     {servers.filter(s => s.protocol === 'xray-profile').map(server => (
                         <Row key={server.id} label={server.name}
-                            hint={server.check_error || `${server.profile_nodes ?? 0} серверов · ${server.active ? 'Выбран' : server.latency_ms > 0 ? `HTTPS ${server.latency_ms} мс` : 'Не прошёл проверку'}`}
+                            hint={[server.source_name, server.check_error || `${server.profile_nodes ?? 0} серверов · ${server.active ? 'Выбран' : server.latency_ms > 0 ? `HTTPS ${server.latency_ms} мс` : 'Не прошёл проверку'}`].filter(Boolean).join(' · ')}
                             onClick={() => select.mutate(server.id)}
                             disabled={select.isPending || pin.isPending || auto.isPending || server.active}
                             trailing={server.active ? <IconCheck className='size-5 text-tint' /> : <IconChevronRight className='size-4 text-label-tertiary' />}
@@ -328,6 +342,7 @@ export function ServersPage() {
                         footer={
                             isAuto
                                 ? 'Панель держит трафик на самом быстром сервере пула и сама переключается, если он перестал работать.'
+                                : activeMultiPool ? 'Основной маршрут использует мультипул «' + activeMultiPool.name + '».'
                                 : 'Трафик закреплён за выбранным сервером. Включите автовыбор, чтобы панель снова выбирала сама.'
                         }
                     >
@@ -364,6 +379,7 @@ export function ServersPage() {
                                 name={r.node.name}
                                 country={r.country}
                                 protocol={r.protocol}
+                                source={r.source}
                                 latency={r.latency}
                                 current={r.current}
                                 excludedUntil={r.node.excluded_until}
@@ -462,7 +478,7 @@ export function ServersPage() {
                                     >
                                         {c === 'all'
                                             ? 'Все'
-                                            : countryName(c) || 'Без страны'}
+                                            : countryLabel(c) || 'Без страны'}
                                     </button>
                                 ))}
                             </div>
@@ -491,12 +507,8 @@ export function ServersPage() {
                 </>
             )}
 
-            <SubscriptionSheet
-                open={sheetOpen}
-                onClose={() => setSheetOpen(false)}
-                configured={hasSubscription}
-                host={subscription?.host}
-            />
+            <SourcesSheet open={catalogSheet === 'sources'} onClose={() => setCatalogSheet(null)} />
+            <MultiPoolsSheet open={catalogSheet === 'pools'} onClose={() => setCatalogSheet(null)} />
             <AddSiteSheet
                 open={addingSite}
                 onClose={() => setAddingSite(false)}
@@ -513,11 +525,12 @@ export function ServersPage() {
     )
 }
 
-function matches(query: string, name: string, country?: string) {
+function matches(query: string, name: string, country?: string, source?: string) {
     const q = query.trim().toLowerCase()
     return (
         !q ||
         name.toLowerCase().includes(q) ||
+        !!source?.toLowerCase().includes(q) ||
         countryName(country).toLowerCase().includes(q)
     )
 }
@@ -536,6 +549,7 @@ function PoolRow({
     name,
     country,
     protocol,
+    source,
     latency,
     current,
     excludedUntil,
@@ -546,6 +560,7 @@ function PoolRow({
     name: string
     country?: string
     protocol?: string
+    source?: string
     latency: number
     current: boolean
     excludedUntil?: string
@@ -555,6 +570,7 @@ function PoolRow({
 }) {
     const notes = [
         countryName(country),
+        source,
         countryExcluded && 'Страна запрещена в настройках, но ядро включило сервер в автовыбор',
         excludedUntil &&
             `не отвечал, вернётся в ${new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`,
@@ -574,7 +590,7 @@ function PoolRow({
                         excludedUntil && 'text-muted-foreground',
                     )}
                 >
-                    {name}
+                    {withCountryFlag(name, country)}
                     {protocol && <ProtocolBadge protocol={protocol} />}
                 </span>
                 {notes.length > 0 && (
@@ -605,7 +621,7 @@ function PoolRow({
 }
 
 function groupTitle(g: CountryGroup) {
-    return `${countryName(g.code) || 'Страна не определена'} · ${g.list.length}`
+    return `${countryLabel(g.code) || 'Страна не определена'} · ${g.list.length}`
 }
 
 function byLatency(a: Server, b: Server) {
@@ -738,9 +754,10 @@ function ServerRow({
             >
                 <span className='min-w-0 flex-1'>
                     <span className='block break-words text-[17px] tracking-[-0.43px]'>
-                        {server.name}
+                        {withCountryFlag(server.name, serverCountry(server))}
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
+                    {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
                     {status && (
                         <span
                             className={cn(
@@ -788,18 +805,4 @@ function ServerRow({
             </button>
         </div>
     )
-}
-
-function SubscriptionSheet({ open, onClose, configured, host }: {
-    open: boolean
-    onClose: () => void
-    configured?: boolean
-    host?: string
-}) {
-    return <Sheet open={open} onClose={onClose} title='Источник серверов'>
-        <Group footer='Подойдёт подписка провайдера, готовая ссылка собственного сервера или файл. Панель проверит настоящее HTTPS-соединение перед применением.'>
-            {open && <ServerSourceForm onApplied={() => onClose()} />}
-        </Group>
-        {configured && <Group title='Сейчас'><Row label={host || 'Серверы сохранены локально'} hint='Чтобы заменить источник, импортируйте новый выше.' /></Group>}
-    </Sheet>
 }

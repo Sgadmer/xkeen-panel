@@ -11,6 +11,21 @@ export function countryName(code?: string) {
     }
 }
 
+export function countryFlag(code?: string) {
+    const upper = code?.toUpperCase()
+    if (!upper || !/^[A-Z]{2}$/.test(upper)) return ''
+    return String.fromCodePoint(...Array.from(upper, letter => 0x1F1E6 + letter.charCodeAt(0) - 65))
+}
+
+export function countryLabel(code?: string) {
+    return [countryFlag(code), countryName(code)].filter(Boolean).join(' ')
+}
+
+export function withCountryFlag(name: string, code?: string) {
+    const flag = countryFlag(code)
+    return flag && !/\p{Regional_Indicator}{2}/u.test(name) ? flag + ' ' + name : name
+}
+
 export function serverCountry(server?: Server) {
     return (server?.country_override || server?.country || '').toUpperCase()
 }

@@ -1,17 +1,15 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Server, Status, SubscriptionUpdateResponse } from '@/types'
 
+export function invalidateServerData(qc: QueryClient) {
+    const keys = ['sources', 'multipools', 'servers', 'status', 'pool', 'subscription', 'routing-mode', 'service-routes', 'setup']
+    return Promise.all(keys.map(key => qc.invalidateQueries({ queryKey: [key] })))
+}
+
 export function useServerActions() {
     const qc = useQueryClient()
-    const refreshAll = () => {
-        qc.invalidateQueries({ queryKey: ['servers'] })
-        qc.invalidateQueries({ queryKey: ['status'] })
-        qc.invalidateQueries({ queryKey: ['pool'] })
-        qc.invalidateQueries({ queryKey: ['subscription'] })
-        qc.invalidateQueries({ queryKey: ['routing-mode'] })
-        qc.invalidateQueries({ queryKey: ['service-routes'] })
-    }
+    const refreshAll = () => invalidateServerData(qc)
 
     const select = useMutation({
         mutationFn: (id: number) =>
@@ -47,12 +45,6 @@ export function useServerActions() {
         onSettled: refreshAll,
     })
 
-    const setSubscription = useMutation({
-        mutationFn: (url: string) =>
-            api.post<SubscriptionUpdateResponse>('/api/subscription', { url }),
-        onSettled: refreshAll,
-    })
-
     const setCountry = useMutation({
         mutationFn: ({ id, country }: { id: number; country: string }) =>
             api.post('/api/servers/country', { id, country }),
@@ -64,7 +56,6 @@ export function useServerActions() {
         auto,
         pin,
         refreshSubscription,
-        setSubscription,
         setCountry,
     }
 }

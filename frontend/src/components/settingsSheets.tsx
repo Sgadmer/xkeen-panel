@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconCheck } from '@tabler/icons-react'
 import { Group, Row } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
-import { countryName } from '@/lib/format'
+import { countryLabel, countryName } from '@/lib/format'
 
 const check = <IconCheck className='size-5 shrink-0 text-tint' stroke={2.6} />
 
@@ -21,20 +21,22 @@ export function CountriesSheet({
 }) {
     const [picked, setPicked] = useState<string[]>(value)
     const [error, setError] = useState('')
+    const wasOpen = useRef(false)
 
     useEffect(() => {
-        if (open) {
+        if (open && !wasOpen.current) {
             setPicked(value)
             setError('')
         }
+        wasOpen.current = open
     }, [open, value])
 
     const options = useMemo(
         () =>
-            [...new Set([...value, ...candidates, 'RU', 'BY'])].sort((a, b) =>
+            [...new Set([...value, ...candidates, ...picked].map(code => code.trim().toUpperCase()).filter(code => /^[A-Z]{2}$/.test(code)))].sort((a, b) =>
                 (countryName(a) || a).localeCompare(countryName(b) || b, 'ru'),
             ),
-        [value, candidates],
+        [value, candidates, picked],
     )
 
     const toggle = (code: string) =>
@@ -63,14 +65,15 @@ export function CountriesSheet({
                     error ? (
                         <span className='text-destructive'>{error}</span>
                     ) : (
-                        'Выбранные страны исключены из автовыбора панели и автоматической замены сервера. Их серверы доступны вручную во вкладке «В подписке». Сборные профили используют собственные правила провайдера.'
+                        'Выбранные страны исключены из автовыбора панели и автоматической замены сервера. Их серверы доступны вручную во вкладке «Все серверы». Сборные профили используют собственные правила провайдера.'
                     )
                 }
             >
                 {options.map(code => (
                     <Row
                         key={code}
-                        label={countryName(code) || code}
+                        label={countryLabel(code)}
+                        hint={!candidates.includes(code) ? 'Сейчас нет серверов этой страны' : undefined}
                         onClick={() => toggle(code)}
                         trailing={
                             picked.includes(code) ? (
@@ -81,6 +84,7 @@ export function CountriesSheet({
                         }
                     />
                 ))}
+                {!options.length && <Row label='В подписках пока нет серверов с известной страной' />}
             </Group>
         </Sheet>
     )

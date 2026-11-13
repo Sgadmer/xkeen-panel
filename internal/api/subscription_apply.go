@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -33,28 +34,26 @@ func subscriptionView(data models.SubscriptionData, report xkeen.ImportReport) m
 	if kind == "" {
 		kind = "subscription"
 	}
-	return map[string]interface{}{"configured": data.URL != "" || len(data.Servers) > 0, "host": host, "source_kind": kind, "can_refresh": data.URL != "", "last_updated": data.LastUpdated, "server_count": len(data.Servers), "import_report": report}
+	canRefresh := data.URL != ""
+	for _, s := range data.Sources {
+		canRefresh = canRefresh || s.Kind == "subscription" && s.URL != ""
+	}
+	return map[string]interface{}{"configured": len(data.Sources) > 0 || data.URL != "" || len(data.Servers) > 0, "host": host, "source_kind": kind, "can_refresh": canRefresh, "last_updated": data.LastUpdated, "server_count": len(data.Servers), "source_count": len(data.Sources), "import_report": report}
 }
 
 // importSubscription serializes import, real probes, and routing changes. A
 // rejected input cannot replace the last usable saved subscription.
-func (h *Handlers) importSubscription(ctx context.Context, source string, refresh bool) (response map[string]interface{}, err error) {
+func (h *Handlers) importSubscription(ctx context.Context, source string) (map[string]interface{}, error) {
 	return h.withSubscriptionTransaction(func(transaction *subscriptionApplySnapshot) (map[string]interface{}, error) {
-		return h.importSubscriptionLocked(ctx, source, refresh, transaction)
+		if err := h.checkFirstSourceReplacement(transaction, source); err != nil {
+			return nil, err
+		}
+		servers, err := h.subscription.UpdateURL(source)
+		if err != nil {
+			return nil, err
+		}
+		return h.verifyAndApplySource(ctx, servers, transaction)
 	})
-}
-
-func (h *Handlers) importSubscriptionLocked(ctx context.Context, source string, refresh bool, transaction *subscriptionApplySnapshot) (response map[string]interface{}, err error) {
-	var servers []models.Server
-	if refresh {
-		servers, err = h.subscription.Refresh()
-	} else {
-		servers, err = h.subscription.UpdateURL(source)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return h.verifyAndApplySource(ctx, servers, transaction)
 }
 
 func (h *Handlers) verifyAndApplySource(ctx context.Context, servers []models.Server, transaction *subscriptionApplySnapshot) (response map[string]interface{}, err error) {
@@ -65,9 +64,8 @@ func (h *Handlers) verifyAndApplySource(ctx context.Context, servers []models.Se
 			return nil, probeErr
 		}
 		h.subscription.UpdateLatencies(checked)
-		servers = h.subscription.GetServers()
 		working := 0
-		for _, s := range servers {
+		for _, s := range checked {
 			if s.ProbeKind == "https" && s.Latency >= 0 {
 				working++
 			}
@@ -76,15 +74,21 @@ func (h *Handlers) verifyAndApplySource(ctx context.Context, servers []models.Se
 			return nil, fmt.Errorf("ни один сервер подписки не прошёл HTTPS-проверку; прежняя подписка сохранена")
 		}
 	}
-	response = map[string]interface{}{"server_count": len(servers), "servers": publicServers(servers), "import_report": h.subscription.GetImportReport()}
+	return h.applyCatalog(ctx, transaction)
+}
+
+func (h *Handlers) applyCatalog(ctx context.Context, transaction *subscriptionApplySnapshot) (map[string]interface{}, error) {
+	servers := h.subscription.GetServers()
+	response := h.catalogResponse()
 	if h.Cards != nil {
-		if err = h.Cards.Reconcile(ctx); err != nil {
+		transaction.runtimeTouched = true
+		if err := h.Cards.Reconcile(ctx); err != nil {
 			return nil, err
 		}
 		h.watchdog.CheckNow()
 		return response, nil
 	}
-	if err = h.applySubscription(servers, response, transaction); err != nil {
+	if err := h.applySubscription(servers, response, transaction); err != nil {
 		return nil, err
 	}
 	response["servers"] = publicServers(h.subscription.GetServers())
@@ -92,9 +96,35 @@ func (h *Handlers) verifyAndApplySource(ctx context.Context, servers []models.Se
 }
 
 func (h *Handlers) RefreshManaged(ctx context.Context) error {
-	if !h.subscription.CanRefresh() {
-		return nil
-	}
-	_, err := h.importSubscription(ctx, "", true)
+	_, err := h.refreshSources(ctx)
 	return err
+}
+
+func (h *Handlers) refreshSources(ctx context.Context) (map[string]interface{}, error) {
+	var failures []error
+	updated := 0
+	for _, source := range h.subscription.GetSources() {
+		if !source.CanRefresh {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			failures = append(failures, err)
+			break
+		}
+		_, err := h.refreshSource(ctx, source.ID)
+		if errors.Is(err, xkeen.ErrSourceNotFound) {
+			continue
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", source.Name, err))
+			continue
+		}
+		updated++
+	}
+	response := h.catalogResponse()
+	response["updated_sources"] = updated
+	if len(failures) > 0 {
+		return response, fmt.Errorf("обновлено источников: %d; ошибки: %w", updated, errors.Join(failures...))
+	}
+	return response, nil
 }

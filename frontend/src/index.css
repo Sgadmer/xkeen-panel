@@ -4,6 +4,13 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@font-face {
+    font-family: 'Twemoji Country Flags';
+    src: url('/flags/TwemojiCountryFlags.woff2') format('woff2');
+    font-display: swap;
+    unicode-range: U+1F1E6-1F1FF;
+}
+
 :root {
     --background: oklch(1 0 0);
     --foreground: oklch(0.141 0.005 285.823);
@@ -80,7 +87,7 @@
 
 @theme inline {
     --font-sans:
-        -apple-system, system-ui, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI',
+        'Twemoji Country Flags', -apple-system, system-ui, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI',
         Roboto, sans-serif;
     --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     --color-tint: var(--tint);
@@ -170,6 +177,19 @@
         appearance: base-select;
     }
 
+    .dark select {
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding-inline: 0.75rem;
+        text-align: start;
+    }
+
+    .dark select::picker-icon {
+        align-self: center;
+        flex: none;
+    }
+
     .dark select::picker(select) {
         color-scheme: dark;
         color: var(--popover-foreground);
@@ -178,11 +198,33 @@
         border-radius: 0.75rem;
         padding: 0.25rem;
         max-height: min(20rem, 50dvh);
+        max-inline-size: calc(100dvw - 1rem);
         overflow-y: auto;
     }
 
     .dark select option {
-        padding: 0.375rem 0.5rem;
+        position: relative;
+        align-items: center;
+        min-height: 2.25rem;
+        padding: 0.375rem 2rem 0.375rem 0.75rem;
+        line-height: 1.375rem;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
+    .dark select optgroup {
+        padding-inline: 0;
+    }
+
+    .dark select optgroup::before {
+        padding: 0.375rem 0.75rem;
+    }
+
+    .dark select option::checkmark {
+        position: absolute;
+        inset-inline-end: 0.75rem;
+        top: 50%;
+        transform: translateY(-50%);
     }
 
     .dark select option:enabled:is(:checked, :hover, :focus-visible) {

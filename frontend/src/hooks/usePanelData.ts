@@ -2,9 +2,11 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type {
     DevicesResponse,
+    MultiPool,
     PanelSettings,
     PoolStatus,
     Server,
+    ServerSource,
     SitesResponse,
     Status,
     SubscriptionInfo,
@@ -53,6 +55,21 @@ export function useSubscription() {
     return useQuery({
         queryKey: ['subscription'],
         queryFn: () => api.get<SubscriptionInfo>('/api/subscription'),
+    })
+}
+
+export function useServerSources() {
+    return useQuery({
+        queryKey: ['sources'],
+        queryFn: () => api.get<{ sources: ServerSource[] }>('/api/sources').then(data => data.sources ?? []),
+    })
+}
+
+export function useMultiPools(enabled = true) {
+    return useQuery({
+        queryKey: ['multipools'],
+        enabled,
+        queryFn: () => api.get<{ pools: MultiPool[] }>('/api/multipools').then(data => data.pools ?? []),
     })
 }
 

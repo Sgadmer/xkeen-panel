@@ -692,12 +692,11 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 	if len(data.Servers) == 0 {
 		return nil, fmt.Errorf("нет доступных серверов")
 	}
-	currentID := data.ActiveID
 
 	var candidates []models.Server
 	skippedGeo := 0
-	for _, s := range data.Servers {
-		if s.ID == currentID {
+	for i, s := range data.Servers {
+		if i == data.ActiveID {
 			continue
 		}
 		if w.isBlacklisted(s.RawURI) {

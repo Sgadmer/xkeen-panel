@@ -21,6 +21,7 @@ func (h *Handlers) MountMihomoCards(r chi.Router, host string) {
 			})
 		})
 		h.Cards.MountExclusions(r, h.config.DataDir)
+		h.mountMultiPools(r)
 		r.Post("/service-routes/{service}/client", func(w http.ResponseWriter, r *http.Request) {
 			access, err := h.Cards.EnableServiceProxy(r.Context(), host, chi.URLParam(r, "service"))
 			if err != nil {

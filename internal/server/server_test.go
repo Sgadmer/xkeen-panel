@@ -74,7 +74,7 @@ func TestMihomoPanelKeepsSettingsAndNavigation(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Header().Get("Content-Type"), "json") || w.Body.String() != "manifest" {
 		t.Fatal("manifest did not serve as a static asset")
 	}
-	for _, path := range []string{"/api/panel/settings", "/api/components", "/api/devices", "/api/logs", "/api/exclusions", "/api/service-routes", "/api/servers", "/api/setup/state", "/api/account/passkey", "/api/update", "/api/events", "/api/servers/check"} {
+	for _, path := range []string{"/api/diagnostics", "/api/panel/settings", "/api/components", "/api/devices", "/api/logs", "/api/exclusions", "/api/service-routes", "/api/servers", "/api/setup/state", "/api/account/passkey", "/api/update", "/api/events", "/api/servers/check"} {
 		if w := ask("GET", path, "", false); w.Code != http.StatusUnauthorized {
 			t.Fatalf("missing protected route %s (HTTP %d)", path, w.Code)
 		}

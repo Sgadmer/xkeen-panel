@@ -76,7 +76,7 @@ export function SettingsPage() {
             api.put<PanelSettings>('/api/panel/settings', next),
         onSuccess: data => {
             qc.setQueryData(['panel-settings'], data)
-            for (const key of ['pool', 'servers', 'service-routes', 'status']) {
+            for (const key of ['pool', 'multipools', 'servers', 'service-routes', 'status']) {
                 void qc.invalidateQueries({ queryKey: [key] })
             }
         },
@@ -118,7 +118,7 @@ export function SettingsPage() {
                     />
                     <Row
                         icon={icon('#ff9f0a', IconRefresh)}
-                        label='Обновлять подписку'
+                        label='Обновлять подписки'
                         detail={intervalLabel(refresh)}
                         onClick={() => setSheet('refresh')}
                         disabled={!settings.data}
@@ -223,6 +223,9 @@ export function SettingsPage() {
                                 </button>
                             }
                         />
+                    ) : !passkeySupported() ? (
+                        <Row icon={icon('#30d158', IconFingerprint)} label='Как подключить Face ID'
+                            hint='Откройте панель по HTTPS в Safari на iPhone' to='/settings/access#face-id' />
                     ) : (
                         <Row
                             icon={icon('#30d158', IconFingerprint)}
@@ -246,7 +249,7 @@ export function SettingsPage() {
                     <Row
                         icon={icon('#ff375f', IconActivity)}
                         label='Диагностика и журнал'
-                        to='/settings/diagnostics'
+                        to='/diagnostics'
                     />
                 </Group>
 

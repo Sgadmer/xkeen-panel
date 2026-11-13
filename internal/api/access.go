@@ -48,5 +48,8 @@ func (h *Handlers) HandlePanelAccess(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось создать QR-код"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"url": origin + "/", "qr": "data:image/png;base64," + base64.StdEncoding.EncodeToString(image.Bytes())})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"url": origin + "/", "qr": "data:image/png;base64," + base64.StdEncoding.EncodeToString(image.Bytes()),
+		"passkey_domain_configured": strings.TrimSpace(h.config.WebAuthnRPID) != "" || h.config.TrustProxyHeaders,
+	})
 }

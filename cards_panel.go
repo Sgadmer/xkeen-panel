@@ -38,7 +38,9 @@ func newCardsController(dataDir, mihomoConfig string, sub *xkeen.SubscriptionMan
 	if value, err := os.Readlink(assets); err != nil || value != "/opt/etc/xray/dat" {
 		return nil, errors.New("неожиданный каталог геоданных панели сервисов")
 	}
-	return cardcontroller.New(mihomoConfig, base, rt, sub.GetServers), nil
+	cards := cardcontroller.New(mihomoConfig, base, rt, sub.GetServers)
+	cards.SetSourceProviderURLs(sub.SourceProviderURLs)
+	return cards, nil
 }
 
 func maintainCardRoutes(ctx context.Context, controller *cardcontroller.Controller, wd *monitor.Watchdog) {

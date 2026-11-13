@@ -49,19 +49,37 @@ func (c *Controller) defaultRoute(p profile, live map[string]selector) DefaultRo
 		name = live[name].Now
 	}
 	state.Name, state.Protocol = name, live[name].Type
+	if pool := p.pool(state.Pinned); pool != nil && p.endpointName(pool.ID, name) {
+		state.Current, state.Name, state.Protocol = pool.ID, pool.Name, "leastPing"
+	}
 	members := map[string]bool{}
 	for _, name := range live[auto].All {
 		members[name] = true
 	}
-	for _, s := range c.catalog() {
+	servers := c.catalog()
+	native := c.nativeServers(p, auto, servers)
+	// Names shared by distinct native endpoints cannot identify a member.
+	identities := map[string]string{}
+	for _, s := range native {
+		key := xkeen.ServiceTargetID(s)
+		if previous, exists := identities[s.Name]; exists && previous != key {
+			identities[s.Name] = ""
+		} else if !exists {
+			identities[s.Name] = key
+		}
+	}
+	listed := map[string]bool{}
+	for _, s := range servers {
 		key := xkeen.ServiceTargetID(s)
 		if key == "" {
 			continue
 		}
-		if members[s.Name] {
+		matched := identities[s.Name] == key
+		if matched && members[s.Name] && !listed[key] {
+			listed[key] = true
 			state.Nodes = append(state.Nodes, xkeen.PoolNodeView{Tag: key, ServerID: s.ID, Name: s.Name, Address: s.Address, Port: s.Port, Country: xkeen.ServerCountry(s), Latency: s.Latency})
 		}
-		if name == nodePrefix+key || name == s.Name {
+		if name == nodePrefix+key || state.Pinned == "" && matched && name == s.Name {
 			state.Current, state.Name, state.Protocol = key, s.Name, s.Protocol
 			if state.Pinned == "" && live[group].Now != auto {
 				state.Pinned = key
@@ -144,24 +162,71 @@ func (c *Controller) setDefault(ctx context.Context, key string) error {
 // SyncProviders reloads only a provider that already uses this subscription.
 // Another source can always be selected through an isolated card worker.
 func (c *Controller) SyncProviders(ctx context.Context, source string) error {
+	if err := c.RefreshMatchingProviders(ctx, []string{source}); err != nil {
+		return err
+	}
+	return c.Reconcile(ctx)
+}
+
+func (c *Controller) CheckSourceRemoval(source string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p, err := c.read()
 	if err != nil {
 		return err
 	}
-	if source != "" {
-		for name, v := range object(p.doc["proxy-providers"]) {
-			provider := object(v)
-			if str(provider["type"]) == "http" && str(provider["url"]) == source {
-				if err = p.api.request(ctx, "PUT", "/providers/proxies/"+url.PathEscape(name), nil, nil); err != nil {
-					return err
-				}
-			}
+	if len(matchingProviders(p, []string{source})) > 0 {
+		return errors.New("эту подписку использует встроенный провайдер профиля Mihomo. Сначала отвяжите его в профиле, чтобы после удаления не остались активные серверы")
+	}
+	return nil
+}
+
+func matchingProviders(p profile, sources []string) []string {
+	wanted := make(map[string]bool, len(sources))
+	for _, source := range sources {
+		if source != "" {
+			wanted[source] = true
 		}
 	}
-	_, err = c.apply(ctx, "", "", nil)
-	return err
+	var matched []string
+	for name, value := range object(p.doc["proxy-providers"]) {
+		provider := object(value)
+		if str(provider["type"]) == "http" && wanted[str(provider["url"])] {
+			matched = append(matched, name)
+		}
+	}
+	return matched
+}
+
+// NativeSourceLinks returns source IDs only. Credentials in either config
+// never leave the controller/API boundary.
+func (c *Controller) NativeSourceLinks(sources []models.SubscriptionSource) (map[string]bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return nil, err
+	}
+	links := map[string]bool{}
+	for _, s := range sources {
+		links[s.ID] = len(matchingProviders(p, []string{s.URL})) > 0
+	}
+	return links, nil
+}
+
+func (c *Controller) RefreshMatchingProviders(ctx context.Context, sources []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return err
+	}
+	for _, name := range matchingProviders(p, sources) {
+		if err = p.api.request(ctx, "PUT", "/providers/proxies/"+url.PathEscape(name), nil, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Controller) ProbeDefault(ctx context.Context, checkURL string) (string, string, int, error) {

@@ -43,6 +43,12 @@ const TABS: { to: string; label: string; icon: Icon; active: Icon }[] = [
         active: IconRouteOff,
     },
     {
+        to: '/diagnostics',
+        label: 'Диагностика',
+        icon: IconActivity,
+        active: IconActivity,
+    },
+    {
         to: '/settings',
         label: 'Настройки',
         icon: IconSettings,
@@ -55,6 +61,10 @@ function tabIndex(pathname: string) {
     return TABS.findIndex(t => t.to !== '/' && pathname.startsWith(t.to))
 }
 
+const shortLabels: Record<string, string> = {
+    '/devices': 'Устр-ва', '/exclusions': 'Искл.', '/diagnostics': 'Диагн.', '/settings': 'Настр.',
+}
+
 export function AppShell() {
     useEventSource()
     const { pathname } = useLocation()
@@ -62,12 +72,11 @@ export function AppShell() {
     const s = status.data
     const info = statusInfo(s)
     const updated = usePanelUpdated(s?.panel_version)
-    const onDiagnostics = pathname.startsWith('/settings/diagnostics')
     const active = tabIndex(pathname)
 
     const sidebarRef = useRef<HTMLElement>(null)
     const tabbarRef = useRef<HTMLElement>(null)
-    const sidebarPill = useIndicator(sidebarRef, onDiagnostics ? -1 : active)
+    const sidebarPill = useIndicator(sidebarRef, active)
     const tabbarPill = useIndicator(tabbarRef, active)
 
     const setup = useSetupState().data
@@ -141,19 +150,11 @@ export function AppShell() {
                         <SidebarLink
                             key={tab.to}
                             {...tab}
-                            current={!onDiagnostics && i === active}
+                            current={i === active}
                         />
                     ))}
                 </nav>
                 <div className='flex-1' />
-                <SidebarLink
-                    to='/settings/diagnostics'
-                    label='Диагностика'
-                    icon={IconActivity}
-                    active={IconActivity}
-                    current={onDiagnostics}
-                    highlight
-                />
                 <p className='px-3 pt-2 text-xs text-label-tertiary'>
                     Панель {s?.panel_version ?? '—'}
                     {s?.xkeen_version && ` · XKeen ${s.xkeen_version}`}
@@ -174,7 +175,7 @@ export function AppShell() {
                     <nav
                         ref={tabbarRef}
                         aria-label='Разделы'
-                        className='relative grid h-16 grid-cols-6 p-1.5'
+                        className='relative grid h-16 grid-cols-7 p-1.5'
                     >
                         <span
                             aria-hidden
@@ -189,6 +190,7 @@ export function AppShell() {
                                     key={tab.to}
                                     to={tab.to}
                                     data-tab
+                                    aria-label={tab.label}
                                     aria-current={current ? 'page' : undefined}
                                     className={cn(
                                         'relative flex select-none flex-col items-center justify-center gap-0.5 rounded-full text-[10px] transition-[color,transform] duration-200 active:scale-[0.92] max-[380px]:text-[9px]',
@@ -201,7 +203,8 @@ export function AppShell() {
                                         className='size-[22px]'
                                         stroke={current ? 2.2 : 1.8}
                                     />
-                                    {tab.label}
+                                    <span className='min-[520px]:hidden'>{shortLabels[tab.to] ?? tab.label}</span>
+                                    <span className='max-[519px]:hidden'>{tab.label}</span>
                                 </Link>
                             )
                         })}
@@ -218,14 +221,12 @@ function SidebarLink({
     icon: TabIcon,
     active: ActiveIcon,
     current,
-    highlight,
 }: {
     to: string
     label: string
     icon: Icon
     active: Icon
     current: boolean
-    highlight?: boolean
 }) {
     const NavIcon = current ? ActiveIcon : TabIcon
     return (
@@ -236,7 +237,6 @@ function SidebarLink({
             className={cn(
                 'relative flex min-h-10 items-center gap-2.5 rounded-xl px-3 text-[15px] tracking-[-0.24px] transition-colors duration-200',
                 current ? 'font-semibold text-tint' : 'hover:bg-white/6',
-                current && highlight && 'bg-white/12',
             )}
         >
             <NavIcon className='size-[18px]' stroke={1.9} />

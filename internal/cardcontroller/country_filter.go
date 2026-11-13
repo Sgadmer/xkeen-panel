@@ -20,7 +20,7 @@ func (c *Controller) SetCountryPolicy(countries func() []string, allowed func(mo
 
 type autoCountryGroups struct {
 	types   map[string]string
-	allowed map[string]bool
+	allowed map[string]map[string]bool
 }
 
 func (g autoCountryGroups) ready(live, before map[string]selector) bool {
@@ -32,12 +32,12 @@ func (g autoCountryGroups) ready(live, before map[string]selector) bool {
 		present := make(map[string]bool, len(group.All))
 		for _, member := range group.All {
 			present[member] = true
-			if member != "REJECT" && !g.allowed[member] {
+			if member != "REJECT" && !g.allowed[name][member] {
 				return false
 			}
 		}
 		for _, previous := range before[name].All {
-			if g.allowed[previous] && !present[previous] {
+			if g.allowed[name][previous] && !present[previous] {
 				return false
 			}
 		}
@@ -120,36 +120,15 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 	if c.avoidCountries == nil {
 		return result, nil
 	}
-	filter := ""
-	if len(c.avoidCountries()) > 0 {
-		result.allowed = make(map[string]bool)
-		result.types = make(map[string]string)
-		// Mihomo identifies provider members by their display name. An ambiguous
-		// name cannot be safely allowed when one of those servers is excluded.
-		for _, s := range servers {
-			if s.Name == "" {
-				continue
-			}
-			if old, seen := result.allowed[s.Name]; seen && !old {
-				continue
-			}
-			result.allowed[s.Name] = len(s.RawProfile) == 0 && c.autoAllowed(s)
-		}
-		var names []string
-		for name, allowed := range result.allowed {
-			if allowed {
-				names = append(names, strings.ReplaceAll(regexp.QuoteMeta(name), "`", `\x60`))
-			}
-		}
-		sort.Strings(names)
-		filter = `\A(?!(?:` + strings.Join(names, "|") + `)\z)`
-	}
+	enabled := len(c.avoidCountries()) > 0
+	result.allowed = make(map[string]map[string]bool)
+	result.types = make(map[string]string)
 	for _, raw := range list(p.doc["proxy-groups"]) {
 		group := object(raw)
 		if err := removeCountryFilter(group); err != nil {
 			return result, err
 		}
-		if filter == "" {
+		if !enabled {
 			continue
 		}
 		switch str(group["type"]) {
@@ -157,6 +136,26 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 		default:
 			continue
 		}
+		name := str(group["name"])
+		allowed := map[string]bool{}
+		for _, s := range c.nativeServers(*p, name, servers) {
+			if s.Name == "" {
+				continue
+			}
+			if previous, seen := allowed[s.Name]; seen && !previous {
+				continue
+			}
+			allowed[s.Name] = len(s.RawProfile) == 0 && c.autoAllowed(s)
+		}
+		var names []string
+		for node, ok := range allowed {
+			if ok {
+				names = append(names, strings.ReplaceAll(regexp.QuoteMeta(node), "`", `\x60`))
+			}
+		}
+		sort.Strings(names)
+		filter := `\A(?!(?:` + strings.Join(names, "|") + `)\z)`
+		result.allowed[name] = allowed
 		state := map[string]interface{}{"filter": filter}
 		if original, exists := group["empty-fallback"]; exists {
 			state["empty-fallback"] = original
@@ -170,7 +169,7 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 			exclude = original + "`" + filter
 		}
 		group["exclude-filter"], group["empty-fallback"], group[countryFilterKey] = exclude, "REJECT", state
-		result.types[str(group["name"])] = str(group["type"])
+		result.types[name] = str(group["type"])
 	}
 	return result, nil
 }

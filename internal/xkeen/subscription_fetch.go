@@ -59,6 +59,10 @@ func subscriptionProfilesFor(state subscriptionClientState, rawURL string) []sub
 }
 
 func (sm *SubscriptionManager) downloadAndParse(rawURL string) ([]models.Server, error) {
+	return sm.downloadAndParseContext(context.Background(), rawURL)
+}
+
+func (sm *SubscriptionManager) downloadAndParseContext(parent context.Context, rawURL string) ([]models.Server, error) {
 	parsedURL, err := url.Parse(rawURL)
 	if err != nil || parsedURL.Hostname() == "" || (parsedURL.Scheme != "https" && parsedURL.Scheme != "http") {
 		return nil, fmt.Errorf("нужна корректная HTTP/HTTPS-ссылка подписки")
@@ -67,7 +71,7 @@ func (sm *SubscriptionManager) downloadAndParse(rawURL string) ([]models.Server,
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), subscriptionTotalTimeout)
+	ctx, cancel := context.WithTimeout(parent, subscriptionTotalTimeout)
 	defer cancel()
 	for _, profile := range subscriptionProfilesFor(state, rawURL) {
 		servers, err := sm.fetchSubscriptionProfile(ctx, rawURL, state.HWID, profile)

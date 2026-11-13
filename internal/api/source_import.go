@@ -21,6 +21,9 @@ func (h *Handlers) HandleImportSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := h.withSubscriptionTransaction(func(transaction *subscriptionApplySnapshot) (map[string]interface{}, error) {
+		if err := h.checkFirstSourceReplacement(transaction, ""); err != nil {
+			return nil, err
+		}
 		servers, err := h.subscription.ImportContent(req.Content, req.Kind)
 		if err != nil {
 			return nil, err

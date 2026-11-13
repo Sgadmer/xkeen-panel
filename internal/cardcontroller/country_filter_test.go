@@ -69,7 +69,13 @@ func TestMihomoCountryFilterAndProviderRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for !p.api.ruleMode(ctx) {
+	// The controller can enter rule mode before a file provider finishes
+	// registering its members. A selection during that interval returns 400.
+	for {
+		live, e := p.api.selectors(ctx)
+		if e == nil && slices.Contains(live["Manual"].All, nodes[1]) && p.api.ruleMode(ctx) {
+			break
+		}
 		if ctx.Err() != nil {
 			t.Fatal(ctx.Err())
 		}
@@ -128,7 +134,7 @@ func TestMihomoCountryFilterAndProviderRefresh(t *testing.T) {
 }
 
 func TestCountryGroupReadinessRejectsMissingAllowedMember(t *testing.T) {
-	groups := autoCountryGroups{types: map[string]string{"A": "url-test"}, allowed: map[string]bool{"FI": true}}
+	groups := autoCountryGroups{types: map[string]string{"A": "url-test"}, allowed: map[string]map[string]bool{"A": {"FI": true}}}
 	before := map[string]selector{"A": {Type: "URLTest", Now: "RU", All: []string{"FI", "RU"}}}
 	if groups.ready(map[string]selector{"A": {Type: "URLTest", Now: "REJECT", All: []string{"REJECT"}}}, before) {
 		t.Fatal("lost working members")

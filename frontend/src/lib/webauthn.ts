@@ -19,6 +19,7 @@ function bufToB64url(buf: ArrayBuffer): string {
 export function passkeySupported(): boolean {
     return (
         typeof window !== 'undefined' &&
+        window.isSecureContext &&
         typeof window.PublicKeyCredential !== 'undefined'
     )
 }

@@ -83,9 +83,10 @@ export function App() {
                                 element={<XkeenSettingsPage />}
                             />
                             <Route
-                                path='settings/diagnostics'
+                                path='diagnostics'
                                 element={<DiagnosticsPage />}
                             />
+                            <Route path='settings/diagnostics' element={<Navigate to='/diagnostics' replace />} />
                         </Route>
                         <Route path='*' element={<Navigate to='/' />} />
                     </>

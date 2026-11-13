@@ -27,7 +27,12 @@ func targetPart(rule string) ([]string, int) {
 	return fields, last
 }
 
-func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]xkeen.CardProxy) (map[string]string, error) {
+type cardEndpoint struct {
+	xkeen.CardProxy
+	name string
+}
+
+func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]cardEndpoint) (map[string]string, error) {
 	_, owned := p.doc[stateKey]
 	original := []string{}
 	for _, item := range list(p.doc["rules"]) {
@@ -84,7 +89,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]xkee
 		if !ok {
 			return "REJECT"
 		}
-		name := nodePrefix + key
+		name := peer.name
 		if !used[key] {
 			nodes = append(nodes, map[string]interface{}{"name": name, "type": "vless", "server": "127.0.0.1", "port": peer.Port, "uuid": peer.UUID, "network": "tcp", "tls": true, "servername": peer.ServerName, "fingerprint": peer.Fingerprint, "udp": true})
 			used[key] = true

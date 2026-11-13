@@ -266,7 +266,7 @@ function SubscriptionStep({ state, onNext }: { state: SetupState; onNext: () => 
         </StepHeader>
         {ready ? <Group>
             <Row icon={<IconCircleCheckFilled className='size-[22px] text-success' />} label='Серверы подключены' hint={`${state.servers} серверов${state.pool_nodes ? ` · в пуле ${state.pool_nodes}` : ''}`} />
-            <Row label='Заменить источник' tone='tint' onClick={() => setEditing(true)} />
+            <Row label='Добавить ещё один источник' tone='tint' onClick={() => setEditing(true)} />
         </Group> : <Group><ServerSourceForm onApplied={() => setEditing(false)} /></Group>}
         {ready && <Actions primary={{ label: 'Далее: режим VPN', onClick: onNext }} />}
         {editing && state.subscription && <button type='button' onClick={() => setEditing(false)} className='mt-4 min-h-11 text-tint'>Отмена</button>}
@@ -431,7 +431,7 @@ function StartStep({
                         <>
                             Связь через VPN пока не подтвердилась. Загляните в{' '}
                             <Link
-                                to='/settings/diagnostics'
+                                to='/diagnostics'
                                 className='text-tint'
                             >
                                 диагностику

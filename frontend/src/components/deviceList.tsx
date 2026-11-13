@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
     IconDeviceDesktop,
     IconDeviceLaptop,
@@ -48,9 +49,11 @@ function kindOf(name: string) {
 export function DeviceGroups({
     data,
     columns,
+    showConnections = false,
 }: {
     data: DevicesResponse
     columns?: boolean
+    showConnections?: boolean
 }) {
     const qc = useQueryClient()
     const toggle = useMutation({
@@ -75,6 +78,7 @@ export function DeviceGroups({
     const row = (d: Device) => {
         const kind = kindOf(d.name)
         const KindIcon = kind.icon
+        const route = d.vpn ? (d.via === 'segment' ? 'Через VPN, как вся сеть' : 'Через VPN') : 'Напрямую'
         return (
             <Row
                 key={d.mac}
@@ -86,13 +90,14 @@ export function DeviceGroups({
                     </span>
                 }
                 label={<span className='block break-words'>{d.name}</span>}
-                hint={
-                    d.vpn
-                        ? d.via === 'segment'
-                            ? 'Через VPN, как вся сеть'
-                            : 'Через VPN'
-                        : 'Напрямую'
-                }
+                hint={<>
+                    {route}
+                    {showConnections && d.active && d.ip && <>{' · '}
+                        <Link className='inline-block py-1 text-tint hover:underline'
+                            to={'/diagnostics?device=' + encodeURIComponent(d.ip)}
+                            aria-label={'Соединения устройства ' + d.name}>Соединения</Link>
+                    </>}
+                </>}
                 trailing={
                     <Switch
                         checked={d.vpn}

@@ -1,10 +1,11 @@
 import { DeviceGroups, NewDevicesGroup } from '@/components/deviceList'
 import { Group, PageTitle, Row } from '@/components/ios'
-import { useDevices } from '@/hooks/usePanelData'
+import { useDevices, useStatus } from '@/hooks/usePanelData'
 
 export function DevicesPage() {
     const query = useDevices()
     const data = query.data
+    const core = useStatus().data?.core
 
     if (query.error) {
         return (
@@ -39,7 +40,7 @@ export function DevicesPage() {
             )}
 
             {data?.policy_found && <NewDevicesGroup data={data} />}
-            {data && <DeviceGroups data={data} columns />}
+            {data && <DeviceGroups data={data} columns showConnections={core === 'mihomo'} />}
         </>
     )
 }

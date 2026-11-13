@@ -58,7 +58,7 @@ func (h *Handlers) HandleUpdateSubscription(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resp, err := h.importSubscription(r.Context(), req.URL, false)
+	resp, err := h.importSubscription(r.Context(), req.URL)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -73,7 +73,7 @@ func (h *Handlers) HandleRefreshSubscription(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "этот источник добавлен вручную; импортируйте новую ссылку сервера или файл"})
 		return
 	}
-	resp, err := h.importSubscription(r.Context(), "", true)
+	resp, err := h.refreshSources(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -88,7 +88,7 @@ func (h *Handlers) HandleRefreshSubscription(w http.ResponseWriter, r *http.Requ
 func (h *Handlers) applySubscription(servers []models.Server, resp map[string]interface{}, transaction *subscriptionApplySnapshot) error {
 	preferred, err := transaction.manualPreference(servers)
 	currentSource := h.subscription.GetData()
-	newSource := transaction.data.URL != currentSource.URL || currentSource.URL == "" && !sameSourceServers(transaction.data.Servers, currentSource.Servers)
+	newSource := !transaction.sourceScoped && (transaction.data.URL != currentSource.URL || currentSource.URL == "" && !sameSourceServers(transaction.data.Servers, currentSource.Servers))
 	if newSource {
 		preferred = nil
 		err = nil
@@ -498,7 +498,17 @@ func (h *Handlers) setMihomoDefault(w http.ResponseWriter, r *http.Request, key 
 func (h *Handlers) reconcileCards(w http.ResponseWriter, r *http.Request) {
 	h.watchdog.LockChanges()
 	defer h.watchdog.UnlockChanges()
-	if err := h.Cards.SyncProviders(r.Context(), h.subscription.GetData().URL); err != nil {
+	urls := make([]string, 0)
+	for _, source := range h.subscription.GetData().Sources {
+		if source.URL != "" {
+			urls = append(urls, source.URL)
+		}
+	}
+	err := h.Cards.RefreshMatchingProviders(r.Context(), urls)
+	if err == nil {
+		err = h.Cards.Reconcile(r.Context())
+	}
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

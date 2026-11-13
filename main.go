@@ -97,7 +97,7 @@ func main() {
 		log.Printf("Предупреждение: ошибка загрузки подписки: %v", err)
 	}
 
-	if *cardsListen != "" && len(subManager.GetServers()) == 0 {
+	if *cardsListen != "" && len(subManager.GetServers()) == 0 && subManager.GetData().CatalogVersion == 0 {
 		log.Fatal("Сохранённая подписка панели пуста")
 	}
 

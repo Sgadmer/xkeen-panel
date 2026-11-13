@@ -59,6 +59,7 @@ func (sm *SubscriptionManager) Load() error {
 	sm.data = &loaded.SubscriptionData
 	sm.importReport = cloneSubscriptionImportReport(loaded.ImportReport)
 	sm.importReport.Imported = len(sm.data.Servers)
+	sm.migrateLegacyLocked()
 	return nil
 }
 
@@ -86,155 +87,6 @@ func (sm *SubscriptionManager) saveLocked() error {
 	return nil
 }
 
-// UpdateURL sets a new subscription URL, then downloads and parses it.
-func (sm *SubscriptionManager) UpdateURL(url string) ([]models.Server, error) {
-	sm.operationMu.Lock()
-	defer sm.operationMu.Unlock()
-	servers, err := sm.downloadAndParse(url)
-	if err != nil {
-		return nil, err
-	}
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	previous := cloneSubscriptionData(*sm.data)
-	previousReport := cloneSubscriptionImportReport(sm.importReport)
-	sm.data.URL = url
-	sm.data.SourceKind = "subscription"
-	sm.applyRefreshLocked(servers)
-	sm.importReport = cloneSubscriptionImportReport(sm.pendingImportReport)
-	if err := sm.saveLocked(); err != nil {
-		sm.data = &previous
-		sm.importReport = previousReport
-		return nil, err
-	}
-	sm.rollbackSnapshotKey = subscriptionSnapshotKey(previous)
-	sm.rollbackImportReport = previousReport
-	return cloneSubscriptionServers(sm.data.Servers), nil
-}
-
-// Refresh reloads the servers from the current URL.
-func (sm *SubscriptionManager) Refresh() ([]models.Server, error) {
-	sm.operationMu.Lock()
-	defer sm.operationMu.Unlock()
-	sm.mu.RLock()
-	url := sm.data.URL
-	sm.mu.RUnlock()
-
-	if url == "" {
-		return nil, fmt.Errorf("серверы добавлены вручную; для изменения импортируйте новую ссылку или файл")
-	}
-
-	servers, err := sm.downloadAndParse(url)
-	if err != nil {
-		return nil, err
-	}
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	previous := cloneSubscriptionData(*sm.data)
-	previousReport := cloneSubscriptionImportReport(sm.importReport)
-	sm.applyRefreshLocked(servers)
-	sm.importReport = cloneSubscriptionImportReport(sm.pendingImportReport)
-	if err := sm.saveLocked(); err != nil {
-		sm.data = &previous
-		sm.importReport = previousReport
-		return nil, err
-	}
-	sm.rollbackSnapshotKey = subscriptionSnapshotKey(previous)
-	sm.rollbackImportReport = previousReport
-	return cloneSubscriptionServers(sm.data.Servers), nil
-}
-
-// CanRefresh distinguishes a remote subscription from local server credentials.
-// The latter must never be treated as a URL or fetched by the hourly task.
-func (sm *SubscriptionManager) CanRefresh() bool {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.data.URL != "" && (sm.data.SourceKind == "" || sm.data.SourceKind == "subscription")
-}
-
-// ImportContent stores parsed server credentials locally, never the file name
-// or a synthetic URL. The caller verifies HTTPS and rolls the whole operation
-// back if these endpoints cannot be applied to the installed core.
-func (sm *SubscriptionManager) ImportContent(content, kind string) ([]models.Server, error) {
-	sm.operationMu.Lock()
-	defer sm.operationMu.Unlock()
-	if kind != "server" && kind != "file" {
-		return nil, fmt.Errorf("выберите ссылку сервера или локальный файл")
-	}
-	if len(content) == 0 || len(content) > 4<<20 {
-		return nil, fmt.Errorf("пустой или слишком большой источник серверов (предел 4 МиБ)")
-	}
-	servers, report, err := ParseSubscriptionDetailed(content)
-	if err != nil {
-		return nil, fmt.Errorf("источник не содержит поддерживаемых серверов; проверьте формат ссылки или файла")
-	}
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	previous := cloneSubscriptionData(*sm.data)
-	previousReport := cloneSubscriptionImportReport(sm.importReport)
-	sm.data.URL = ""
-	sm.data.SourceKind = kind
-	sm.applyRefreshLocked(servers)
-	sm.importReport = cloneSubscriptionImportReport(report)
-	if err := sm.saveLocked(); err != nil {
-		sm.data = &previous
-		sm.importReport = previousReport
-		return nil, err
-	}
-	sm.rollbackSnapshotKey = subscriptionSnapshotKey(previous)
-	sm.rollbackImportReport = previousReport
-	return cloneSubscriptionServers(sm.data.Servers), nil
-}
-
-// applyRefreshLocked keeps the active server and country overrides matched by
-// stable server identity, including native JSON endpoints. Call with sm.mu held.
-func (sm *SubscriptionManager) applyRefreshLocked(servers []models.Server) {
-	var activeIdentity string
-	if sm.data.ActiveID >= 0 && sm.data.ActiveID < len(sm.data.Servers) {
-		activeIdentity = ServerIdentity(sm.data.Servers[sm.data.ActiveID])
-	}
-
-	carryOverrides(sm.data.Servers, servers)
-
-	sm.data.LastUpdated = time.Now()
-	sm.data.Servers = cloneSubscriptionServers(servers)
-
-	newActive := 0
-	if activeIdentity != "" {
-		for i := range servers {
-			if ServerIdentity(servers[i]) == activeIdentity {
-				newActive = i
-				break
-			}
-		}
-	}
-	sm.data.ActiveID = newActive
-	for i := range sm.data.Servers {
-		sm.data.Servers[i].ID = i
-		sm.data.Servers[i].Active = i == newActive
-	}
-}
-
-// carryOverrides moves manual CountryOverride values by stable server identity.
-func carryOverrides(old, fresh []models.Server) {
-	if len(old) == 0 {
-		return
-	}
-	overrides := make(map[string]string, len(old))
-	for i := range old {
-		if key := ServerIdentity(old[i]); old[i].CountryOverride != "" && key != "" {
-			overrides[key] = old[i].CountryOverride
-		}
-	}
-	for i := range fresh {
-		if ov, ok := overrides[ServerIdentity(fresh[i])]; ok {
-			fresh[i].CountryOverride = ov
-		}
-	}
-}
-
 // GetData returns a copy of the subscription. Servers is deep-copied: otherwise
 // the caller would read the live slice unlocked, racing SetActive and friends.
 func (sm *SubscriptionManager) GetData() models.SubscriptionData {
@@ -256,16 +108,23 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	byURI := make(map[string]models.Server, len(checked))
+	type probeKey struct{ source, identity string }
+	results := make(map[probeKey]models.Server, len(checked))
 	for _, c := range checked {
 		if key := ServerIdentity(c); key != "" {
-			byURI[key] = c
+			results[probeKey{c.SourceID, key}] = c
 		}
 	}
 
 	now := time.Now()
 	for i := range sm.data.Servers {
-		if result, ok := byURI[ServerIdentity(sm.data.Servers[i])]; ok {
+		s := &sm.data.Servers[i]
+		identity := ServerIdentity(*s)
+		result, ok := results[probeKey{s.SourceID, identity}]
+		if !ok && s.SourceID == "legacy" {
+			result, ok = results[probeKey{"", identity}]
+		}
+		if ok {
 			if sm.data.Servers[i].ProbeKind == "https" && result.ProbeKind != "https" {
 				continue
 			}
@@ -285,14 +144,15 @@ func (sm *SubscriptionManager) SetCountryOverride(id int, country string) error 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if id < 0 || id >= len(sm.data.Servers) {
+	index := sm.serverIndexLocked(id)
+	if index < 0 {
 		return fmt.Errorf("сервер с id %d не найден", id)
 	}
 
-	previous := sm.data.Servers[id].CountryOverride
-	sm.data.Servers[id].CountryOverride = strings.ToUpper(strings.TrimSpace(country))
+	previous := sm.data.Servers[index].CountryOverride
+	sm.data.Servers[index].CountryOverride = strings.ToUpper(strings.TrimSpace(country))
 	if err := sm.saveLocked(); err != nil {
-		sm.data.Servers[id].CountryOverride = previous
+		sm.data.Servers[index].CountryOverride = previous
 		return err
 	}
 	return nil
@@ -303,11 +163,21 @@ func (sm *SubscriptionManager) SetActive(id int) (*models.Server, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if id < 0 || id >= len(sm.data.Servers) {
+	index := sm.serverIndexLocked(id)
+	if index < 0 {
 		return nil, fmt.Errorf("сервер с id %d не найден", id)
 	}
 
-	return sm.setActiveLocked(id)
+	return sm.setActiveLocked(index)
+}
+
+func (sm *SubscriptionManager) serverIndexLocked(id int) int {
+	for i, s := range sm.data.Servers {
+		if s.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // SetActiveByRawURI activates a server by its stable RawURI under a single lock.
@@ -365,17 +235,16 @@ func (sm *SubscriptionManager) GetActiveServer() *models.Server {
 
 // SelectNext switches to the next server in the list.
 func (sm *SubscriptionManager) SelectNext() (*models.Server, error) {
-	sm.mu.RLock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	count := len(sm.data.Servers)
-	current := sm.data.ActiveID
-	sm.mu.RUnlock()
 
 	if count == 0 {
 		return nil, fmt.Errorf("нет доступных серверов")
 	}
 
-	next := (current + 1) % count
-	return sm.SetActive(next)
+	next := (sm.data.ActiveID + 1) % count
+	return sm.setActiveLocked(next)
 }
 
 func cloneSubscriptionServer(server models.Server) models.Server {
@@ -394,6 +263,10 @@ func cloneSubscriptionServers(servers []models.Server) []models.Server {
 
 func cloneSubscriptionData(data models.SubscriptionData) models.SubscriptionData {
 	data.Servers = cloneSubscriptionServers(data.Servers)
+	data.Sources = append([]models.SubscriptionSource(nil), data.Sources...)
+	for i := range data.Sources {
+		data.Sources[i].Report = cloneSubscriptionImportReport(data.Sources[i].Report)
+	}
 	return data
 }
 
@@ -436,6 +309,7 @@ func (sm *SubscriptionManager) RestoreData(previous models.SubscriptionData) err
 	if subscriptionSnapshotKey(previous) == sm.rollbackSnapshotKey {
 		sm.importReport = cloneSubscriptionImportReport(sm.rollbackImportReport)
 	}
+	sm.migrateLegacyLocked()
 	if err := sm.saveLocked(); err != nil {
 		sm.data = &current
 		sm.importReport = currentReport

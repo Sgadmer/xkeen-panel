@@ -1,6 +1,8 @@
 export type Server = {
     id: number
     name: string
+    source_id?: string
+    source_name?: string
     address: string
     port: number
     protocol:
@@ -136,6 +138,26 @@ export type SubscriptionInfo = {
     last_updated: string
     server_count: number
     import_report?: ImportReport
+}
+
+export type ServerSource = {
+    id: string
+    name: string
+    kind: 'subscription' | 'file' | 'server'
+    host?: string
+    server_count: number
+    last_updated?: string
+    can_refresh: boolean
+    native_provider?: boolean
+}
+
+export type MultiPool = {
+    id: string
+    name: string
+    source_ids: string[]
+    countries?: string[]
+    member_count: number
+    eligible_count?: number
 }
 
 export type ImportReport = {

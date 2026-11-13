@@ -110,6 +110,8 @@ type User struct {
 // Server is one entry of the subscription.
 type Server struct {
 	ID              int             `json:"id"`
+	SourceID        string          `json:"source_id,omitempty"`
+	SourceName      string          `json:"source_name,omitempty"`
 	Name            string          `json:"name"`
 	Address         string          `json:"address"`
 	Port            int             `json:"port"`
@@ -129,11 +131,33 @@ type Server struct {
 
 // SubscriptionData is the stored subscription (data/subscription.json).
 type SubscriptionData struct {
-	URL         string    `json:"url"`
-	SourceKind  string    `json:"source_kind,omitempty"`
-	LastUpdated time.Time `json:"last_updated"`
-	Servers     []Server  `json:"servers"`
-	ActiveID    int       `json:"active_id"`
+	CatalogVersion int                  `json:"catalog_version,omitempty"`
+	NextServerID   int                  `json:"next_server_id,omitempty"`
+	Sources        []SubscriptionSource `json:"sources,omitempty"`
+	URL            string               `json:"url"`
+	SourceKind     string               `json:"source_kind,omitempty"`
+	LastUpdated    time.Time            `json:"last_updated"`
+	Servers        []Server             `json:"servers"`
+	ActiveID       int                  `json:"active_id"`
+}
+
+// URLs and the original node credentials are private router state. API views
+// project the source metadata explicitly.
+type SubscriptionSource struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Kind        string       `json:"kind"`
+	URL         string       `json:"url,omitempty"`
+	LastUpdated time.Time    `json:"last_updated"`
+	Report      ImportReport `json:"import_report"`
+}
+
+type ImportReport struct {
+	Imported           int      `json:"imported"`
+	ImportedProfiles   int      `json:"imported_profiles,omitempty"`
+	SkippedComposite   int      `json:"skipped_composite"`
+	SkippedUnsupported int      `json:"skipped_unsupported"`
+	Warnings           []string `json:"warnings,omitempty"`
 }
 
 // Status is the connection status reported to the UI.

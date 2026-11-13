@@ -12,6 +12,7 @@ import { Logo } from '@/components/logo'
 import {
     useDevices,
     useLogs,
+    useMultiPools,
     usePool,
     useServers,
     useStatus,
@@ -21,6 +22,7 @@ import {
 import { useServerActions } from '@/hooks/useServerActions'
 import {
     countryName,
+    countryFlag,
     panelEvents,
     serverCountry,
     statusInfo,
@@ -47,6 +49,8 @@ export function HomePage() {
     const code = serverCountry(current)
     const isPool = pool?.mode === 'pool'
     const isAuto = isPool && !pool?.pin_manual
+    const multiPools = useMultiPools(status?.core === 'mihomo' && !!pool?.pinned_tag).data
+    const activePool = multiPools?.find(item => item.id === pool?.pinned_tag)
     const events = panelEvents(logs, 5)
 
     const inVpn = devices?.devices.filter(d => d.vpn).length ?? 0
@@ -88,7 +92,7 @@ export function HomePage() {
                     <section className='flex flex-col gap-3.5 rounded-card bg-card p-[18px]'>
                         <div className='flex items-center gap-3.5'>
                             <div className='flex size-14 shrink-0 items-center justify-center rounded-2xl bg-white/8 text-[22px] font-bold tracking-[-0.5px]'>
-                                {code || '—'}
+                                {countryFlag(code) || code || '—'}
                             </div>
                             <div className='min-w-0'>
                                 <div className='truncate text-[22px] font-bold tracking-[-0.26px]'>
@@ -114,7 +118,7 @@ export function HomePage() {
                                         {pool?.pin_note ||
                                             (isAuto
                                                 ? `Самый быстрый из ${pool?.pool_tags?.length ?? 0} серверов пула`
-                                                : 'Сервер выбран вручную')}
+                                                : activePool ? 'Мультипул · ' + activePool.name : 'Сервер выбран вручную')}
                                     </div>
                                 </div>
                                 <Switch

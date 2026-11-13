@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { IconLoader2 } from '@tabler/icons-react'
 import { api } from '@/lib/api'
+import { invalidateServerData } from '@/hooks/useServerActions'
 import { safeNotice, importWarnings } from '@/lib/subscription'
 import type { SubscriptionUpdateResponse } from '@/types'
 
@@ -12,24 +13,25 @@ const labels: Record<SourceKind, string> = { subscription: 'Подписка', s
 export function ServerSourceForm({ onApplied }: { onApplied: (result: SubscriptionUpdateResponse) => void }) {
     const qc = useQueryClient()
     const [kind, setKind] = useState<SourceKind>('subscription')
+    const [name, setName] = useState('')
     const [value, setValue] = useState('')
     const [fileName, setFileName] = useState('')
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
     const [warnings, setWarnings] = useState<string[]>([])
-    const valid = kind === 'subscription' ? /^https?:\/\/\S+$/.test(value.trim()) : value.trim().length > 0
+    const valid = !!name.trim() && (kind === 'subscription' ? /^https?:\/\/\S+$/.test(value.trim()) : !!value.trim())
     function changeKind(next: SourceKind) { setKind(next); setValue(''); setFileName(''); setError(''); setWarnings([]) }
     async function submit(event: FormEvent) {
         event.preventDefault()
         if (busy || !valid) return
         setBusy(true); setError(''); setWarnings([])
         try {
-            const result = kind === 'subscription'
-                ? await api.post<SubscriptionUpdateResponse>('/api/subscription', { url: value.trim() })
-                : await api.post<SubscriptionUpdateResponse>('/api/sources/import', { kind, content: value.trim() })
+            const result = await api.post<SubscriptionUpdateResponse>('/api/sources', {
+                kind, name: name.trim(), ...(kind === 'subscription' ? { url: value.trim() } : { content: value.trim() }),
+            })
             if (result.pool_error) throw new Error('Серверы не удалось применить. Предыдущее подключение сохранено.')
             setValue(''); setFileName(''); setWarnings(importWarnings(result.import_report, result.warnings))
-            await Promise.all(['subscription', 'servers', 'status', 'pool', 'setup', 'routing-mode'].map(key => qc.invalidateQueries({ queryKey: [key] })))
+            await invalidateServerData(qc)
             onApplied(result)
         } catch (e) {
             setError(safeNotice(e instanceof Error ? e.message : undefined, 'Не удалось проверить и применить источник. Прежнее подключение сохранено.'))
@@ -40,6 +42,11 @@ export function ServerSourceForm({ onApplied }: { onApplied: (result: Subscripti
             {(Object.keys(labels) as SourceKind[]).map(id => <button key={id} type='button' disabled={busy} onClick={() => changeKind(id)} aria-pressed={kind === id}
                 className={`min-h-11 cursor-pointer rounded-lg px-2 text-[14px] ${kind === id ? 'bg-white/15 text-foreground' : 'text-muted-foreground'}`}>{labels[id]}</button>)}
         </div>
+        <label className='flex flex-col gap-1.5 text-[15px] font-medium'>
+            Название источника
+            <input value={name} onChange={event => setName(event.target.value)} disabled={busy} required maxLength={80}
+                placeholder='Например, основной провайдер' className='min-h-11 w-full rounded-xl border border-white/10 bg-fill px-3 text-[16px] outline-none focus:border-tint' />
+        </label>
         <p className='text-[14px] leading-snug text-muted-foreground'>
             {kind === 'subscription' ? 'Ссылка https:// от VPN-провайдера или уже настроенного сервера. Список будет обновляться автоматически.'
                 : kind === 'server' ? 'Готовая ссылка vless://, vmess://, trojan://, ss:// или другого поддерживаемого протокола. Одного IP-адреса VPS недостаточно.'
@@ -63,7 +70,7 @@ export function ServerSourceForm({ onApplied }: { onApplied: (result: Subscripti
         {error && <p role='alert' className='text-[14px] text-destructive'>{error}</p>}
         {warnings.length > 0 && <p role='status' className='text-[14px] text-muted-foreground'>{warnings.join(' ')}</p>}
         <button type='submit' disabled={busy || !valid} className='flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-[16px] font-semibold text-primary-foreground disabled:opacity-50'>
-            {busy && <IconLoader2 className='size-5 animate-spin' />}{busy ? 'Проверяем HTTPS и применяем…' : 'Проверить и подключить'}
+            {busy && <IconLoader2 className='size-5 animate-spin' />}{busy ? 'Добавляем источник…' : 'Добавить источник'}
         </button>
         <p className='text-[13px] text-muted-foreground'>{kind !== 'subscription' && 'Ручной источник не обновляется по расписанию. '}Ссылки и ключи хранятся только локально на роутере.</p>
     </form>

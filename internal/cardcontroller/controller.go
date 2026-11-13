@@ -35,17 +35,18 @@ type View struct {
 }
 
 type Controller struct {
-	mu             sync.Mutex
-	path           string
-	stateDir       string
-	rt             xkeen.Runtime
-	catalog        func() []models.Server
-	http           *http.Client
-	validate       func(context.Context, string) error
-	prepare        func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
-	pending        map[string]bool
-	avoidCountries func() []string
-	autoAllowed    func(models.Server) bool
+	mu                 sync.Mutex
+	path               string
+	stateDir           string
+	rt                 xkeen.Runtime
+	catalog            func() []models.Server
+	http               *http.Client
+	validate           func(context.Context, string) error
+	prepare            func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
+	pending            map[string]bool
+	avoidCountries     func() []string
+	autoAllowed        func(models.Server) bool
+	sourceProviderURLs func() map[string]string
 }
 
 func New(configPath, stateDir string, rt xkeen.Runtime, catalog func() []models.Server) *Controller {
@@ -135,6 +136,7 @@ type profile struct {
 	raw      []byte
 	doc      map[string]interface{}
 	assigned map[string]string
+	pools    []MultiPool
 	api      coreAPI
 }
 
@@ -160,6 +162,10 @@ func (c *Controller) read() (profile, error) {
 	}
 	if mode, _ := p.doc["mode"].(string); !strings.EqualFold(mode, "rule") {
 		return p, errors.New("Mihomo должен работать в режиме правил")
+	}
+	p.pools, err = readPools(p.doc)
+	if err != nil {
+		return p, err
 	}
 	if raw, ok := p.doc[stateKey]; ok {
 		m, ok := raw.(map[string]interface{})
@@ -207,6 +213,9 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		return View{}, err
 	}
 	result := View{ServiceRoutesView: view, Scope: "mihomo", ActiveConnectionsPending: len(c.pending) > 0}
+	for _, pool := range p.pools {
+		result.Targets = append(result.Targets, xkeen.ServiceTarget{ID: pool.ID, Name: pool.Name, Kind: "pool"})
+	}
 	result.GuardReady = false // packet-level fail-closed is independently verified.
 	live, err := p.api.selectors(ctx)
 	result.ControllerReady = err == nil && p.api.ruleMode(ctx)
@@ -220,6 +229,15 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 	names := make(map[string]string, len(result.Targets))
 	for _, t := range result.Targets {
 		names[nodePrefix+t.ID] = t.Name
+	}
+	for _, value := range list(p.doc["proxies"]) {
+		name := str(object(value)["name"])
+		id, generation, found := strings.Cut(strings.TrimPrefix(name, nodePrefix), "-")
+		if found && validHash(generation) {
+			if pool := p.pool(id); pool != nil {
+				names[name] = pool.Name
+			}
+		}
 	}
 	var providerNodes map[string]selector
 	for i := range result.Services {
@@ -248,14 +266,18 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		if s.Target == directTarget {
 			target = "DIRECT"
 		}
-		if len(group.All) != 1 || group.All[0] != group.Now || (group.Now != target && !s.Blocked) {
+		matches := group.Now == target
+		if s.Target != directTarget {
+			matches = p.endpointName(s.Target, group.Now)
+		}
+		if len(group.All) != 1 || group.All[0] != group.Now || (!matches && !s.Blocked) {
 			result.Active = false
 		}
 		if s.Blocked {
 			s.RouteName = "REJECT"
 		} else if target == "DIRECT" && group.Now == target {
 			s.RouteName = "DIRECT"
-		} else if group.Now == target {
+		} else if matches {
 			for _, t := range result.Targets {
 				if t.ID == s.Target {
 					s.RouteName = t.Name
@@ -337,11 +359,13 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 		}
 	}
 	if target != "" && target != directTarget {
-		if _, ok := catalog[target]; !ok {
+		if _, ok := catalog[target]; !ok && p.pool(target) == nil {
 			return View{}, errors.New("сервер исчез из подписки")
 		}
 	}
-	peers := map[string]xkeen.CardProxy{}
+	peers := map[string]cardEndpoint{}
+	workers := map[string]xkeen.CardProxy{}
+	var nodes []poolNode
 	keys := []string{}
 	for _, key := range p.assigned {
 		if key != directTarget {
@@ -354,17 +378,39 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 			continue
 		}
 		s, ok := catalog[key]
+		workerID := key
+		endpoint := nodePrefix + key
+		if pool := p.pool(key); pool != nil {
+			if nodes == nil {
+				nodes = c.poolNodes(servers)
+			}
+			members := pool.members(nodes)
+			if len(members) == 0 {
+				continue
+			}
+			s, err = xkeen.MultiPoolProfile(members)
+			if err != nil {
+				return View{}, err
+			}
+			workerID = xkeen.ServiceTargetID(s)
+			endpoint += "-" + workerID
+			ok = true
+		}
 		if !ok {
 			continue
 		}
-		peer, err := c.prepare(c.rt, key, s)
-		if err != nil {
-			if target == key {
-				return View{}, errors.New("не удалось запустить выбранный защищённый сервер")
+		peer, started := workers[workerID]
+		if !started {
+			peer, err = c.prepare(c.rt, workerID, s)
+			if err != nil {
+				if target == key {
+					return View{}, errors.New("не удалось запустить выбранный защищённый маршрут")
+				}
+				continue
 			}
-			continue
+			workers[workerID] = peer
 		}
-		peers[key] = peer
+		peers[key] = cardEndpoint{CardProxy: peer, name: endpoint}
 	}
 	view, err := xkeen.ReadServiceRoutes(c.rt, servers)
 	if err != nil {
@@ -421,10 +467,8 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	result.ActiveConnectionsPending = len(c.pending) > 0
 	if result.Active && !result.ActiveConnectionsPending {
 		keep := map[string]bool{}
-		for _, key := range p.assigned {
-			if key != directTarget {
-				keep[key] = true
-			}
+		for key := range workers {
+			keep[key] = true
 		}
 		_ = xkeen.PruneCardProxies(c.rt, keep)
 	}

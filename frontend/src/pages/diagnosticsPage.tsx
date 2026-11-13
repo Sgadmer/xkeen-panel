@@ -6,12 +6,11 @@ import {
     IconAlertCircleFilled,
 } from '@tabler/icons-react'
 import { Group, PageTitle, Row } from '@/components/ios'
+import { RouterActivity } from '@/components/routerActivity'
 import { useLogs, usePool, useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { isSet, timeAgo } from '@/lib/format'
 import type { PoolSyncResult, SelfTestResult, Status } from '@/types'
-
-const back = { to: '/settings', label: 'Настройки' }
 
 type Verdict = 'ok' | 'bad' | 'unknown'
 
@@ -109,7 +108,6 @@ export function DiagnosticsPage() {
         <>
             <PageTitle
                 title='Диагностика'
-                back={back}
                 subtitle={
                     checked
                         ? `Последняя проверка ${timeAgo(s?.last_check)} назад`
@@ -117,6 +115,7 @@ export function DiagnosticsPage() {
                 }
             />
 
+            <RouterActivity />
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <div className='flex flex-col gap-5'>
                     <Group

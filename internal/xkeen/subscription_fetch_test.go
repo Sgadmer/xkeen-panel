@@ -376,7 +376,7 @@ func TestSubscriptionSnapshotsDeepCopyRawOutbounds(t *testing.T) {
 	}
 	input := []models.Server{{RawURI: "xray-json://test", RawOutbound: append(json.RawMessage(nil), raw...)}}
 	sm.mu.Lock()
-	sm.applyRefreshLocked(input)
+	sm.replaceSourceServersLocked(sm.data.Sources[0], input)
 	sm.mu.Unlock()
 	input[0].RawOutbound[0] = '!'
 	if !json.Valid(sm.GetServers()[0].RawOutbound) {
