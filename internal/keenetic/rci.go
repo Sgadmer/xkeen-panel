@@ -4,6 +4,7 @@ package keenetic
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,7 +86,11 @@ func statusError(v interface{}) string {
 }
 
 func (c *Client) do(method, path string, payload []byte, v interface{}) error {
-	req, err := http.NewRequest(method, c.base+"/rci/"+path, bytes.NewReader(payload))
+	return c.doContext(context.Background(), method, path, payload, v)
+}
+
+func (c *Client) doContext(ctx context.Context, method, path string, payload []byte, v interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, method, c.base+"/rci/"+path, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

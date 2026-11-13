@@ -24,6 +24,12 @@ export function passkeySupported(): boolean {
     )
 }
 
+export function isIOSDevice(): boolean {
+    if (typeof navigator === 'undefined') return false
+    return /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+}
+
 // registerPasskey runs the passkey registration ceremony (requires a session).
 export async function registerPasskey(): Promise<void> {
     /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -38,7 +44,7 @@ export async function registerPasskey(): Promise<void> {
     const cred = (await navigator.credentials.create({
         publicKey: pk,
     })) as PublicKeyCredential | null
-    if (!cred) throw new Error('passkey не создан')
+    if (!cred) throw new Error('Ключ доступа не создан')
 
     const resp = cred.response as AuthenticatorAttestationResponse
     await api.post('/api/account/passkey/register/finish', {
@@ -65,7 +71,7 @@ export async function getPasskeyToken(): Promise<string> {
     const cred = (await navigator.credentials.get({
         publicKey: pk,
     })) as PublicKeyCredential | null
-    if (!cred) throw new Error('passkey не получен')
+    if (!cred) throw new Error('Не удалось получить ключ доступа')
 
     const resp = cred.response as AuthenticatorAssertionResponse
     const data = await api.post<{ token: string }>(

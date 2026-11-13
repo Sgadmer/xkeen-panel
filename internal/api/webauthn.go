@@ -34,6 +34,7 @@ type WebAuthnHandler struct {
 	userManager *auth.UserManager
 	rateLimiter *RateLimiter
 	cfg         *models.Config
+	FaceID      *PanelFaceID
 
 	mu       sync.Mutex
 	sessions map[string]webAuthnSession
@@ -60,6 +61,13 @@ func (h *WebAuthnHandler) webAuthn(r *http.Request) (*webauthn.WebAuthn, error) 
 		name = "XKeen Panel"
 	}
 
+	if rpID == "" && h.FaceID != nil && !hasExplicitWebAuthn(h.cfg) {
+		u, err := h.FaceID.verifiedURL(r.Context())
+		if err != nil {
+			return nil, err
+		}
+		rpID, origins = u.Hostname(), []string{u.String()}
+	}
 	if rpID == "" {
 		if !h.cfg.TrustProxyHeaders {
 			return nil, fmt.Errorf("passkey не настроен: задайте webauthn_rp_id (или trust_proxy_headers за доверенным прокси)")
@@ -88,6 +96,7 @@ func (h *WebAuthnHandler) webAuthn(r *http.Request) (*webauthn.WebAuthn, error) 
 		RPDisplayName: name,
 		RPOrigins:     origins,
 		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			ResidentKey:      protocol.ResidentKeyRequirementPreferred,
 			UserVerification: protocol.VerificationRequired,
 		},
 	})
@@ -152,21 +161,20 @@ func (h *WebAuthnHandler) takeSession(id string) *webauthn.SessionData {
 	return s.data
 }
 
-func (h *WebAuthnHandler) setCeremonyCookie(w http.ResponseWriter, r *http.Request, name, path, id string) {
-	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+func (h *WebAuthnHandler) setCeremonyCookie(w http.ResponseWriter, name, path, id string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    id,
 		Path:     path,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(webAuthnSessionTTL.Seconds()),
 	})
 }
 
 func clearCeremonyCookie(w http.ResponseWriter, name, path string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Path: path, MaxAge: -1, HttpOnly: true})
+	http.SetCookie(w, &http.Cookie{Name: name, Path: path, MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
 }
 
 func cookieValue(r *http.Request, name string) string {
@@ -212,7 +220,7 @@ func (h *WebAuthnHandler) HandleRegisterBegin(w http.ResponseWriter, r *http.Req
 		return
 	}
 	h.putSession(id, session)
-	h.setCeremonyCookie(w, r, registerCookie, registerPath, id)
+	h.setCeremonyCookie(w, registerCookie, registerPath, id)
 	writeJSON(w, http.StatusOK, options)
 }
 
@@ -280,7 +288,7 @@ func (h *WebAuthnHandler) HandleLoginBegin(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.putSession(id, session)
-	h.setCeremonyCookie(w, r, loginCookie, loginPath, id)
+	h.setCeremonyCookie(w, loginCookie, loginPath, id)
 	writeJSON(w, http.StatusOK, options)
 }
 

@@ -79,6 +79,14 @@ func TestMihomoPanelKeepsSettingsAndNavigation(t *testing.T) {
 			t.Fatalf("missing protected route %s (HTTP %d)", path, w.Code)
 		}
 	}
+	for _, check := range []struct{ method, path string }{
+		{"GET", "/api/access/face-id/plan?label=example"},
+		{"POST", "/api/access/face-id/prepare"},
+	} {
+		if w := ask(check.method, check.path, "", false); w.Code != http.StatusUnauthorized {
+			t.Fatalf("HTTPS setup must require panel authentication: %s %s returned %d", check.method, check.path, w.Code)
+		}
+	}
 	w = ask("GET", "/api/panel/settings", "", true)
 	var saved api.PanelSettings
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.RefreshMinutes != 60 {

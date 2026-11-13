@@ -188,7 +188,7 @@ export function SettingsPage() {
                         )
                     }
                 >
-                    <Row icon={icon('#0a84ff', IconWand)} label='Вход с ПК и телефона' hint='Адрес панели, QR-код и приложение на iPhone' to='/settings/access' />
+                    <Row icon={icon('#0a84ff', IconWand)} label='Вход с ПК и телефона' hint='HTTPS-адрес панели, QR-код и Face ID на iPhone' to='/settings/access' />
                     <Row
                         icon={icon('#8e8e93', IconDownload)}
                         label='Обновление панели'
@@ -224,8 +224,8 @@ export function SettingsPage() {
                             }
                         />
                     ) : !passkeySupported() ? (
-                        <Row icon={icon('#30d158', IconFingerprint)} label='Как подключить Face ID'
-                            hint='Откройте панель по HTTPS в Safari на iPhone' to='/settings/access#face-id' />
+                        <Row icon={icon('#30d158', IconFingerprint)} label='Настроить Face ID на iPhone'
+                            hint='Получить HTTPS-адрес панели для Safari' to='/settings/access#face-id' />
                     ) : (
                         <Row
                             icon={icon('#30d158', IconFingerprint)}

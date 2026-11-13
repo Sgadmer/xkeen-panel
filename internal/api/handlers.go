@@ -20,6 +20,7 @@ import (
 
 type Handlers struct {
 	Cards        *cardcontroller.Controller
+	FaceID       *PanelFaceID
 	config       *models.Config
 	subscription *xkeen.SubscriptionManager
 	watchdog     *monitor.Watchdog

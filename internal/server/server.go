@@ -25,6 +25,7 @@ import (
 type Server struct {
 	Cards        *cardcontroller.Controller
 	CardsHost    string
+	CardsListen  string
 	config       *models.Config
 	userManager  *auth.UserManager
 	subscription *xkeen.SubscriptionManager
@@ -85,6 +86,10 @@ func (s *Server) Handler() http.Handler {
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool, s.geoip)
 	handlers.Cards = s.Cards
+	if s.Cards != nil {
+		handlers.FaceID = api.NewPanelFaceID(s.config, s.CardsListen, devicesHandler)
+		webAuthnHandler.FaceID = handlers.FaceID
+	}
 	componentsHandler := api.NewComponentsHandler(handlers)
 
 	// API routes
@@ -93,6 +98,9 @@ func (s *Server) Handler() http.Handler {
 		// Authentication, no JWT required
 		r.Route("/auth", func(r chi.Router) {
 			r.Get("/status", authHandler.HandleAuthStatus)
+			if handlers.FaceID != nil {
+				r.Get("/address-proof", handlers.FaceID.AddressProof)
+			}
 			r.Post("/setup", authHandler.HandleSetup)
 			r.Post("/setup/confirm", authHandler.HandleSetupConfirm)
 			r.With(api.RateLimitMiddleware(rateLimiter, s.config.TrustProxyHeaders)).Post("/login", authHandler.HandleLogin)
@@ -116,6 +124,8 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/status", handlers.HandleStatus)
 			r.Get("/diagnostics", api.NewDiagnosticsHandler(s.Cards))
 			r.Get("/access", handlers.HandlePanelAccess)
+			r.Get("/access/face-id/plan", handlers.HandlePlanFaceID)
+			r.Post("/access/face-id/prepare", handlers.HandlePrepareFaceID)
 			r.Post("/sources/import", handlers.HandleImportSource)
 			r.Get("/sources", handlers.HandleSources)
 			r.Post("/sources", handlers.HandleAddSource)

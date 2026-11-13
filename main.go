@@ -313,6 +313,9 @@ func main() {
 	// HTTP server
 	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, geoMatcher, eventBus, upd, panelSettings, frontendFS)
 	srv.Cards, srv.CardsHost = cards, cardsHost
+	if cards != nil {
+		srv.CardsListen = listenAddr
+	}
 	httpServer := &http.Server{
 		Addr:              listenAddr,
 		ReadHeaderTimeout: 5 * time.Second,
