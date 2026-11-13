@@ -105,6 +105,12 @@ func (h *Handlers) applySubscription(servers []models.Server, resp map[string]in
 	}
 	rt := h.detector.Runtime()
 	needsRestart := false
+	if xkeen.ServiceRoutesArmed(rt) {
+		needsRestart, err = xkeen.ReconcileServiceRoutes(rt, h.config.OutboundsFile, servers, "", "")
+		if err != nil {
+			return err
+		}
+	}
 	bootstrapped, err := h.bootstrapIfEmpty(servers)
 	switch {
 	case err != nil:
@@ -345,6 +351,8 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 
 	// Write the core config and validate it before restarting — a broken config
 	// would otherwise leave XKeen unable to start
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	if err := xkeen.ApplyServer(rt, h.config.OutboundsFile, server); err != nil {
 		log.Printf("[SELECT] Ошибка применения конфига: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -481,10 +489,12 @@ func (h *Handlers) HandleSetCountry(w http.ResponseWriter, r *http.Request) {
 
 // HandleRestart — POST /api/xkeen/restart
 func (h *Handlers) HandleRestart(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	rt := h.detector.Runtime()
 	log.Printf("[RESTART-API] Кнопка рестарта нажата, xkeen=%s", rt.Dispatcher)
 
-	output, err := xkeen.Restart(rt.Dispatcher)
+	output, err := xkeen.RestartAndWait(rt.Dispatcher)
 	if err != nil {
 		log.Printf("[RESTART-API] Ошибка: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -504,6 +514,8 @@ func (h *Handlers) HandleRestart(w http.ResponseWriter, r *http.Request) {
 
 // HandleStart — POST /api/xkeen/start
 func (h *Handlers) HandleStart(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	output, err := xkeen.Start(h.detector.Runtime().Dispatcher)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -518,6 +530,8 @@ func (h *Handlers) HandleStart(w http.ResponseWriter, r *http.Request) {
 
 // HandleStop — POST /api/xkeen/stop
 func (h *Handlers) HandleStop(w http.ResponseWriter, r *http.Request) {
+	h.watchdog.LockChanges()
+	defer h.watchdog.UnlockChanges()
 	output, err := xkeen.Stop(h.detector.Runtime().Dispatcher)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{

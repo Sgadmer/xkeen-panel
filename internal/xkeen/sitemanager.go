@@ -22,9 +22,11 @@ type SiteManager struct {
 	apiAddr       string
 	timeout       time.Duration
 
-	Restart func()
-	Notify  func()
-	Logf    func(format string, args ...interface{})
+	Restart      func()
+	LockConfig   func()
+	UnlockConfig func()
+	Notify       func()
+	Logf         func(format string, args ...interface{})
 
 	work      sync.Mutex
 	mu        sync.Mutex
@@ -180,6 +182,10 @@ func (m *SiteManager) check(id int) {
 }
 
 func (m *SiteManager) applyLocked() error {
+	if m.LockConfig != nil {
+		m.LockConfig()
+		defer m.UnlockConfig()
+	}
 	top := m.detector.Topology()
 	restart, err := ApplySites(m.detector.Runtime(), SiteApply{
 		OutboundsPath: m.outboundsPath,

@@ -149,6 +149,7 @@ export type SubscriptionUpdateResponse = {
 }
 
 export type AuthStatus = {
+    cards_panel?: boolean
     setup_required: boolean
     passkey_enabled?: boolean
 }

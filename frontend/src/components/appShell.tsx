@@ -7,6 +7,7 @@ import {
     IconDeviceDesktop,
     IconDeviceDesktopFilled,
     IconLoader2,
+    IconLayoutGrid,
     IconRefresh,
     IconSettings,
     IconSettingsFilled,
@@ -27,6 +28,7 @@ import { cn } from '@/lib/utils'
 const TABS: { to: string; label: string; icon: Icon; active: Icon }[] = [
     { to: '/', label: 'Главная', icon: IconShield, active: IconShieldFilled },
     { to: '/servers', label: 'Серверы', icon: IconWorld, active: IconWorld },
+    { to: '/services', label: 'Сервисы', icon: IconLayoutGrid, active: IconLayoutGrid },
     {
         to: '/devices',
         label: 'Устройства',
@@ -166,12 +168,12 @@ export function AppShell() {
                 </div>
             </main>
 
-            <div className='fixed inset-x-4 bottom-[max(16px,env(safe-area-inset-bottom))] z-20 lg:hidden'>
+            <div className='fixed inset-x-1 bottom-[max(16px,env(safe-area-inset-bottom))] z-20 sm:inset-x-4 lg:hidden'>
                 <Glass className='rounded-full'>
                     <nav
                         ref={tabbarRef}
                         aria-label='Разделы'
-                        className='relative grid h-16 grid-cols-5 p-1.5'
+                        className='relative grid h-16 grid-cols-6 p-1.5'
                     >
                         <span
                             aria-hidden

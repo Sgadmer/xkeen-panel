@@ -1,0 +1,7 @@
+#!/bin/sh
+case "${1:-}" in
+    start|restart|reload) exec /opt/sbin/xkeen-panel-guard apply-api ;;
+    status) exec /opt/sbin/xkeen-panel-guard check-api ;;
+    stop) exit 0 ;; # Keep the firewall in place through service/Entware restarts.
+    *) exit 2 ;;
+esac

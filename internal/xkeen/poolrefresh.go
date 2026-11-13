@@ -43,6 +43,7 @@ func RefreshPool(rt Runtime, outboundsPath, apiAddr string, servers []models.Ser
 	if err != nil {
 		return result, err
 	}
+	sel = sel.withManualPoolPin(state)
 	wanted := SelectPoolServers(servers, sel.WithCurrentPool(current))
 
 	matches, err := PoolMatchesSubscription(outboundsPath, wanted, selector)

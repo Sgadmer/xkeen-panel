@@ -17,6 +17,7 @@ var (
 	restartMu            sync.Mutex
 	restarting           bool
 	OnRestartStateChange func(restarting bool)
+	BeforeServiceControl func() error
 
 	runningMu        sync.Mutex
 	runningCached    bool
@@ -41,6 +42,12 @@ const (
 func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string, error) {
 	if dispatcher == "" {
 		return "", fmt.Errorf("путь к xkeen не задан")
+	}
+	controlled := len(args) > 0 && (args[0] == "-restart" || args[0] == "-stop" || args[0] == "-start")
+	if controlled && BeforeServiceControl != nil {
+		if err := BeforeServiceControl(); err != nil {
+			return "", err
+		}
 	}
 
 	out, err := os.CreateTemp("", "xkeen-out-*")
@@ -68,6 +75,9 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 		return text, fmt.Errorf("команда xkeen %s не завершилась за %s", strings.Join(args, " "), timeout)
 	}
 
+	if runErr == nil && controlled && BeforeServiceControl != nil {
+		runErr = BeforeServiceControl()
+	}
 	return text, runErr
 }
 

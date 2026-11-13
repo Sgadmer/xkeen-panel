@@ -202,7 +202,7 @@ func SyncPool(rt Runtime, outboundsPath string, servers []models.Server, state P
 	}
 
 	_, template := findProxyOutbound(outbounds)
-	nodes, err := buildSubscriptionPool(servers, sel, state.Selector, template, layout)
+	nodes, err := buildSubscriptionPool(servers, sel.withManualPoolPin(state), state.Selector, template, layout)
 	if err != nil {
 		return err
 	}
@@ -220,6 +220,9 @@ func SyncPool(rt Runtime, outboundsPath string, servers []models.Server, state P
 // file back — a partial apply is what leaves XKeen unable to start.
 func applyConfigs(rt Runtime, writes map[string]map[string]interface{}) error {
 	if err := applyRoutingPolicy(rt, writes); err != nil {
+		return err
+	}
+	if err := applyServiceRoutes(rt, writes); err != nil {
 		return err
 	}
 	written := make([]string, 0, len(writes))

@@ -129,6 +129,29 @@ func countryCodeOf(geoip []byte) string {
 	return cc
 }
 
+// DatCategories returns the group names present in a local GeoSiteList. Both
+// GeoSiteList and GeoIPList store the group name in field 1 of each entry.
+func DatCategories(path string) map[string]bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	groups := map[string]bool{}
+	if !walk(data, func(field, wire int, _ uint64, entry []byte) bool {
+		if field == 1 && wire == 2 {
+			groups[strings.ToLower(countryCodeOf(entry))] = true
+		}
+		return true
+	}) {
+		return nil
+	}
+	return groups
+}
+
 // addEntry parses the CIDRs (field 2) of a GeoIP message and stores the ranges.
 func (m *Matcher) addEntry(geoip []byte, cc string) {
 	walk(geoip, func(field, wire int, _ uint64, ld []byte) bool {

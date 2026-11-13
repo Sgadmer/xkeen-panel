@@ -1,0 +1,541 @@
+// Package cardcontroller manages the named service routes in an already
+// running Mihomo instance using its authenticated loopback controller.
+package cardcontroller
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
+	"xkeen-panel/internal/models"
+	"xkeen-panel/internal/xkeen"
+)
+
+type View struct {
+	xkeen.ServiceRoutesView
+	Scope                    string `json:"scope"`
+	ControllerReady          bool   `json:"controller_ready"`
+	ActiveConnectionsPending bool   `json:"active_connections_pending,omitempty"`
+}
+
+type Controller struct {
+	mu       sync.Mutex
+	path     string
+	stateDir string
+	rt       xkeen.Runtime
+	catalog  func() []models.Server
+	http     *http.Client
+	validate func(context.Context, string) error
+	prepare  func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
+	pending  map[string]bool
+}
+
+func New(configPath, stateDir string, rt xkeen.Runtime, catalog func() []models.Server) *Controller {
+	// PrepareCardProxy owns its isolated runtime namespace and still has
+	// access to the existing Xray asset directory and sibling executable.
+	rt.MihomoConf = configPath
+	c := &Controller{path: configPath, stateDir: stateDir, rt: rt, catalog: catalog, prepare: xkeen.PrepareCardProxy, pending: map[string]bool{}}
+	c.http = &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	c.validate = func(ctx context.Context, path string) error {
+		cmd := exec.CommandContext(ctx, "/opt/sbin/mihomo", "-t", "-d", filepath.Dir(configPath), "-f", path)
+		if cmd.Run() != nil {
+			return errors.New("Mihomo отклонил конфигурацию карточек")
+		}
+		return nil
+	}
+	return c
+}
+
+type coreAPI struct {
+	base, secret string
+	client       *http.Client
+}
+
+func (a coreAPI) request(ctx context.Context, method, path string, body, result interface{}) error {
+	var payload io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		payload = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, a.base+path, payload)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.secret)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := a.client.Do(req)
+	if err != nil {
+		return errors.New("локальный API Mihomo недоступен")
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("локальный API Mihomo ответил HTTP %d", res.StatusCode)
+	}
+	if result != nil {
+		return json.NewDecoder(io.LimitReader(res.Body, 20<<20)).Decode(result)
+	}
+	return nil
+}
+
+type selector struct {
+	Type string
+	Now  string
+	All  []string
+}
+
+func (a coreAPI) selectors(ctx context.Context) (map[string]selector, error) {
+	var resp struct{ Proxies map[string]selector }
+	if err := a.request(ctx, "GET", "/proxies", nil, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Proxies == nil {
+		return nil, errors.New("контроллер не вернул маршруты")
+	}
+	return resp.Proxies, nil
+}
+func (a coreAPI) ruleMode(ctx context.Context) bool {
+	var status struct{ Mode string }
+	return a.request(ctx, "GET", "/configs", nil, &status) == nil && strings.EqualFold(status.Mode, "rule")
+}
+func (a coreAPI) reload(ctx context.Context, path string) error {
+	return a.request(ctx, "PUT", "/configs?force=true", map[string]string{"path": path}, nil)
+}
+
+const stateKey = "x-xkeen-panel-routes"
+const cardPrefix = "XKP-card-"
+const nodePrefix = "XKP-endpoint-"
+const directTarget = "direct"
+
+func validAssignment(service, target string) bool {
+	return validHash(target) || service != "claude" && target == directTarget
+}
+
+type profile struct {
+	raw      []byte
+	doc      map[string]interface{}
+	assigned map[string]string
+	api      coreAPI
+}
+
+func (c *Controller) read() (profile, error) {
+	p := profile{assigned: map[string]string{}}
+	st, err := os.Lstat(c.path)
+	if err != nil || !st.Mode().IsRegular() || st.Size() > 32<<20 {
+		return p, errors.New("обычный файл конфигурации Mihomo недоступен")
+	}
+	p.raw, err = os.ReadFile(c.path)
+	if err != nil {
+		return p, err
+	}
+	if err = yaml.Unmarshal(p.raw, &p.doc); err != nil || p.doc == nil {
+		return p, errors.New("не удалось прочитать YAML Mihomo")
+	}
+	addr, _ := p.doc["external-controller"].(string)
+	host, port, err := net.SplitHostPort(addr)
+	ip, e := netip.ParseAddr(host)
+	secret, _ := p.doc["secret"].(string)
+	if err != nil || e != nil || !ip.IsLoopback() || port == "" || secret == "" {
+		return p, errors.New("нужен защищённый паролем локальный контроллер Mihomo")
+	}
+	if mode, _ := p.doc["mode"].(string); !strings.EqualFold(mode, "rule") {
+		return p, errors.New("Mihomo должен работать в режиме правил")
+	}
+	if raw, ok := p.doc[stateKey]; ok {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			return p, errors.New("повреждены назначения карточек")
+		}
+		for id, v := range m {
+			val, ok := v.(string)
+			if !ok || !validAssignment(id, val) || groupNames[id] == "" {
+				return p, errors.New("повреждено назначение карточки")
+			}
+			p.assigned[id] = val
+		}
+	}
+	p.api = coreAPI{"http://" + net.JoinHostPort(host, port), secret, c.http}
+	return p, nil
+}
+func validHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, v := range s {
+		if !(v >= 'a' && v <= 'f' || v >= '0' && v <= '9') {
+			return false
+		}
+	}
+	return true
+}
+func list(v interface{}) []interface{}            { a, _ := v.([]interface{}); return a }
+func str(v interface{}) string                    { s, _ := v.(string); return s }
+func object(v interface{}) map[string]interface{} { m, _ := v.(map[string]interface{}); return m }
+
+func (c *Controller) View(ctx context.Context) (View, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.view(ctx)
+}
+func (c *Controller) view(ctx context.Context) (View, error) {
+	p, err := c.read()
+	if err != nil {
+		return View{}, err
+	}
+	view, err := xkeen.ReadServiceRoutes(c.rt, c.catalog())
+	if err != nil {
+		return View{}, err
+	}
+	result := View{ServiceRoutesView: view, Scope: "mihomo", ActiveConnectionsPending: len(c.pending) > 0}
+	result.GuardReady = false // packet-level fail-closed is independently verified.
+	live, err := p.api.selectors(ctx)
+	result.ControllerReady = err == nil && p.api.ruleMode(ctx)
+	_, managed := p.doc[stateKey]
+	result.Active = managed && result.ControllerReady && p.api.rulesReady(ctx, p.doc)
+	for i := range result.Services {
+		s := &result.Services[i]
+		s.Target = p.assigned[s.ID]
+		s.Blocked = false
+		if !managed || s.ID != "claude" && s.Target == "" {
+			s.RouteName = live[groupNames[s.ID]].Now
+			continue
+		}
+		group := live[cardPrefix+s.ID]
+		s.Blocked = result.ControllerReady && len(group.All) == 1 && group.Now == "REJECT"
+		target := nodePrefix + s.Target
+		if s.Target == directTarget {
+			target = "DIRECT"
+		}
+		if len(group.All) != 1 || group.All[0] != group.Now || (group.Now != target && !s.Blocked) {
+			result.Active = false
+		}
+		if s.Blocked {
+			s.RouteName = "REJECT"
+		} else if target == "DIRECT" && group.Now == target {
+			s.RouteName = "DIRECT"
+		} else if group.Now == target {
+			for _, t := range result.Targets {
+				if t.ID == s.Target {
+					s.RouteName = t.Name
+					break
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func (c *Controller) Set(ctx context.Context, id, target string) (View, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if groupNames[id] == "" || target != "" && !validAssignment(id, target) || id == "claude" && target == "" {
+		return View{}, errors.New("недопустимый сервис или сервер")
+	}
+	return c.apply(ctx, id, target, nil)
+}
+func (c *Controller) Reconcile(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return err
+	}
+	if _, enabled := p.doc[stateKey]; !enabled {
+		return nil
+	}
+	_, err = c.apply(ctx, "", "", nil)
+	return err
+}
+
+func (c *Controller) apply(ctx context.Context, id, target string, withListener func(*profile) error) (View, error) {
+	p, err := c.read()
+	if err != nil {
+		return View{}, err
+	}
+	if withListener != nil {
+		if err = withListener(&p); err != nil {
+			return View{}, err
+		}
+	}
+	if !p.api.ruleMode(ctx) {
+		return View{}, errors.New("локальный контроллер не подтверждает режим правил")
+	}
+	selections, err := p.api.selectors(ctx)
+	if err != nil {
+		return View{}, err
+	}
+	if id != "" {
+		if target == "" {
+			delete(p.assigned, id)
+		} else {
+			p.assigned[id] = target
+		}
+	}
+	servers := c.catalog()
+	catalog := map[string]models.Server{}
+	for _, s := range servers {
+		if key := xkeen.ServiceTargetID(s); key != "" {
+			catalog[key] = s
+		}
+	}
+	if target != "" && target != directTarget {
+		if _, ok := catalog[target]; !ok {
+			return View{}, errors.New("сервер исчез из подписки")
+		}
+	}
+	peers := map[string]xkeen.CardProxy{}
+	keys := []string{}
+	for _, key := range p.assigned {
+		if key != directTarget {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		if i > 0 && key == keys[i-1] {
+			continue
+		}
+		s, ok := catalog[key]
+		if !ok {
+			continue
+		}
+		peer, err := c.prepare(c.rt, key, s)
+		if err != nil {
+			if target == key {
+				return View{}, errors.New("не удалось запустить выбранный защищённый сервер")
+			}
+			continue
+		}
+		peers[key] = peer
+	}
+	view, err := xkeen.ReadServiceRoutes(c.rt, servers)
+	if err != nil {
+		return View{}, err
+	}
+	expected, err := render(&p, view.Services, peers)
+	if err != nil {
+		return View{}, err
+	}
+	body, err := yaml.Marshal(p.doc)
+	if err != nil {
+		return View{}, errors.New("не удалось сериализовать правила")
+	}
+	// Compare decoded documents as well: a refresh should not rewrite merely
+	// because the owner's indentation or ordering differs from yaml.Marshal.
+	var original map[string]interface{}
+	_ = yaml.Unmarshal(p.raw, &original)
+	var candidate map[string]interface{}
+	_ = yaml.Unmarshal(body, &candidate)
+	if !reflect.DeepEqual(original, candidate) || !groupsReady(selections, expected) || !p.api.rulesReady(ctx, candidate) {
+		if err = c.install(ctx, p, body, candidate, selections, expected); err != nil {
+			return View{}, err
+		}
+	}
+	result, err := c.view(ctx)
+	if err != nil {
+		return View{}, err
+	}
+	for _, service := range view.Services {
+		name := cardPrefix + service.ID
+		want := expected[name]
+		previous, exists := selections[name]
+		if c.pending[service.ID] || (want != "" || exists) && (previous.Now != want || service.ID == id) {
+			if !c.drain(ctx, p.api, service.ID, want, view.Services) {
+				c.pending[service.ID] = true
+			} else {
+				delete(c.pending, service.ID)
+			}
+		}
+	}
+	result.ActiveConnectionsPending = len(c.pending) > 0
+	if result.Active && !result.ActiveConnectionsPending {
+		keep := map[string]bool{}
+		for _, key := range p.assigned {
+			if key != directTarget {
+				keep[key] = true
+			}
+		}
+		_ = xkeen.PruneCardProxies(c.rt, keep)
+	}
+	return result, nil
+}
+
+func stage(dir string, raw []byte) (string, error) {
+	f, err := os.CreateTemp(dir, ".panel-card-*.yaml")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	defer f.Close()
+	if _, err = f.Write(raw); err == nil {
+		err = f.Sync()
+	}
+	if err == nil {
+		err = f.Close()
+	}
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func groupsReady(live map[string]selector, expected map[string]string) bool {
+	for name, v := range expected {
+		g := live[name]
+		if !strings.EqualFold(g.Type, "selector") || g.Now != v || len(g.All) != 1 || g.All[0] != v {
+			return false
+		}
+	}
+	return true
+}
+func restoreSelectors(ctx context.Context, a coreAPI, before, after map[string]selector) error {
+	for name, g := range before {
+		if strings.HasPrefix(name, cardPrefix) || !strings.EqualFold(g.Type, "selector") || g.Now == "" {
+			continue
+		}
+		newGroup, exists := after[name]
+		if !exists {
+			return errors.New("исчезла исходная группа Mihomo")
+		}
+		if newGroup.Now != g.Now {
+			if err := a.request(ctx, "PUT", "/proxies/"+url.PathEscape(name), map[string]string{"name": g.Now}, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Controller) keepOriginal(raw []byte) error {
+	if err := os.MkdirAll(c.stateDir, 0700); err != nil {
+		return err
+	}
+	backup := filepath.Join(c.stateDir, "before-mihomo-service-routes.yaml")
+	if info, err := os.Lstat(backup); err == nil {
+		if info.Mode().IsRegular() {
+			return nil
+		}
+		return errors.New("путь резервной конфигурации занят")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	file, err := stage(c.stateDir, raw)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file)
+	return os.Rename(file, backup)
+}
+
+// The controller's live rule list must start with exactly the managed groups
+// compiled into this configuration, before any pre-existing direct rule.
+func (a coreAPI) rulesReady(ctx context.Context, doc map[string]interface{}) bool {
+	var response struct {
+		Rules []struct {
+			Proxy   string
+			Payload string
+			Extra   struct{ Disabled bool }
+		}
+	}
+	if a.request(ctx, "GET", "/rules", nil, &response) != nil {
+		return false
+	}
+	count := 0
+	entries, _, err := managedExclusions(doc)
+	if err != nil {
+		return false
+	}
+	manual := map[string]bool{}
+	for _, e := range entries.Entries {
+		manual[exclusionRule(e)] = true
+	}
+	for i, raw := range list(doc["rules"]) {
+		parts, end := targetPart(str(raw))
+		if end < 1 || !strings.HasPrefix(parts[end], cardPrefix) && !manual[str(raw)] {
+			continue
+		}
+		if i >= len(response.Rules) {
+			return false
+		}
+		actual := response.Rules[i]
+		if actual.Proxy != parts[end] || actual.Extra.Disabled {
+			return false
+		}
+		switch parts[0] {
+		case "DOMAIN", "DOMAIN-SUFFIX", "IP-CIDR", "IP-CIDR6":
+			if !strings.EqualFold(actual.Payload, parts[1]) {
+				return false
+			}
+		}
+		count++
+	}
+	return count > 0
+}
+
+func (c *Controller) install(ctx context.Context, p profile, body []byte, candidate map[string]interface{}, selections map[string]selector, expected map[string]string) error {
+	dir := filepath.Dir(c.path)
+	next, err := stage(dir, body)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(next)
+	if err = c.validate(ctx, next); err != nil {
+		return err
+	}
+	if _, managed := p.doc[stateKey]; managed {
+		if err = c.keepOriginal(p.raw); err != nil {
+			return errors.New("не удалось сохранить исходную конфигурацию Mihomo")
+		}
+	}
+	prior, err := stage(dir, p.raw)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(prior)
+	disk, err := os.ReadFile(c.path)
+	if err != nil || !bytes.Equal(disk, p.raw) {
+		return errors.New("конфигурация изменена параллельно")
+	}
+	if err = os.Rename(next, c.path); err != nil {
+		return err
+	}
+	fail := func() error {
+		recovery, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		if os.Rename(prior, c.path) != nil || p.api.reload(recovery, c.path) != nil {
+			return errors.New("исходное состояние Mihomo не восстановлено")
+		}
+		live, e := p.api.selectors(recovery)
+		if e != nil || restoreSelectors(recovery, p.api, selections, live) != nil {
+			return errors.New("исходные выборы Mihomo не подтверждены")
+		}
+		return errors.New("проверка маршрутов не прошла; восстановлен прежний профиль")
+	}
+	if p.api.reload(ctx, c.path) != nil {
+		return fail()
+	}
+	after, err := p.api.selectors(ctx)
+	if err != nil || !groupsReady(after, expected) || !p.api.rulesReady(ctx, candidate) || restoreSelectors(ctx, p.api, selections, after) != nil || !p.api.ruleMode(ctx) {
+		return fail()
+	}
+	return nil
+}

@@ -28,6 +28,16 @@ type PoolSelection struct {
 	// Keep holds the endpoints already in the pool. They stay in it as long as
 	// they answer, so ordinary latency jitter cannot reshuffle membership.
 	Keep map[endpoint]bool
+	// Preserve a manually chosen *pool* member across refresh; the dedicated
+	// manual slot has its own lifetime and must not enter the ordinary pool.
+	pinnedMember string
+}
+
+func (sel PoolSelection) withManualPoolPin(state PoolState) PoolSelection {
+	if state.PinManual && state.PinnedTag != "" && state.PinnedTag != ManualTag {
+		sel.pinnedMember = state.PinnedNode
+	}
+	return sel
 }
 
 // SelectPoolServers filters and ranks the subscription for pool membership:
@@ -43,6 +53,7 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 	}
 
 	var allowed []models.Server
+	var pinned []models.Server
 	for _, server := range servers {
 		// A provider profile owns its own balancing and routing. Selecting it
 		// explicitly must never nest that policy inside the ordinary auto pool.
@@ -50,6 +61,10 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 			continue
 		}
 		if !CanBuildServer(server) {
+			continue
+		}
+		if sel.pinnedMember != "" && NodeKeyOfServer(server) == sel.pinnedMember {
+			pinned = append(pinned, server)
 			continue
 		}
 		// Keep failed nodes in the subscription for manual selection, but do
@@ -63,12 +78,16 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 		allowed = append(allowed, server)
 	}
 	allowed = uniqueEndpoints(allowed)
+	if len(pinned) > 0 {
+		pinned = uniqueEndpoints(pinned)
+		max -= len(pinned)
+	}
 
-	if len(allowed) == 0 {
-		return nil
+	if len(allowed) == 0 || max <= 0 {
+		return pinned
 	}
 	if len(allowed) <= max && sel.ProbeTimeout <= 0 {
-		return allowed
+		return append(pinned, allowed...)
 	}
 
 	ranked := sel.rankByLatency(allowed)
@@ -77,7 +96,7 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 		ranked = ranked[:max]
 	}
 
-	return ranked
+	return append(pinned, ranked...)
 }
 
 // Providers list one endpoint under several names (an expiry date, a news channel), which took several pool slots

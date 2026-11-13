@@ -1,10 +1,12 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, NavLink, Outlet } from 'react-router-dom'
+import { Logo } from '@/components/logo'
 import { useEffect, useState } from 'react'
 import { SetupPage } from '@/pages/setupPage'
 import { LoginPage } from '@/pages/loginPage'
 import { AppShell } from '@/components/appShell'
 import { HomePage } from '@/pages/homePage'
 import { ServersPage } from '@/pages/serversPage'
+import { ServiceRoutesPage, CardSubscriptionPage } from '@/pages/serviceRoutesPage'
 import { DevicesPage } from '@/pages/devicesPage'
 import { ExclusionsPage } from '@/pages/exclusionsPage'
 import { SettingsPage } from '@/pages/settingsPage'
@@ -41,7 +43,31 @@ export function App() {
     return (
         <BrowserRouter>
             <Routes>
-                {authStatus?.setup_required ? (
+                {authStatus?.cards_panel ? (
+                    <>
+                        <Route path='/login' element={<LoginPage />} />
+                        <Route element={
+                            <ProtectedRoute>
+                                <main className='mx-auto flex min-h-dvh max-w-5xl flex-col gap-5 px-4 py-6'>
+                                    <div aria-hidden className='bg-page fixed inset-0 -z-10' />
+                                    <header className='flex flex-wrap items-center justify-between gap-3'>
+                                        <div className='flex items-center gap-2 text-base font-semibold'><Logo size={30} /> XKeen Panel</div>
+                                        <nav aria-label='Разделы' className='flex gap-1 rounded-full bg-card p-1'>
+                                            {Object.entries({'/services':'Сервисы','/servers':'Серверы','/exclusions':'Исключения'}).map(([to,label]) =>
+                                                <NavLink key={to} to={to} className={({isActive}) => 'rounded-full px-3 py-2 text-sm ' + (isActive ? 'bg-fill font-semibold text-tint' : 'text-muted-foreground')}>{label}</NavLink>)}
+                                        </nav>
+                                    </header>
+                                    <Outlet />
+                                </main>
+                            </ProtectedRoute>
+                        }>
+                            <Route path='/services' element={<ServiceRoutesPage />} />
+                            <Route path='/servers' element={<CardSubscriptionPage />} />
+                            <Route path='/exclusions' element={<ExclusionsPage />} />
+                        </Route>
+                        <Route path='*' element={<Navigate to='/services' replace />} />
+                    </>
+                ) : authStatus?.setup_required ? (
                     <>
                         <Route path='/setup' element={<SetupPage />} />
                         <Route path='*' element={<Navigate to='/setup' />} />
@@ -66,6 +92,7 @@ export function App() {
                         >
                             <Route index element={<HomePage />} />
                             <Route path='servers' element={<ServersPage />} />
+                            <Route path='services' element={<ServiceRoutesPage />} />
                             <Route path='devices' element={<DevicesPage />} />
                             <Route path='exclusions' element={<ExclusionsPage />} />
                             <Route path='settings' element={<SettingsPage />} />

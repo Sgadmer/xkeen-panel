@@ -1,5 +1,7 @@
 * text=auto
 *.sh text eol=lf
+installer/S01xkeen-panel-guard text eol=lf
+installer/S98xkeen-service-cards text eol=lf
 *.py text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf

@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+umask 077
+export PATH=/opt/bin:/opt/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+bin=/opt/sbin/xkeen-service-cards
+cfg=/opt/etc/xkeen-panel/config.yaml
+pidfile=/opt/var/run/xkeen-service-cards.pid
+log=/opt/var/log/xkeen-service-cards.log
+# Installed with the private LAN address confirmed by the operator.
+listen=192.168.1.1:3000
+owned() {
+    [ -f "$pidfile" ] || return 1
+    p=$(cat "$pidfile")
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$(readlink "/proc/$p/exe" 2>/dev/null)" = "$bin" ] &&
+        tr '\000' '\n' < "/proc/$p/cmdline" | grep -qx -- '-cards-listen'
+}
+case "${1:-}" in
+    start)
+        owned && exit 0
+        mkdir -p /opt/var/run /opt/var/log
+        if netstat -lnt | awk '$4 ~ /:3000$/ {found=1} END {exit !found}'; then
+            echo 'Port 3000 already in use' >&2
+            exit 1
+        fi
+        nohup "$bin" -config "$cfg" -cards-listen "$listen" >> "$log" 2>&1 </dev/null &
+        p=$!
+        printf '%s\n' "$p" > "$pidfile"
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            owned || exit 1
+            if curl --noproxy '*' -fsS --max-time 2 "http://$listen/api/auth/status" 2>/dev/null | grep -q '"cards_panel":true'; then exit 0; fi
+            sleep 1
+        done
+        exit 1 ;;
+    stop)
+        if owned; then
+            kill "$p"
+            for i in 1 2 3 4 5 6 7 8 9 10; do owned || break; sleep 1; done
+            if owned; then exit 1; fi
+        fi ;;
+    status) owned ;;
+    restart) "$0" stop && "$0" start ;;
+    *) exit 2 ;;
+esac

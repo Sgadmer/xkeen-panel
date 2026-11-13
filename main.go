@@ -36,6 +36,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "путь к конфигурационному файлу")
 	showVersion := flag.Bool("version", false, "вывести версию и выйти")
 	demoMode := flag.Bool("demo", false, "обезличенная демонстрация интерфейса на 127.0.0.1:3300")
+	cardsListen := flag.String("cards-listen", "", "адрес панели сервисов для работающего Mihomo в домашней сети")
 	flag.Parse()
 
 	// The updater runs the new binary with -version before switching to it
@@ -50,6 +51,12 @@ func main() {
 		}
 		log.Print("Демонстрационные данные: http://127.0.0.1:3300; роутер не используется")
 		log.Fatal(http.ListenAndServe("127.0.0.1:3300", demo.Handler(frontend)))
+	}
+	if *cardsListen != "" {
+		if err := runCardsPanel(*configPath, *cardsListen); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	if rule, ok := localtz.Apply("/etc/localtime"); ok {
@@ -118,10 +125,23 @@ func main() {
 	sites.Logf = watchdog.Log
 	sites.Notify = func() { eventBus.Publish(sse.Event{Type: "sites", Data: struct{}{}}) }
 	sites.Restart = func() { go watchdog.RestartCore() }
+	sites.LockConfig, sites.UnlockConfig = watchdog.LockChanges, watchdog.UnlockChanges
 
 	// Package xkeen logs to stdout by default, which the init script discards —
 	// send its pool and restart events to the panel log instead
 	xkeen.Log = watchdog.Log
+	// Every dispatcher entry point, including the watchdog, must verify the
+	// independent network policy before a stop, start or restart can run.
+	xkeen.BeforeServiceControl = func() error {
+		runtime := detector.Runtime()
+		if xkeen.ServiceRoutesArmed(runtime) && !xkeen.ServiceGuardReady(runtime) {
+			return fmt.Errorf("защита выбранных сервисов не подтверждена")
+		}
+		return nil
+	}
+	if err := api.NewHandlers(cfg, subManager, watchdog, detector, poolStore, nil).InitializeServiceRoutes(); err != nil {
+		log.Printf("Восстановление маршрутов сервисов не подтверждено: %v", err)
+	}
 
 	// Both migrations need a core restart; doing them together keeps it to one
 	restartCore := false

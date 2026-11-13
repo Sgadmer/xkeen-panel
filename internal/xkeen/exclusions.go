@@ -213,6 +213,10 @@ func WriteExclusionsConfig(rt Runtime, entries Exclusions) error {
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	if ServiceRoutesArmed(rt) {
+		// Commit the exclusions and the high-priority protected rules together.
+		return applyConfigs(rt, map[string]map[string]interface{}{path: doc})
+	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err

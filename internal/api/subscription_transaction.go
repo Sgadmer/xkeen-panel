@@ -55,6 +55,7 @@ func (h *Handlers) snapshotSubscriptionApply() (*subscriptionApplySnapshot, erro
 	paths := []string{h.config.OutboundsFile, rt.RoutingFile, snapshot.pool.RoutingFile,
 		xkeen.ExclusionsConfigPath(rt), xkeen.ExclusionsPath(h.config.DataDir),
 		xkeen.RoutingPolicyPath(rt),
+		xkeen.ServiceRoutesPath(rt), xkeen.ServiceFragmentPath(rt),
 		xkeen.ProfileStatePath(h.config.OutboundsFile),
 		filepath.Join(rt.XrayConfDir, "00_api.json"), filepath.Join(rt.XrayConfDir, "00_panel_probe.json"),
 		filepath.Join(h.config.DataDir, "pool.json"), filepath.Join(h.config.DataDir, "subscription.json")}

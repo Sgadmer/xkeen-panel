@@ -257,7 +257,7 @@ func applyRoutingPolicy(rt Runtime, writes map[string]map[string]interface{}) er
 			if ob["protocol"] == "freedom" && !IsProfileInternalTag(tag) && (direct == "" || tag == "direct") {
 				direct = tag
 			}
-			if !isServiceOutbound(ob) && !IsProfileInternalTag(tag) && tag != "" {
+			if !isServiceOutbound(ob) && !IsProfileInternalTag(tag) && !strings.HasPrefix(tag, servicePrefix) && tag != "" {
 				proxyTags[tag] = true
 			}
 		}
