@@ -11,7 +11,6 @@ import {
     IconDownload,
     IconFingerprint,
     IconWand,
-    IconLayoutGrid,
 } from '@tabler/icons-react'
 import { Group, IconTile, PageTitle, Row, Switch } from '@/components/ios'
 import {
@@ -152,7 +151,6 @@ export function SettingsPage() {
 
                 <Group title='XKeen'>
                     <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint='Выбранные сервисы или весь трафик' to='/settings/routing' />
-                    <Row icon={icon('#5856d6', IconLayoutGrid)} label='Маршруты сервисов' hint='Сервер или профиль подписки для каждого сервиса' to='/services' />
                     <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint='Версии XKeen/Xray, обновления и геоданные' to='/settings/components' />
                     <Row
                         icon={icon('#30d158', IconArrowsExchange)}

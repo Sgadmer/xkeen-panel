@@ -1,7 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconLoader2 } from '@tabler/icons-react'
-import { Link } from 'react-router-dom'
 import { Group, PageTitle } from '@/components/ios'
 import { api } from '@/lib/api'
 import { safeNotice } from '@/lib/subscription'
@@ -46,7 +45,6 @@ export function RoutingModeForm({ onApplied }: { onApplied?: () => void }) {
     return <form onSubmit={submit} className='flex flex-col gap-5'>
         {query.data?.profile_active && <Group><p className='py-4 text-[14px] text-muted-foreground'>Этот профиль содержит свои правила. Для ручного режима выберите обычный сервер в разделе «Серверы». До этого доступно сохранение провайдерской политики.</p></Group>}
         {unsupported && <p role='alert' className='px-4 text-destructive'>Выбор режимов доступен при использовании ядра Xray.</p>}
-        {query.data?.core === 'mihomo' && <Link className='px-4 text-tint' to='/services'>Маршруты сервисов в Mihomo →</Link>}
         <Group title='Как направлять трафик'>
             {choices.map(choice => <label key={choice.id} className='flex cursor-pointer items-start gap-3 py-4'>
                 <input type='radio' name='routing-mode' value={choice.id} checked={mode === choice.id} onChange={() => { setMode(choice.id); setConfirmed(false); setNotice('') }}

@@ -120,7 +120,7 @@ export function ServiceRoutesPage() {
 
     return (
         <>
-            <PageTitle title='Маршруты сервисов' back={{ to: '/settings', label: 'Настройки' }} subtitle='Выберите для сервиса отдельный сервер или сборный профиль из подписки.' />
+            <PageTitle title='Маршруты сервисов' subtitle='Выберите для сервиса отдельный сервер или сборный профиль из подписки.' />
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
             {view && (
