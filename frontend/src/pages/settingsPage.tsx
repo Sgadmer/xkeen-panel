@@ -110,6 +110,7 @@ export function SettingsPage() {
                     <Row
                         icon={icon('#ff453a', IconBan)}
                         label='Не выбирать страны'
+                        hint={status?.core === 'mihomo' ? 'Фильтр для автовыбора Xray. В Mihomo состав группы задаёт её источник.' : undefined}
                         detail={avoid.length ? avoid.join(', ') : 'Нет'}
                         onClick={() => setSheet('countries')}
                         disabled={!settings.data}
