@@ -2,11 +2,16 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import { Group, Row, Switch } from '@/components/ios'
 import { api } from '@/lib/api'
 
-type Override = 'on' | 'off'
-type Policy = { enabled: boolean; services: Record<string, Override> | null }
-type Change = { enabled: boolean } | { service_id: string; mode: Override | 'inherit' }
+type ServiceMode = 'on' | 'off' | 'inherit'
+type Policy = { enabled: boolean; services: Record<string, ServiceMode> | null }
+type Change = { enabled: boolean } | { service_id: string; mode: ServiceMode }
 const key = ['kill-switch']
 const path = '/api/kill-switch'
+
+export function serviceKillSwitch(policy: Policy, id: string) {
+    const mode = policy.services?.[id] ?? 'on'
+    return { mode, enabled: mode === 'inherit' ? policy.enabled : mode === 'on' }
+}
 
 export function useKillSwitch(enabled = true) {
     const client = useQueryClient()
@@ -27,7 +32,7 @@ export function GlobalKillSwitch() {
     return (
         <Group title='Защита VPN' footer={policy.error
             ? <span role='alert' className='text-destructive'>{policy.error.message}</span>
-            : 'В карточке каждого сервиса можно выбрать своё правило. Прямые маршруты продолжают работать.'}>
+            : 'В карточках сервисов по умолчанию выбрано «Всегда включён». Общий переключатель действует на карточки с режимом «Как в настройках» и на основной VPN-маршрут.'}>
             <Row label='Kill switch' hint={policy.data?.enabled === false
                 ? 'При отказе VPN разрешён запасной прямой выход.'
                 : 'Блокировать прямой выход, если выбранный VPN недоступен.'}
@@ -46,7 +51,7 @@ export function ServiceKillSwitch({ policy, id, name }: {
     return (
         <label className='mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-separator pt-2 text-sm'>
             <span className='font-medium'>Kill switch</span>
-            <select aria-label={'Kill switch · ' + name} value={policy.data.services?.[id] ?? 'inherit'} disabled={policy.busy}
+            <select aria-label={'Kill switch · ' + name} value={serviceKillSwitch(policy.data, id).mode} disabled={policy.busy}
                 className='min-h-10 max-w-full cursor-pointer rounded-lg bg-fill px-2 text-sm text-foreground disabled:opacity-60'
                 onChange={event => {
                     const mode = event.target.value

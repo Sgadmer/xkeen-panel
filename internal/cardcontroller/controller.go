@@ -356,17 +356,8 @@ func (c *Controller) CheckCoreInterruption() error {
 		if err != nil {
 			return err
 		}
-		if !policy.Enabled {
-			protected := false
-			for id := range policy.Services {
-				if policy.Protects(id) && p.assigned[id] != directTarget {
-					protected = true
-					break
-				}
-			}
-			if !protected {
-				return nil
-			}
+		if !policy.hasProtectedRoute(p) {
+			return nil
 		}
 		return errors.New("Kill switch включён. Остановка или перезапуск XKeen снимет перехват защищённых маршрутов")
 	}

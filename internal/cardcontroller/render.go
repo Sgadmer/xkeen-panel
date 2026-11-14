@@ -146,7 +146,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	if err != nil {
 		return nil, err
 	}
-	if err := protectNativeGroups(groups, nodes, policy); err != nil {
+	if err := protectNativeGroups(groups, nodes, policy.hasProtectedRoute(*p)); err != nil {
 		return nil, err
 	}
 	native := map[string]bool{}
@@ -293,14 +293,14 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		// take over a more specific existing group. Keep the original group
 		// for those destination matches in the same specific-first order.
 		protectChild := key == "" && (id == "youtube" && p.assigned["google"] != "" || id == "primevideo" && p.assigned["amazon"] != "" || id == "openai" && p.assigned["ai"] != "")
-		hasOverride := policy.Services[id] != ""
+		hasOverride := (policy.Services[id] == "off" || policy.Services[id] == "on") && (registry.Enabled || policy.Enabled)
 		// A kill-switch override controls failure handling, not whether an
 		// otherwise unassigned service should be sent through the VPN.
-		registryOverride := registry.Enabled && id != "claude" && key == "" && hasOverride
+		registryOverride := registry.Enabled && id != "claude" && key == "" && (hasOverride || policy.Protects(id) != policy.Enabled)
 		if registry.Enabled && id != "claude" && key == "" && !registryOverride {
 			continue
 		}
-		if key == "" && id != "claude" && !protectChild && !hasOverride {
+		if key == "" && id != "claude" && !protectChild && !hasOverride && !registryOverride {
 			continue
 		}
 		name := cardPrefix + id
@@ -319,7 +319,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 				}
 			}
 			if !classified {
-				if !hasOverride {
+				if !hasOverride && !registryOverride {
 					continue
 				}
 				route = defaultTarget
@@ -472,9 +472,29 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 			"MATCH,"+direct)
 	}
 	found := false
+	guard, err := prepareServiceGuard(p.doc, services, policy, p.assigned, !registry.Enabled && !policy.Enabled)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range original[head:] {
 		parts, end := targetPart(r)
 		dst := parts[end]
+		selectedDefault := parts[0] == "MATCH" && defaultKey != ""
+		if !selectedDefault && native[dst] || selectedDefault && defaultKey != directTarget {
+			if predicate := guard.predicate(parts, end); predicate != "" {
+				route := dst
+				if selectedDefault {
+					route = defaultTarget
+				}
+				sum := sha256.Sum256([]byte(route))
+				name := fmt.Sprintf("%sstrict-%x", cardPrefix, sum[:16])
+				if expected[name] == "" {
+					groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{route}})
+					expected[name] = route
+				}
+				rules = append(rules, predicate+","+name, predicate+","+rejectGroup)
+			}
+		}
 		if parts[0] == "MATCH" && defaultKey != "" {
 			parts[end] = cardPrefix + defaultID
 			rules = append(rules, strings.Join(parts, ","))
@@ -586,6 +606,10 @@ func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, exp
 	if api.request(ctx, "GET", "/connections", nil, &snapshot) != nil {
 		return false
 	}
+	policy, err := readKillSwitch(doc)
+	if err != nil {
+		return false
+	}
 	protectedAuto := map[string]bool{}
 	direct := map[string]bool{"DIRECT": true, "COMPATIBLE": true}
 	for _, value := range list(doc["proxies"]) {
@@ -602,6 +626,19 @@ func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, exp
 	}
 	for _, flow := range snapshot.Connections {
 		stale, fromAuto, wentDirect := false, false, false
+		// A general fallback remains available for other destinations after
+		// a card becomes strict. Drain established direct fallback sockets for
+		// this service without touching traffic explicitly routed to DIRECT.
+		if len(flow.Chains) >= 2 && direct[flow.Chains[0]] && strings.HasPrefix(flow.Chains[1], failoverPrefix) {
+			id := xkeen.ServiceForHost(flow.Metadata.Host)
+			if id == "" {
+				id = xkeen.ServiceForHost(flow.Metadata.SniffHost)
+			}
+			if id == "" {
+				id = diagnosticServiceTags[expected[flow.Chains[1]]]
+			}
+			stale = id != "" && policy.Protects(id)
+		}
 		for _, chain := range flow.Chains {
 			fromAuto = fromAuto || protectedAuto[chain]
 			wentDirect = wentDirect || direct[chain]

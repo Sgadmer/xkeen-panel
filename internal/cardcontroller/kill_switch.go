@@ -39,7 +39,7 @@ func readKillSwitch(doc map[string]interface{}) (KillSwitch, error) {
 	policy.Enabled = enabled
 	for id, value := range services {
 		mode := str(value)
-		if groupNames[id] == "" || (mode != "on" && mode != "off") {
+		if groupNames[id] == "" || (mode != "on" && mode != "off" && mode != "inherit") {
 			return policy, errors.New("повреждена настройка Kill switch сервиса")
 		}
 		policy.Services[id] = mode
@@ -47,15 +47,55 @@ func readKillSwitch(doc map[string]interface{}) (KillSwitch, error) {
 	return policy, nil
 }
 
-// Protects resolves the per-service override, falling back to the router setting.
+// A service follows the router setting only when the user chooses inherit.
 func (p KillSwitch) Protects(id string) bool {
-	switch p.Services[id] {
-	case "on":
+	if groupNames[id] == "" || p.Services[id] == "inherit" {
+		return p.Enabled
+	}
+	return p.Services[id] != "off"
+}
+
+func (p KillSwitch) hasProtectedRoute(config profile) bool {
+	// An unassigned Claude card blocks its traffic until a VPN is selected.
+	// Removing interception would release those blocked connections.
+	if p.Enabled || p.Protects("claude") {
 		return true
-	case "off":
+	}
+	inherited := false
+	for id := range groupNames {
+		if !p.Protects(id) || config.assigned[id] == directTarget {
+			continue
+		}
+		if config.assigned[id] != "" {
+			return true
+		}
+		inherited = true
+	}
+	if !inherited {
 		return false
 	}
-	return p.Enabled
+	registry, err := readRefilter(config.doc)
+	if err != nil || registry.Enabled || config.assigned[defaultID] != "" {
+		return true
+	}
+	// Generated rules have an owner rule or card assignment as their source.
+	// A profile whose owner rules all lead directly to MATCH,DIRECT offers no
+	// VPN route to its unassigned cards. Treat ambiguous profiles conservatively.
+	hasDirectDefault := false
+	for _, rule := range namesOf(config.doc["rules"]) {
+		fields, end := targetPart(rule)
+		switch {
+		case end < 1:
+			return true
+		case strings.HasPrefix(fields[end], cardPrefix):
+			continue
+		case fields[end] != "DIRECT":
+			return true
+		case end == 1 && fields[0] == "MATCH":
+			hasDirectDefault = true
+		}
+	}
+	return !hasDirectDefault
 }
 
 func (c *Controller) KillSwitch() (KillSwitch, error) {
@@ -87,8 +127,6 @@ func (c *Controller) SetKillSwitch(ctx context.Context, enabled *bool, id, mode 
 	before := policy.Protects("claude")
 	if enabled != nil {
 		policy.Enabled = *enabled
-	} else if mode == "inherit" {
-		delete(policy.Services, id)
 	} else {
 		policy.Services[id] = mode
 	}

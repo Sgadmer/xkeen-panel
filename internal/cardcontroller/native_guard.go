@@ -22,11 +22,7 @@ func namesOf(value interface{}) []string {
 // A manual selector may intentionally be set to DIRECT. But an automatic
 // group must never select such a member on its own when the VPN fails.
 // Keep original fields so disabling the protection restores provider behavior.
-func protectNativeGroups(groups, nodes []interface{}, policy KillSwitch) error {
-	protect := policy.Enabled
-	for _, mode := range policy.Services {
-		protect = protect || mode == "on"
-	}
+func protectNativeGroups(groups, nodes []interface{}, protect bool) error {
 	index := map[string]map[string]interface{}{}
 	direct := map[string]bool{"DIRECT": true, "PASS": true, "COMPATIBLE": true, "GLOBAL": true}
 	for _, raw := range nodes {

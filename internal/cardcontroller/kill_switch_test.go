@@ -125,6 +125,14 @@ func TestKillSwitchRealMihomoPolicy(t *testing.T) {
 			t.Fatal("protected request reached the direct destination")
 		}
 	}
+	desired = false
+	set(&desired, "", "")
+	reject()
+	initial, err := c.KillSwitch()
+	if err != nil || initial.Enabled || !initial.Protects("openai") || initial.Services["openai"] != "" {
+		t.Fatalf("initial card policy: %+v, %v", initial, err)
+	}
+	desired = true
 	set(&desired, "", "")
 	live, err := p.api.selectors(ctx)
 	if err != nil || strings.Join(live["Inner"].All, ",") != "Dead" {
@@ -154,8 +162,9 @@ func TestKillSwitchRealMihomoPolicy(t *testing.T) {
 	}
 	set(nil, "openai", "inherit")
 	waitDirect()
-	if err := c.CheckCoreInterruption(); err != nil {
-		t.Fatal(err)
+	policy, err := c.KillSwitch()
+	if err != nil || policy.Services["openai"] != "inherit" || policy.Protects("openai") || !policy.Protects("claude") {
+		t.Fatalf("explicit inherit did not round-trip: %+v, %v", policy, err)
 	}
 	// A CONNECT remains live across a config reload on several Mihomo builds.
 	// Once protection returns, the old connection must stop delivering bytes.
@@ -235,5 +244,91 @@ func TestKillSwitchRefilterConditionalRuleIsAccepted(t *testing.T) {
 	output, err := exec.Command(core, "-t", "-d", dir, "-f", path).CombinedOutput()
 	if err != nil || bytes.Contains(output, []byte("error")) {
 		t.Fatalf("conditional routing rule rejected: %s", output)
+	}
+}
+
+func TestKillSwitchCardDefaultsKeepOwnerDestinations(t *testing.T) {
+	card := func(id, domain string) xkeen.ServiceRouteView {
+		return xkeen.ServiceRouteView{RoutingService: xkeen.RoutingService{ID: id, Domains: []string{"domain:" + domain}}}
+	}
+	services := []xkeen.ServiceRouteView{card("youtube", "video.example"), card("google", "example"), card("openai", "chat.test")}
+	owner := []interface{}{"DOMAIN,other.test,VPN1", "DOMAIN,local.example,DIRECT", "DOMAIN,blocked.example,REJECT", "DOMAIN-SUFFIX,example,VPN2", "MATCH,VPN1"}
+	doc := map[string]interface{}{
+		"mode": "rule", "rules": owner,
+		"proxies": []interface{}{
+			map[string]interface{}{"name": "VPN1", "type": "http", "server": "127.0.0.1", "port": 1},
+			map[string]interface{}{"name": "VPN2", "type": "http", "server": "127.0.0.1", "port": 2},
+		},
+		killSwitchKey: map[string]interface{}{"enabled": false, "services": map[string]interface{}{"youtube": "inherit"}},
+	}
+	p := profile{doc: doc, assigned: map[string]string{}}
+	expected, err := render(&p, services, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := namesOf(doc["rules"])
+	ownerDirect := slices.Index(rules, "DOMAIN,local.example,DIRECT")
+	ownerBlock := slices.Index(rules, "DOMAIN,blocked.example,REJECT")
+	site := "AND,((DOMAIN-SUFFIX,example),(RULE-SET," + strictDomains + ")),"
+	index := slices.IndexFunc(rules, func(rule string) bool { return strings.HasPrefix(rule, site) })
+	if ownerDirect < 0 || ownerBlock < ownerDirect || index <= ownerBlock || expected[strings.TrimPrefix(rules[index], site)] != "VPN2" || rules[index+1] != site+cardPrefix+"reject" {
+		t.Fatalf("owner destination or ordering changed: %v", rules)
+	}
+	match := "RULE-SET," + strictDomains + ","
+	index = slices.IndexFunc(rules, func(rule string) bool { return strings.HasPrefix(rule, match) })
+	if index < 0 || expected[strings.TrimPrefix(rules[index], match)] != "VPN1" || rules[index+1] != match+cardPrefix+"reject" {
+		t.Fatalf("missing strict service fallback on owner MATCH: %v", rules)
+	}
+	providers := object(doc["rule-providers"])
+	payload := namesOf(object(providers[strictDomains])["payload"])
+	if !slices.Contains(payload, "AND,((DOMAIN-SUFFIX,example),(NOT,((DOMAIN-SUFFIX,video.example))))") || !slices.Contains(namesOf(object(providers[relaxedDomains])["payload"]), "DOMAIN-SUFFIX,video.example") {
+		t.Fatalf("inherited child captured by strict parent: %v", providers)
+	}
+	// Repeated rendering must not duplicate managed rules or groups.
+	raw, _ := json.Marshal(doc)
+	var second map[string]interface{}
+	if err := json.Unmarshal(raw, &second); err != nil {
+		t.Fatal(err)
+	}
+	p.doc = second
+	if _, err = render(&p, services, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := json.Marshal(second)
+	if !bytes.Equal(raw, again) {
+		t.Fatal("second render changed stable policy")
+	}
+	if core := os.Getenv("MIHOMO_TEST_BINARY"); core != "" {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		if err = os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command(core, "-t", "-d", dir, "-f", path).CombinedOutput(); err != nil || bytes.Contains(out, []byte("error")) {
+			t.Fatalf("strict inline rules rejected: %s", out)
+		}
+	}
+}
+
+func TestKillSwitchLegacyFallbackSockets(t *testing.T) {
+	fallback := failoverName("native", "VPN")
+	var closed []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			closed = append(closed, strings.TrimPrefix(r.URL.Path, "/connections/"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		fmt.Fprintf(w, `{"connections":[
+			{"id":"leak","chains":["DIRECT","%s"],"metadata":{"host":"chatgpt.com"}},
+			{"id":"relaxed","chains":["DIRECT","%s"],"metadata":{"host":"youtube.com"}},
+			{"id":"ordinary","chains":["DIRECT","%s"],"metadata":{"host":"example.test"}},
+			{"id":"manual-direct","chains":["DIRECT"],"metadata":{"host":"chatgpt.com"}}]}`, fallback, fallback, fallback)
+	}))
+	defer srv.Close()
+	doc := map[string]interface{}{killSwitchKey: map[string]interface{}{"enabled": false, "services": map[string]interface{}{"youtube": "inherit"}}}
+	api := coreAPI{base: srv.URL, client: srv.Client()}
+	if !(&Controller{}).drainObsoleteFallback(context.Background(), api, map[string]string{fallback: "VPN"}, doc) || !slices.Equal(closed, []string{"leak"}) {
+		t.Fatalf("unexpected closed sockets %v", closed)
 	}
 }

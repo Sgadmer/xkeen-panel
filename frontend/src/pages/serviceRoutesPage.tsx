@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconChevronDown, IconShield } from '@tabler/icons-react'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { PageTitle } from '@/components/ios'
-import { ServiceKillSwitch, useKillSwitch } from '@/components/killSwitch'
+import { ServiceKillSwitch, serviceKillSwitch, useKillSwitch } from '@/components/killSwitch'
 import { ServiceRoutePicker } from '@/components/serviceRoutePicker'
 import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
@@ -141,19 +141,25 @@ function ServiceDetails({ service, mihomo, firewall, protectionEnabled }: {
 }
 
 function ClientProxy({service}: {service: Service}) {
+    const [showPassword, setShowPassword] = useState(false)
     const access = useMutation({
         mutationFn: () => api.post<{address: string; username: string; password: string}>('/api/service-routes/' + service.id + '/client'),
     })
     return (
         <div>
             <h3 className='font-medium'>Прокси для приложения</h3>
-            <p className='mt-1 text-muted-foreground'>Чтобы приложение использовало этот маршрут для всех своих запросов, укажите HTTP-прокси и отключите в приложении прямой выход при его отказе.</p>
+            <p className='mt-1 text-muted-foreground'>Для ручной настройки HTTP-прокси в приложении. Роутер выдаёт отдельный пароль для маршрута «{service.name}». Чтобы все запросы приложения шли через него, отключите прямой выход в настройках приложения.</p>
             {access.data ? (
                 <div className='mt-3 space-y-1 break-all rounded-xl bg-fill p-3'>
                     <p>HTTP-прокси · {access.data.address}</p>
-                    <p>Логин · <code>{access.data.username}</code></p>
-                    <p>Пароль · <code>{access.data.password}</code></p>
-                    <button type='button' className='min-h-10 text-tint' onClick={() => access.reset()}>Скрыть данные</button>
+                    <p>Логин прокси · <code>{access.data.username}</code></p>
+                    <p>Пароль прокси · <code>{showPassword ? access.data.password : '••••••••'}</code></p>
+                    <div className='flex flex-wrap gap-x-4'>
+                        <button type='button' className='min-h-10 text-tint' onClick={() => setShowPassword(!showPassword)}>
+                            {showPassword ? 'Скрыть пароль' : 'Показать пароль'}
+                        </button>
+                        <button type='button' className='min-h-10 text-muted-foreground' onClick={() => { setShowPassword(false); access.reset() }}>Скрыть данные</button>
+                    </div>
                 </div>
             ) : <button type='button' disabled={access.isPending} className='mt-1 min-h-11 text-tint' onClick={() => access.mutate()}>{access.isPending ? 'Проверяем вход…' : 'Получить доступ'}</button>}
             {access.error && <p role='alert' className='text-destructive'>{access.error.message}</p>}
@@ -187,6 +193,7 @@ export function ServiceRoutesPage() {
     })
     const view = query.data
     const killSwitch = useKillSwitch(view?.scope === 'mihomo')
+    const claudeProtection = killSwitch.data && serviceKillSwitch(killSwitch.data, 'claude').enabled
     const firewall = useClaudeApiFirewall(!!view?.services.some(service => service.id === 'claude'))
     const error = change.error ?? query.error ?? killSwitch.error
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
@@ -251,7 +258,7 @@ export function ServiceRoutesPage() {
                                     {busy && <p role='status' className='mt-2 text-sm text-muted-foreground'>Применяем маршрут…</p>}
                                     {!busy && service.blocked && view.active && <p className='mt-2 text-sm text-warning'>Ядро блокирует соединения этого сервиса</p>}
                                     <ServiceDetails service={service} mihomo={view.scope === 'mihomo'} firewall={firewall}
-                                        protectionEnabled={killSwitch.data?.services?.claude ? killSwitch.data.services.claude === 'on' : killSwitch.data?.enabled} />
+                                        protectionEnabled={claudeProtection} />
                                 </section>
                             )
                         })}
