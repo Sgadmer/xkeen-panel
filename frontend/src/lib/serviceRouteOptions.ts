@@ -1,4 +1,4 @@
-import { countryLabel, scopeLabel, withCountryFlag } from '@/lib/format'
+import { countryLabel, scopeLabel } from '@/lib/format'
 import type { AutoScope } from '@/types'
 
 export interface ServiceTarget {
@@ -12,10 +12,11 @@ export interface ServiceTarget {
 interface RouteOption {
     id: string
     label: string
+    detail?: string
     kind: ServiceTarget['kind']
 }
 
-interface RouteGroup {
+export interface RouteGroup {
     key: string
     title: string
     order: number
@@ -35,30 +36,37 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
     const scopeById = new Map(scopes.map(scope => [scope.id, scope]))
     const groups = new Map<string, RouteGroup>()
     for (const target of targets) {
-        let key: string, title: string, order: number, label: string
+        let key: string
+        let title: string
+        let order: number
+        let label = target.name
+        let detail: string | undefined
         if (target.kind === 'pool') {
             const scope = scopeById.get(target.id)
             const kind = scope?.kind ?? (target.country ? 'country' : 'pool')
             key = kind
             title = poolGroups[kind].title
             order = poolGroups[kind].order
-            const name = scope ? scopeLabel(scope) : target.country ? countryLabel(target.country) : target.name
-            label = scope ? name + ' · ' + scope.member_count : name
+            if (scope) {
+                label = scopeLabel(scope)
+                detail = 'Серверов: ' + scope.member_count
+            } else if (target.country) {
+                label = countryLabel(target.country)
+            }
         } else {
-            const sources = [...new Set(target.sources?.map(s => s.trim()).filter(Boolean))].sort(collator.compare)
+            const sources = [...new Set(target.sources?.filter(s => s.trim()))].sort(collator.compare)
             key = 'providers:' + JSON.stringify(sources)
             title = sources.length > 1 ? 'Общие · ' + sources.join(' + ') : sources[0] || 'Без провайдера'
             order = sources.length > 1 ? 5 : sources.length ? 4 : 6
-            label = withCountryFlag(target.name, target.country)
-            if (target.kind === 'profile') label = 'Режим провайдера · ' + label
-            if (target.kind === 'server' && target.country && avoided.includes(target.country)) label += ' · только вручную'
+            if (target.kind === 'profile') detail = 'Режим провайдера'
+            if (target.kind === 'server' && target.country && avoided.includes(target.country)) detail = 'Только вручную'
         }
         let group = groups.get(key)
         if (!group) {
             group = { key, title, order, targets: [] }
             groups.set(key, group)
         }
-        group.targets.push({ id: target.id, label, kind: target.kind })
+        group.targets.push({ id: target.id, label, detail, kind: target.kind })
     }
     for (const group of groups.values()) {
         if (group.targets[0].kind !== 'pool') {
@@ -66,7 +74,11 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
         }
         const counts = new Map<string, number>()
         for (const item of group.targets) counts.set(item.label, (counts.get(item.label) ?? 0) + 1)
-        for (const item of group.targets) if (counts.get(item.label)! > 1) item.label += ' · ' + item.id.slice(0, 8)
+        for (const item of group.targets) {
+            if ((counts.get(item.label) ?? 0) > 1) {
+                item.detail = [item.detail, item.id.slice(0, 8)].filter(Boolean).join(' · ')
+            }
+        }
     }
     return [...groups.values()].sort((a, b) => a.order - b.order || collator.compare(a.title, b.title))
 }

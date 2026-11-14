@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,46 @@ import (
 
 	"xkeen-panel/internal/models"
 )
+
+func TestCatalogUsesSavedSourceNamesForServiceRoutes(t *testing.T) {
+	sm := NewSubscriptionManager(t.TempDir())
+	const sourceName = "🛰️  Мой VPN 🧑‍🚀"
+	servers := poolServers()[:2]
+	servers[0].SourceID, servers[0].SourceName = "mine", "Мой VPN"
+	servers[1].SourceID, servers[1].SourceName = "unlisted", "Старый источник ✨"
+	data := models.SubscriptionData{CatalogVersion: 1, Servers: servers, Sources: []models.SubscriptionSource{{ID: "mine", Name: sourceName}}}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sm.filePath(), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	rt, _, _, _ := profileApplyBaseline(t)
+	check := func(want string) {
+		t.Helper()
+		view, err := ReadServiceRoutes(rt, sm.GetServers())
+		if err != nil || len(view.Targets) != 2 {
+			t.Fatalf("read service routes: %v, %d targets", err, len(view.Targets))
+		}
+		if !reflect.DeepEqual(view.Targets[0].Sources, []string{want}) || !reflect.DeepEqual(view.Targets[1].Sources, []string{"Старый источник ✨"}) {
+			t.Fatalf("unexpected service source names: %v, %v", view.Targets[0].Sources, view.Targets[1].Sources)
+		}
+	}
+	if err := sm.Load(); err != nil {
+		t.Fatal(err)
+	}
+	check(sourceName)
+	const renamed = "🌏 Новое имя ✨"
+	if err := sm.RenameSource("mine", renamed); err != nil {
+		t.Fatal(err)
+	}
+	check(renamed)
+	if err := sm.RestoreData(data); err != nil {
+		t.Fatal(err)
+	}
+	check(sourceName)
+}
 
 func TestSourcesPreserveOwnershipSelectionAndStableIDs(t *testing.T) {
 	ctx := context.Background()

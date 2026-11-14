@@ -56,9 +56,24 @@ func defaultSourceName(kind, rawURL string) string {
 	return "Импортированные серверы"
 }
 
-func (sm *SubscriptionManager) migrateLegacyLocked() {
+func (sm *SubscriptionManager) normalizeCatalogLocked() {
 	d := sm.data
-	if d.CatalogVersion != 0 || len(d.Servers) == 0 && d.URL == "" {
+	if d.CatalogVersion != 0 {
+		// A restored catalog may still carry an older copy of a renamed source on its servers.
+		names := make(map[string]string, len(d.Sources))
+		for _, source := range d.Sources {
+			if source.ID != "" && source.Name != "" {
+				names[source.ID] = source.Name
+			}
+		}
+		for i := range d.Servers {
+			if name, ok := names[d.Servers[i].SourceID]; ok {
+				d.Servers[i].SourceName = name
+			}
+		}
+		return
+	}
+	if len(d.Servers) == 0 && d.URL == "" {
 		return
 	}
 	kind := d.SourceKind

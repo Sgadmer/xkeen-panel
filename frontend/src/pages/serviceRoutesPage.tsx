@@ -5,6 +5,7 @@ import { IconShield, IconWorld } from '@tabler/icons-react'
 import { serviceIcons } from '@/lib/serviceIcons'
 import { PageTitle } from '@/components/ios'
 import { ServiceKillSwitch, useKillSwitch } from '@/components/killSwitch'
+import { ServiceRoutePicker } from '@/components/serviceRoutePicker'
 import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { serviceRouteOptions, type ServiceTarget } from '@/lib/serviceRouteOptions'
@@ -186,7 +187,6 @@ export function ServiceRoutesPage() {
                             const Glyph = serviceIcons[service.id] ?? IconWorld
                             const isClaude = service.id === 'claude'
                             const selected = view.targets.find(t => t.id === service.target)
-                            const missing = !!service.target && (isClaude || service.target !== 'direct') && !selected
                             const busy = change.isPending && change.variables?.service_id === service.id
                             const label = 'service-' + service.id
                             return (
@@ -198,26 +198,21 @@ export function ServiceRoutesPage() {
                                         <h2 id={label} className='font-semibold'>{service.name}</h2>
                                     </div>
                                     <label className='block text-sm text-muted-foreground' htmlFor={'vpn-' + service.id}>Маршрут</label>
-                                    <select
-                                        className='mt-1 min-h-11 w-full rounded-xl border border-white/10 bg-fill px-2 text-[15px] disabled:opacity-60'
+                                    <ServiceRoutePicker
                                         id={'vpn-' + service.id}
+                                        serviceName={service.name}
+                                        groups={options}
                                         value={(busy ? change.variables?.target_id : service.target) || ''}
+                                        inheritedLabel={isClaude ? 'Выберите VPN' : (view.scope === 'mihomo' ? 'По правилам сервиса в Mihomo' : 'По правилам Xray')}
+                                        allowInherited={!isClaude}
+                                        allowDirect={!isClaude && view.scope === 'mihomo'}
                                         disabled={change.isPending || !(view.guard_ready || (view.scope === 'mihomo' && view.controller_ready))}
-                                        onChange={e => {
+                                        onSelect={targetId => {
                                             setNotice('')
-                                            change.mutate({ service_id: service.id, target_id: e.target.value })
+                                            change.mutate({ service_id: service.id, target_id: targetId })
                                         }}
-                                    >
-                                        <option value='' disabled={isClaude}>{isClaude ? 'Выберите VPN' : (view.scope === 'mihomo' ? 'По правилам сервиса в Mihomo' : 'По правилам Xray')}</option>
-                                        {!isClaude && view.scope === 'mihomo' && <option value='direct'>Напрямую</option>}
-                                        {missing && <option value={service.target} disabled>Назначенный маршрут недоступен</option>}
-                                        {options.map(({key, title, targets}) => (
-                                            <optgroup key={key} label={title}>
-                                                {targets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-                                            </optgroup>
-                                        ))}
-                                    </select>
-                                    {!busy && !!selected?.sources?.length && <p className='mt-1 break-words text-sm text-muted-foreground'>
+                                    />
+                                    {!busy && !!selected?.sources?.length && <p className='mt-1 whitespace-pre-wrap text-sm text-muted-foreground [overflow-wrap:anywhere]'>
                                         {selected.sources.length === 1 ? 'Провайдер' : 'Провайдеры'} · {selected.sources.join(', ')}
                                     </p>}
                                     {!service.target && service.inherited_route && <InheritedRouteInfo route={service.inherited_route} />}

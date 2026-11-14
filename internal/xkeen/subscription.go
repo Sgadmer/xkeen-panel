@@ -59,7 +59,7 @@ func (sm *SubscriptionManager) Load() error {
 	sm.data = &loaded.SubscriptionData
 	sm.importReport = cloneSubscriptionImportReport(loaded.ImportReport)
 	sm.importReport.Imported = len(sm.data.Servers)
-	sm.migrateLegacyLocked()
+	sm.normalizeCatalogLocked()
 	return nil
 }
 
@@ -319,7 +319,7 @@ func (sm *SubscriptionManager) RestoreData(previous models.SubscriptionData) err
 	if subscriptionSnapshotKey(previous) == sm.rollbackSnapshotKey {
 		sm.importReport = cloneSubscriptionImportReport(sm.rollbackImportReport)
 	}
-	sm.migrateLegacyLocked()
+	sm.normalizeCatalogLocked()
 	if err := sm.saveLocked(); err != nil {
 		sm.data = &current
 		sm.importReport = currentReport
