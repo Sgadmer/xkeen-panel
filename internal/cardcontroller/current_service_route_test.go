@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
@@ -19,6 +20,7 @@ func TestServicePoolSamplesOncePerSnapshot(t *testing.T) {
 	tag := nodePrefix + allPoolID + "-" + generation
 	first, second := poolServer("first", "DE", "10001"), poolServer("second", "SE", "10002")
 	first.Name, first.SourceName = "Berlin", "First source"
+	first.EntryCountry, first.ExitCountry, first.ExitCheckedAt = "RU", "DE", time.Now()
 	second.Name = "Stockholm"
 	p := profile{doc: map[string]interface{}{"proxies": []interface{}{map[string]interface{}{"name": tag, "type": "vless", "server": "127.0.0.1", "port": 11001}}}}
 	live := map[string]selector{
@@ -45,6 +47,9 @@ func TestServicePoolSamplesOncePerSnapshot(t *testing.T) {
 		got := w.current(group, live, missing)
 		if got.Pool != "Все локации" || got.Kind != "server" || got.Name != first.Name || got.Country != "DE" || got.Source != first.SourceName {
 			t.Fatalf("%s: %+v", group, got)
+		}
+		if strings.Join(got.CountryPath, "/") != "RU/DE" || got.ExitCountry != "DE" || got.EntryCountry != "RU" {
+			t.Fatalf("lost the selected worker's measured path: %+v", got)
 		}
 	}
 	if samples != 1 {

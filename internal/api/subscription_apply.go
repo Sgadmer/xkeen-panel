@@ -11,6 +11,8 @@ import (
 )
 
 func publicServer(server models.Server) models.Server {
+	server.ExitCountry = xkeen.MeasuredExitCountry(server)
+	server.EntryCountry = xkeen.MeasuredEntryCountry(server)
 	server.RawURI = ""
 	server.RawOutbound = nil
 	server.RawProfile = nil
@@ -59,7 +61,7 @@ func (h *Handlers) importSubscription(ctx context.Context, source string) (map[s
 func (h *Handlers) verifyAndApplySource(ctx context.Context, servers []models.Server, transaction *subscriptionApplySnapshot) (response map[string]interface{}, err error) {
 	rt := h.detector.Runtime()
 	if rt.Core == xkeen.CoreXray {
-		checked, probeErr := xkeen.CheckServersHTTPS(rt, servers, xkeen.ProbeOptions{Context: ctx, Timeout: 8 * time.Second, Concurrency: 3, StateDir: h.config.DataDir})
+		checked, probeErr := xkeen.CheckServersHTTPS(rt, servers, xkeen.ProbeOptions{Context: ctx, Timeout: 8 * time.Second, Concurrency: 3, StateDir: h.config.DataDir, GeoIPPath: h.config.GeoIPPath})
 		if probeErr != nil {
 			return nil, probeErr
 		}

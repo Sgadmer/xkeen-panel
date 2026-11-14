@@ -122,6 +122,7 @@ func (w *workerSnapshot) current(group string, live map[string]selector, provide
 			case "server":
 				if label := publicRouteName(exit.Name, nil); label != "" {
 					route.Kind, route.Name, route.Country, route.Source = "server", label, exit.Country, exit.Source
+					route.CountryPath, route.EntryCountry, route.ExitCountry = exit.CountryPath, exit.EntryCountry, exit.ExitCountry
 				}
 			case "direct", "reject":
 				route.Kind = exit.Kind

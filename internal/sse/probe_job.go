@@ -34,12 +34,13 @@ type probeRun struct {
 var ErrPoolUpdate = errors.New("замеры сохранены, состав пула ещё не обновлён")
 
 type ProbeJobs struct {
-	mu      sync.Mutex
-	run     *probeRun
-	sub     *xkeen.SubscriptionManager
-	options xkeen.ProbeOptions
-	probe   func([]models.Server, xkeen.ProbeOptions) ([]models.Server, error)
-	save    func(context.Context, []models.Server) error
+	mu               sync.Mutex
+	run              *probeRun
+	backgroundCancel context.CancelFunc
+	sub              *xkeen.SubscriptionManager
+	options          xkeen.ProbeOptions
+	probe            func([]models.Server, xkeen.ProbeOptions) ([]models.Server, error)
+	save             func(context.Context, []models.Server) error
 }
 
 func NewProbeJobs(sub *xkeen.SubscriptionManager, options xkeen.ProbeOptions, probe func([]models.Server, xkeen.ProbeOptions) ([]models.Server, error), save func(context.Context, []models.Server) error) *ProbeJobs {
@@ -54,6 +55,10 @@ func (j *ProbeJobs) start() *probeRun {
 	defer j.mu.Unlock()
 	if j.run != nil && j.run.progress.Running {
 		return j.run
+	}
+	// A user-requested run covers the entire catalogue, including fresh nodes.
+	if j.backgroundCancel != nil {
+		j.backgroundCancel()
 	}
 	servers := j.sub.GetServers()
 	next := uint64(1)
@@ -70,6 +75,68 @@ func (j *ProbeJobs) start() *probeRun {
 }
 
 func (j *ProbeJobs) Start() ProbeProgress { return j.snapshot(j.start()) }
+
+// RefreshExitCountries keeps country observations current without starting a
+// manual latency job or holding the route-change lock while waiting on nodes.
+func (j *ProbeJobs) RefreshExitCountries(ctx context.Context) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			j.refreshExitCountries(ctx)
+			timer.Reset(15 * time.Minute)
+		}
+	}
+}
+
+func (j *ProbeJobs) refreshExitCountries(parent context.Context) {
+	j.mu.Lock()
+	if j.backgroundCancel != nil || j.run != nil && j.run.progress.Running {
+		j.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	j.backgroundCancel = cancel
+	j.mu.Unlock()
+	defer func() {
+		cancel()
+		j.mu.Lock()
+		j.backgroundCancel = nil
+		j.mu.Unlock()
+	}()
+
+	var due []models.Server
+	for _, s := range j.sub.GetServers() {
+		if s.GeneratedPool || len(s.RawProfile) > 0 || s.Protocol == "xray-profile" {
+			continue
+		}
+		refreshAfter := xkeen.ExitCountryTTL - 2*time.Hour
+		if s.ExitCountry == "" {
+			refreshAfter = 3 * time.Hour
+		}
+		age := time.Since(s.ExitCheckedAt)
+		if age >= 0 && age < refreshAfter {
+			continue
+		}
+		if xkeen.ServiceTargetID(s) == "" {
+			continue
+		}
+		due = append(due, s)
+	}
+	if len(due) == 0 || ctx.Err() != nil {
+		return
+	}
+	options := j.options
+	options.Context = ctx
+	options.Concurrency = min(2, max(1, options.Concurrency))
+	checked, err := j.probe(due, options)
+	if err == nil && ctx.Err() == nil {
+		_ = j.save(ctx, checked)
+	}
+}
 
 func (j *ProbeJobs) Snapshot() ProbeProgress { return j.snapshot(nil) }
 

@@ -378,6 +378,8 @@ func (sm *SubscriptionManager) replaceSourceServersLocked(source models.Subscrip
 			prev := matches[0]
 			s.ID, s.CountryOverride = prev.ID, prev.CountryOverride
 			s.Latency, s.LastChecked, s.ProbeKind, s.CheckError = prev.Latency, prev.LastChecked, prev.ProbeKind, prev.CheckError
+			s.ExitCountry, s.ExitCheckedAt = prev.ExitCountry, prev.ExitCheckedAt
+			s.EntryCountry = prev.EntryCountry
 			old[key] = matches[1:]
 		} else {
 			s.ID = d.NextServerID

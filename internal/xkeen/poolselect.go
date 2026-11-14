@@ -54,7 +54,8 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 
 	var allowed []models.Server
 	var pinned []models.Server
-	for _, server := range servers {
+	eligible := AutoCountryEligibility(servers, func(s models.Server) bool { return sel.CountryAllowed(s, false) })
+	for i, server := range servers {
 		// A provider profile owns its own balancing and routing. Selecting it
 		// explicitly must never nest that policy inside the ordinary auto pool.
 		if len(server.RawProfile) > 0 {
@@ -72,7 +73,7 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 		if server.ProbeKind == "https" && server.Latency < 0 {
 			continue
 		}
-		if sel.avoided(server) {
+		if !eligible[i] {
 			continue
 		}
 		allowed = append(allowed, server)
@@ -227,19 +228,50 @@ func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurre
 	return checked
 }
 
-func (sel PoolSelection) avoided(server models.Server) bool {
-	if country := ServerCountry(server); country != "" && sel.isAvoidedCode(country) {
-		return true
+// CountryAllowed uses the observed exit of this configuration when available.
+// An explicitly excluded manual country remains a veto. Without an observation,
+// preserve the existing checks against the label and the connection address.
+// The watchdog additionally requires a known label when the address cannot be checked.
+func (sel PoolSelection) CountryAllowed(server models.Server, requireKnown bool) bool {
+	if server.CountryOverride != "" && sel.isAvoidedCode(server.CountryOverride) {
+		return false
 	}
-
-	// GeoIP is authoritative when the name says nothing useful
+	if exit := MeasuredExitCountry(server); exit != "" {
+		return !sel.isAvoidedCode(exit)
+	}
+	country := ServerCountry(server)
+	if country != "" && sel.isAvoidedCode(country) {
+		return false
+	}
 	if sel.GeoIP != nil {
-		if code, resolved := sel.GeoIP.Inspect(server.Address); resolved && code != "" {
-			return true
+		if code, resolved := sel.GeoIP.Inspect(server.Address); resolved {
+			return code == ""
 		}
 	}
+	return !requireKnown || country != ""
+}
 
-	return false
+// AutoCountryEligibility denies every alias of a disallowed outbound, including
+// a second subscription with another label or a conflicting exit measurement.
+func AutoCountryEligibility(servers []models.Server, allowed func(models.Server) bool) []bool {
+	result := make([]bool, len(servers))
+	denied := make(map[string]bool)
+	for i, server := range servers {
+		result[i] = allowed(server)
+		if !result[i] {
+			if id := ServiceTargetID(server); id != "" {
+				denied[id] = true
+			}
+		}
+	}
+	if len(denied) > 0 {
+		for i, server := range servers {
+			if result[i] && denied[ServiceTargetID(server)] {
+				result[i] = false
+			}
+		}
+	}
+	return result
 }
 
 func (sel PoolSelection) isAvoidedCode(code string) bool {

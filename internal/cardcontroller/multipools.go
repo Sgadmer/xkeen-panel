@@ -145,7 +145,7 @@ func (pool *MultiPool) members(nodes []poolNode) []models.Server {
 		member := memberKey(n)
 		include := pool.IncludeFiltered == nil || *pool.IncludeFiltered
 		if !explicit[member] && (!include || len(pool.SourceIDs) > 0 && !slices.Contains(pool.SourceIDs, member.SourceID) ||
-			len(pool.Countries) > 0 && !slices.Contains(pool.Countries, strings.ToUpper(xkeen.ServerCountry(n.server)))) {
+			len(pool.Countries) > 0 && !slices.Contains(pool.Countries, strings.ToUpper(xkeen.AutoPoolCountry(n.server)))) {
 			continue
 		}
 		seen[n.id] = true

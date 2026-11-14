@@ -20,22 +20,22 @@ func newWatchdog(t *testing.T, cfg *models.Config) *Watchdog {
 	return NewWatchdog(cfg, sub, xkeen.NewDetector(t.TempDir(), "", "", "", "", "", ""))
 }
 
-func TestIsAvoidedCountry(t *testing.T) {
+func TestAutomaticCountryCheckIgnoresCase(t *testing.T) {
 	w := newWatchdog(t, &models.Config{AutoSwitchAvoidCountries: []string{"RU", "BY"}})
 
 	cases := []struct {
 		cc   string
 		want bool
 	}{
-		{"RU", true},
-		{"ru", true},
-		{"BY", true},
-		{"NL", false},
+		{"RU", false},
+		{"ru", false},
+		{"BY", false},
+		{"NL", true},
 		{"", false},
 	}
 	for _, c := range cases {
-		if got := w.isAvoidedCountry(c.cc); got != c.want {
-			t.Errorf("isAvoidedCountry(%q) = %v, want %v", c.cc, got, c.want)
+		if got := w.AutomaticServerAllowed(models.Server{Country: c.cc}); got != c.want {
+			t.Errorf("AutomaticServerAllowed(%q) = %v, want %v", c.cc, got, c.want)
 		}
 	}
 }
@@ -123,6 +123,11 @@ func TestIsServerAllowedWithGeoIP(t *testing.T) {
 		{"ip in RU range", models.Server{Address: "1.2.3.5"}, false},
 		{"ip resolved not avoided", models.Server{Address: "8.8.8.8"}, true},
 		{"geoip authoritative over name", models.Server{Address: "1.2.3.5", Country: "NL"}, false},
+		{"foreign exit through RU entry", models.Server{Address: "1.2.3.5", Country: "RU", ExitCountry: "SO", ExitCheckedAt: time.Now()}, true},
+		{"RU exit through foreign entry", models.Server{Address: "8.8.8.8", Country: "NL", ExitCountry: "RU", ExitCheckedAt: time.Now()}, false},
+		{"manual exclusion vetoes foreign exit", models.Server{Address: "8.8.8.8", CountryOverride: "BY", ExitCountry: "SO", ExitCheckedAt: time.Now()}, false},
+		{"expired evidence uses entry policy", models.Server{Address: "1.2.3.5", Country: "SO", ExitCountry: "SO", ExitCheckedAt: time.Now().Add(-25 * time.Hour)}, false},
+		{"unknown exit uses entry policy", models.Server{Address: "1.2.3.5", Country: "SO", ExitCheckedAt: time.Now()}, false},
 	}
 	for _, c := range cases {
 		if got := w.AutomaticServerAllowed(c.s); got != c.want {

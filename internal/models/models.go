@@ -57,6 +57,7 @@ type Config struct {
 	// Countries to avoid when switching automatically
 	GeoIPPath                string   `yaml:"geoip_path"`
 	AutoSwitchAvoidCountries []string `yaml:"auto_switch_avoid_countries"`
+	HideServerPath           bool     `yaml:"-"` // panel display preference from settings.json
 
 	// Trust proxy headers (X-Forwarded-For/Host/Proto). Enable ONLY behind a
 	// trusted proxy that rewrites them — otherwise they can be spoofed on the
@@ -126,6 +127,9 @@ type Server struct {
 	ProbeKind       string          `json:"probe_kind,omitempty"`
 	CheckError      string          `json:"check_error,omitempty"`
 	LastChecked     time.Time       `json:"last_checked,omitempty"`
+	EntryCountry    string          `json:"entry_country,omitempty"`
+	ExitCountry     string          `json:"exit_country,omitempty"`
+	ExitCheckedAt   time.Time       `json:"exit_checked_at,omitzero"`
 	Country         string          `json:"country,omitempty"`
 	CountryOverride string          `json:"country_override,omitempty"`
 }

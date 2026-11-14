@@ -41,7 +41,7 @@ func DescribePool(nodes []PoolNode, excluded map[string]time.Time) []PoolNodeVie
 			view.ServerID = server.ID
 			view.Name = server.Name
 			view.Latency = server.Latency
-			view.Country = ServerCountry(*server)
+			view.Country = AutoPoolCountry(*server)
 		}
 
 		if until, ok := excluded[node.Tag]; ok && time.Now().Before(until) {
@@ -62,6 +62,15 @@ func ServerCountry(server models.Server) string {
 		return server.CountryOverride
 	}
 	return server.Country
+}
+
+// AutoPoolCountry groups individual configurations by their recently observed
+// outbound country. Older subscriptions retain their explicit or advertised label.
+func AutoPoolCountry(server models.Server) string {
+	if country := MeasuredExitCountry(server); country != "" {
+		return country
+	}
+	return ServerCountry(server)
 }
 
 func ServerForNode(servers []models.Server, node string) (models.Server, bool) {

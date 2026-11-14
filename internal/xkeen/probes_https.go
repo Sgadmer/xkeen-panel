@@ -28,6 +28,7 @@ type ProbeOptions struct {
 	Timeout     time.Duration
 	Concurrency int
 	StateDir    string
+	GeoIPPath   string
 	// OnResult receives each finished measurement. Workers may call it concurrently.
 	OnResult    func(models.Server)
 }
@@ -54,6 +55,10 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 		}
 	}
 	if len(ordinary) > 0 {
+		entries := entryCountries(options.Context, ordinary, options.GeoIPPath)
+		for i := range ordinary {
+			ordinary[i].EntryCountry = entries[ordinary[i].Address]
+		}
 		result, err := probeIndependentNodes(rt, ordinary, options, checkServersHTTPSBatch)
 		if err != nil {
 			return nil, err
@@ -97,6 +102,7 @@ func probeIndependentNodes(rt Runtime, nodes []models.Server, options ProbeOptio
 	if len(nodes) == 1 {
 		node := nodes[0]
 		node.Latency, node.ProbeKind, node.LastChecked = -1, "https", time.Now()
+		node.ExitCountry, node.ExitCheckedAt = "", node.LastChecked
 		node.CheckError = errProbeConfig.Error()
 		options.report(node)
 		return []models.Server{node}, nil
@@ -174,6 +180,10 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		checked[i].ProbeKind = "https"
 		checked[i].CheckError = ""
 		checked[i].LastChecked = time.Now()
+		checked[i].ExitCountry = ""
+		if len(server.RawProfile) == 0 {
+			checked[i].ExitCheckedAt = checked[i].LastChecked
+		}
 		out, buildErr := BuildServerOutbound(server, "probe-node-"+strconv.Itoa(i), map[string]interface{}{
 			"streamSettings": map[string]interface{}{"sockopt": map[string]interface{}{"mark": 255}},
 		})
@@ -377,6 +387,10 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 					}
 					break
 				}
+			}
+			if len(checked[index].RawProfile) == 0 && nodeCtx.Err() == nil {
+				checked[index].ExitCountry = probeExitCountry(nodeCtx, client)
+				checked[index].ExitCheckedAt = time.Now()
 			}
 		}(i, port)
 	}

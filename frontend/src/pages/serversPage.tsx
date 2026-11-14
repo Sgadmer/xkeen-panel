@@ -40,7 +40,9 @@ import { useStreamLatency } from '@/hooks/useStreamLatency'
 import {
     countryName,
     countryLabel,
+    countryExcluded,
     latencyTone,
+    poolCountry,
     scopeLabel,
     serverCountry,
     timeAgo,
@@ -49,6 +51,7 @@ import {
     withCountryFlag,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { serverPathDetail } from '@/lib/serverPath'
 import { importWarnings, safeNotice } from '@/lib/subscription'
 import type { AutoScope, Server } from '@/types'
 
@@ -114,7 +117,9 @@ export function ServersPage() {
         && (scope.unavailable_reason !== 'no_servers' || scope.id === selectedScope?.id))
     const customScopes = scopes.filter(scope => scope.kind === 'custom')
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
-    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
+    const settings = usePanelSettings().data
+    const avoidCountries = settings?.avoid_countries ?? []
+    const fullPath = settings?.show_full_path !== false
     const sites = useSites().data
     const subscription = useSubscription().data
     const {
@@ -180,7 +185,8 @@ export function ServersPage() {
                 const server = byId.get(n.server_id)
                 return {
                     node: n,
-                    country: server ? serverCountry(server) : n.country,
+                    server,
+                    country: server ? poolCountry(server) : n.country,
                     protocol: server?.protocol,
                     source: server?.source_name,
                     latency: server
@@ -204,7 +210,8 @@ export function ServersPage() {
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
-        countryExcluded: avoidCountries.includes(serverCountry(s)),
+        path: serverPathDetail(s, fullPath),
+        countryExcluded: countryExcluded(s, avoidCountries),
         busy: routeBusy,
         measuring: isPendingServer(s.id),
         liveLatency: latencyFor(s.id),
@@ -264,7 +271,7 @@ export function ServersPage() {
                                 ? progress.completed > 0
                                     ? `Проверено ${progress.completed} из ${progress.total} серверов`
                                     : `Проверка ${progress.total} серверов может занять минуту`
-                                : 'Реальное соединение через каждый сервер'
+                                : 'Задержка и страна выхода каждого сервера'
                         }
                         onClick={check}
                         disabled={checking}
@@ -431,11 +438,12 @@ export function ServersPage() {
                                     country={r.country}
                                     protocol={r.protocol}
                                     source={r.source}
+                                    path={serverPathDetail(r.server, fullPath)}
                                     latency={latencyFor(r.node.server_id) ?? r.latency}
                                     measuring={isPendingServer(r.node.server_id)}
                                     current={r.current}
                                     excludedUntil={r.node.excluded_until}
-                                    countryExcluded={avoidCountries.includes(r.country ?? '')}
+                                    countryExcluded={r.server ? countryExcluded(r.server, avoidCountries) : avoidCountries.includes(r.country ?? '')}
                                     busy={routeBusy}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
@@ -664,6 +672,7 @@ function PoolRow({
     country,
     protocol,
     source,
+    path,
     latency,
     measuring,
     current,
@@ -676,6 +685,7 @@ function PoolRow({
     country?: string
     protocol?: string
     source?: string
+    path: string
     latency: number
     measuring: boolean
     current: boolean
@@ -714,6 +724,7 @@ function PoolRow({
                         {notes.join(' · ')}
                     </span>
                 )}
+                {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>Путь · {path}</span>}
             </span>
             <Latency measuring={measuring} ms={latency} />
             <span className='flex w-6 justify-center'>
@@ -782,7 +793,7 @@ function groupServers(servers: Server[], order: CountryOrder) {
     const groups = new Map<string, CountryGroup>()
     for (const server of servers) {
         if (server.protocol === 'xray-profile') continue
-        const code = serverCountry(server) || OTHER
+        const code = poolCountry(server) || OTHER
         let group = groups.get(code)
         if (!group) {
             group = { code, list: [], bestLatency: Infinity }
@@ -872,6 +883,7 @@ function SearchField({
 
 function ServerRow({
     server,
+    path,
     liveLatency,
     measuring,
     countryExcluded,
@@ -880,6 +892,7 @@ function ServerRow({
     onSetCountry,
 }: {
     server: Server
+    path: string
     measuring: boolean
     liveLatency?: number
     countryExcluded: boolean
@@ -946,6 +959,7 @@ function ServerRow({
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
                     {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
+                    {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>Путь · {path}</span>}
                     {!measuring && status && (
                         <span
                             className={cn(

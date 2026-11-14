@@ -149,6 +149,24 @@ func TestSelectPoolServersEmptyWhenAllAvoided(t *testing.T) {
 	}
 }
 
+func TestMeasuredExitXrayPoolAndConflictingAlias(t *testing.T) {
+	entry := vlessAt("Provider label", "RU", "entry.example", 443)
+	entry.ExitCountry, entry.ExitCheckedAt = "SO", time.Now()
+	sel := PoolSelection{AvoidCountries: []string{"RU"}}
+	if got := SelectPoolServers([]models.Server{entry}, sel); len(got) != 1 || AutoPoolCountry(got[0]) != "SO" {
+		t.Fatal("verified foreign exit missing from the pool")
+	}
+	alias := entry
+	alias.SourceID, alias.ExitCountry = "other", "RU"
+	if got := SelectPoolServers([]models.Server{entry, alias}, sel); len(got) != 0 {
+		t.Fatal("alias of a measured forbidden exit entered the pool")
+	}
+	entry.ExitCheckedAt = time.Now().Add(-25 * time.Hour)
+	if got := SelectPoolServers([]models.Server{entry}, sel); len(got) != 0 || AutoPoolCountry(entry) != "RU" {
+		t.Fatal("expired measurement overrode the old policy")
+	}
+}
+
 // Probe load scales with pool size, so the interval has to scale with it.
 func TestProbeIntervalScalesWithPoolSize(t *testing.T) {
 	cases := map[int]string{5: "1m", 20: "1m", 21: "3m", 40: "3m", 81: "5m"}

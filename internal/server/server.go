@@ -94,7 +94,7 @@ func (s *Server) Handler() http.Handler {
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool, s.geoip)
 	handlers.Cards = s.Cards
-	handlers.Checks = sse.NewProbeJobs(s.subscription, xkeen.ProbeOptions{Context: lifetime, StateDir: s.config.DataDir, Concurrency: s.config.ProbeConcurrency, Timeout: time.Duration(s.config.ProbeTimeoutMs) * time.Millisecond}, func(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
+	handlers.Checks = sse.NewProbeJobs(s.subscription, xkeen.ProbeOptions{Context: lifetime, StateDir: s.config.DataDir, Concurrency: s.config.ProbeConcurrency, Timeout: time.Duration(s.config.ProbeTimeoutMs) * time.Millisecond, GeoIPPath: s.config.GeoIPPath}, func(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
 		if s.Cards != nil {
 			return s.Cards.CheckServers(servers, options)
 		}
@@ -109,12 +109,14 @@ func (s *Server) Handler() http.Handler {
 		if err := s.subscription.UpdateLatencies(checked); err != nil {
 			return err
 		}
+		defer s.eventBus.Publish(sse.Event{Type: "pool", Data: struct{}{}})
 		if s.Cards != nil && s.Cards.Reconcile(ctx) != nil {
 			return sse.ErrPoolUpdate
 		}
 		return nil
 	})
 	if s.Cards != nil {
+		go handlers.Checks.RefreshExitCountries(lifetime)
 		handlers.FaceID = api.NewPanelFaceID(s.config, s.CardsListen, devicesHandler)
 		webAuthnHandler.FaceID = handlers.FaceID
 	}
@@ -218,6 +220,7 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/panel/settings", s.settings.HandleGet)
 			r.Put("/panel/settings", s.settings.HandlePut)
+			r.Put("/panel/settings/appearance", s.settings.HandleAppearance)
 
 			r.Get("/devices", devicesHandler.HandleList)
 			r.Post("/devices/rename", devicesHandler.HandleRename)

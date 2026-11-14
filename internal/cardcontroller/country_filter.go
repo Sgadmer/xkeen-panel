@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"xkeen-panel/internal/models"
+	"xkeen-panel/internal/xkeen"
 )
 
 // SetCountryPolicy is wired before the HTTP server and worker goroutines start.
@@ -121,6 +122,28 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 		return result, nil
 	}
 	enabled := len(c.avoidCountries()) > 0
+	type providerNode struct{ source, name string }
+	unavailable := map[providerNode]bool{}
+	if enabled {
+		// Native provider selectors expose display names, not the source
+		// outbound fingerprint. An observed exit may restrict a matching name,
+		// but cannot release the existing country veto for a different proxy.
+		eligible := xkeen.AutoCountryEligibility(servers, func(s models.Server) bool {
+			if len(s.RawProfile) != 0 || !c.autoAllowed(s) {
+				return false
+			}
+			if xkeen.MeasuredExitCountry(s) != "" {
+				s.ExitCountry = ""
+				return c.autoAllowed(s)
+			}
+			return true
+		})
+		for i, s := range servers {
+			if !eligible[i] {
+				unavailable[providerNode{s.SourceID, s.Name}] = true
+			}
+		}
+	}
 	result.allowed = make(map[string]map[string]bool)
 	result.types = make(map[string]string)
 	for _, raw := range list(p.doc["proxy-groups"]) {
@@ -145,7 +168,7 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 			if previous, seen := allowed[s.Name]; seen && !previous {
 				continue
 			}
-			allowed[s.Name] = len(s.RawProfile) == 0 && c.autoAllowed(s)
+			allowed[s.Name] = !unavailable[providerNode{s.SourceID, s.Name}]
 		}
 		var names []string
 		for node, ok := range allowed {

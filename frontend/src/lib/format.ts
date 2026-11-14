@@ -46,6 +46,15 @@ export function serverCountry(server?: Server) {
     return (server?.country_override || server?.country || '').toUpperCase()
 }
 
+// The API publishes exit_country only while the router's measurement is fresh.
+export function poolCountry(server?: Server) {
+    return server?.exit_country || serverCountry(server)
+}
+
+export function countryExcluded(server: Server, avoided: string[]) {
+    return avoided.includes(poolCountry(server)) || avoided.includes(server.country_override || '')
+}
+
 // Go marshals an unset time as year 1
 export function isSet(iso?: string) {
     return !!iso && !iso.startsWith('0001')

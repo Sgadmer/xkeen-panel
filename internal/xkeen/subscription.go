@@ -108,11 +108,14 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	type probeKey struct{ source, identity string }
+	type probeKey struct {
+		source, identity string
+		id               int
+	}
 	results := make(map[probeKey]models.Server, len(checked))
 	for _, c := range checked {
-		if key := ServerIdentity(c); key != "" {
-			results[probeKey{c.SourceID, key}] = c
+		if key := sourceServerKey(c); key != "" {
+			results[probeKey{c.SourceID, key, c.ID}] = c
 		}
 	}
 
@@ -121,10 +124,10 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	sm.data.Servers = append([]models.Server(nil), previous...)
 	for i := range sm.data.Servers {
 		s := &sm.data.Servers[i]
-		identity := ServerIdentity(*s)
-		result, ok := results[probeKey{s.SourceID, identity}]
+		identity := sourceServerKey(*s)
+		result, ok := results[probeKey{s.SourceID, identity, s.ID}]
 		if !ok && s.SourceID == "legacy" {
-			result, ok = results[probeKey{"", identity}]
+			result, ok = results[probeKey{"", identity, s.ID}]
 		}
 		if ok {
 			if sm.data.Servers[i].ProbeKind == "https" && result.ProbeKind != "https" {
@@ -138,6 +141,10 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 				continue
 			}
 			s.Latency, s.ProbeKind, s.CheckError, s.LastChecked = result.Latency, result.ProbeKind, result.CheckError, at
+			if result.ProbeKind == "https" && !result.ExitCheckedAt.IsZero() && !result.ExitCheckedAt.Before(s.ExitCheckedAt) {
+				s.EntryCountry = MeasuredEntryCountry(result)
+				s.ExitCountry, s.ExitCheckedAt = MeasuredExitCountry(result), result.ExitCheckedAt
+			}
 		}
 	}
 

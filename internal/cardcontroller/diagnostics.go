@@ -12,10 +12,13 @@ import (
 )
 
 type ConnectionExit struct {
-	Kind    string `json:"kind,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Country string `json:"country,omitempty"`
-	Source  string `json:"source,omitempty"`
+	Kind         string   `json:"kind,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	Country      string   `json:"country,omitempty"`
+	Source       string   `json:"source,omitempty"`
+	EntryCountry string   `json:"entry_country,omitempty"`
+	ExitCountry  string   `json:"exit_country,omitempty"`
+	CountryPath  []string `json:"country_path,omitempty"`
 }
 
 // Connection contains only the metadata needed by the local diagnostics view.
@@ -213,7 +216,8 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 		if id == "" {
 			continue
 		}
-		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.ServerCountry(s), Source: publicRouteName(s.SourceName, nil)}
+		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.AutoPoolCountry(s), Source: publicRouteName(s.SourceName, nil),
+			EntryCountry: xkeen.MeasuredEntryCountry(s), ExitCountry: xkeen.MeasuredExitCountry(s)}
 		if len(s.RawProfile) > 0 {
 			exit.Kind = "unresolved"
 		}
@@ -224,6 +228,12 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 			if prior.Country != exit.Country {
 				exit.Country = ""
 			}
+			if prior.EntryCountry != exit.EntryCountry {
+				exit.EntryCountry = ""
+			}
+			if prior.ExitCountry != exit.ExitCountry {
+				exit.ExitCountry = ""
+			}
 			if prior.Name != exit.Name {
 				exit.Name = "Сервер с несколькими названиями"
 			}
@@ -231,6 +241,7 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 		if exit.Name == "" {
 			exit.Name = "Выход панели"
 		}
+		exit.CountryPath = xkeen.CountryPath(exit.EntryCountry, exit.ExitCountry)
 		index[id] = exit
 	}
 	return index

@@ -21,6 +21,7 @@ import (
 type PanelSettings struct {
 	AvoidCountries []string `json:"avoid_countries"`
 	RefreshMinutes int      `json:"subscription_refresh_minutes"`
+	ShowFullPath   *bool    `json:"show_full_path,omitempty"`
 }
 
 func panelSettingsPath(dataDir string) string {
@@ -41,6 +42,7 @@ func LoadPanelSettings(cfg *models.Config) error {
 		return err
 	}
 	cfg.SetRuntime(s.AvoidCountries, s.RefreshMinutes*60)
+	cfg.HideServerPath = s.ShowFullPath != nil && !*s.ShowFullPath
 	return nil
 }
 
@@ -98,9 +100,11 @@ func (h *PanelSettingsHandler) loadRuntime(s PanelSettings, updateGeo bool) erro
 }
 
 func (h *PanelSettingsHandler) current() PanelSettings {
+	show := !h.config.HideServerPath
 	return PanelSettings{
 		AvoidCountries: h.config.AvoidCountries(),
 		RefreshMinutes: int(h.config.RefreshInterval() / time.Minute),
+		ShowFullPath:   &show,
 	}
 }
 
@@ -146,7 +150,8 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 		defer h.unlockCountries()
 	}
 
-	next := PanelSettings{AvoidCountries: countries, RefreshMinutes: req.RefreshMinutes}
+	next := h.current()
+	next.AvoidCountries, next.RefreshMinutes = countries, req.RefreshMinutes
 	staged, err := h.stageSettings(next)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось подготовить файл настроек"})
@@ -185,4 +190,30 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, h.current())
+}
+
+// Save only the display setting. An old tab must never overwrite newer routes or refresh settings.
+func (h *PanelSettingsHandler) HandleAppearance(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Show *bool `json:"show_full_path"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.Show == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Укажите режим отображения пути"})
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	next := h.current()
+	next.ShowFullPath = req.Show
+	staged, err := h.stageSettings(next)
+	if err == nil {
+		defer os.Remove(staged)
+		err = os.Rename(staged, panelSettingsPath(h.config.DataDir))
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Не удалось сохранить вид маршрута"})
+		return
+	}
+	h.config.HideServerPath = !*req.Show
+	writeJSON(w, http.StatusOK, next)
 }

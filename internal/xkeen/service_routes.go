@@ -151,11 +151,14 @@ func ServiceTargetID(server models.Server) string {
 }
 
 type ServiceTarget struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Kind    string   `json:"kind"`
-	Country string   `json:"country,omitempty"`
-	Sources []string `json:"sources,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	Country      string   `json:"country,omitempty"`
+	Sources      []string `json:"sources,omitempty"`
+	EntryCountry string   `json:"entry_country,omitempty"`
+	ExitCountry  string   `json:"exit_country,omitempty"`
+	CountryPath  []string `json:"country_path,omitempty"`
 }
 type ServiceRouteView struct {
 	RoutingService
@@ -169,12 +172,15 @@ type ServiceRouteView struct {
 // CurrentServiceRoute describes the next selection reported by the live core.
 // For a conditional rule this is the VPN branch only.
 type CurrentServiceRoute struct {
-	Pool        string `json:"pool,omitempty"`
-	PoolCountry string `json:"pool_country,omitempty"`
-	Kind        string `json:"kind"`
-	Name        string `json:"name,omitempty"`
-	Country     string `json:"country,omitempty"`
-	Source      string `json:"source,omitempty"`
+	EntryCountry string   `json:"entry_country,omitempty"`
+	ExitCountry  string   `json:"exit_country,omitempty"`
+	CountryPath  []string `json:"country_path,omitempty"`
+	Pool         string   `json:"pool,omitempty"`
+	PoolCountry  string   `json:"pool_country,omitempty"`
+	Kind         string   `json:"kind"`
+	Name         string   `json:"name,omitempty"`
+	Country      string   `json:"country,omitempty"`
+	Source       string   `json:"source,omitempty"`
 }
 
 // InheritedRoute describes the service's own active Mihomo group in rule mode.
@@ -206,6 +212,7 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 			continue
 		}
 		i, exists := positions[id]
+		entry, exit := MeasuredEntryCountry(s), MeasuredExitCountry(s)
 		if !exists {
 			kind := "server"
 			if len(s.RawProfile) > 0 {
@@ -213,8 +220,16 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 			}
 			i = len(view.Targets)
 			positions[id] = i
-			view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: ServerCountry(s)})
+			view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: AutoPoolCountry(s), EntryCountry: entry, ExitCountry: exit})
+		} else {
+			if view.Targets[i].EntryCountry != entry {
+				view.Targets[i].EntryCountry = ""
+			}
+			if view.Targets[i].ExitCountry != exit {
+				view.Targets[i].ExitCountry = ""
+			}
 		}
+		view.Targets[i].CountryPath = CountryPath(view.Targets[i].EntryCountry, view.Targets[i].ExitCountry)
 		if s.SourceName != "" && !slices.Contains(view.Targets[i].Sources, s.SourceName) {
 			view.Targets[i].Sources = append(view.Targets[i].Sources, s.SourceName)
 		}

@@ -1,7 +1,8 @@
 import { countryLabel, scopeLabel, unavailableCountryReason } from '@/lib/format'
+import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
 import type { AutoScope } from '@/types'
 
-export interface ServiceTarget {
+export interface ServiceTarget extends ServerCountries {
     id: string
     name: string
     kind: 'server' | 'profile' | 'pool'
@@ -33,7 +34,7 @@ const poolGroups = {
 
 const collator = new Intl.Collator('ru', { numeric: true })
 
-export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[] = [], avoided: string[] = [], defaultServiceTarget?: string) {
+export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[] = [], avoided: string[] = [], defaultServiceTarget?: string, fullPath = true) {
     const scopeById = new Map(scopes.map(scope => [scope.id, scope]))
     const groups = new Map<string, RouteGroup>()
     for (const target of targets) {
@@ -62,7 +63,9 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             title = sources.length > 1 ? 'Общие · ' + sources.join(' + ') : sources[0] || 'Без провайдера'
             order = sources.length > 1 ? 5 : sources.length ? 4 : 6
             if (target.kind === 'profile') detail = 'Режим провайдера'
-            if (target.kind === 'server' && target.country && avoided.includes(target.country)) detail = 'Только вручную'
+            if (target.kind === 'server') {
+                detail = [serverPathDetail(target, fullPath), target.country && avoided.includes(target.country) && 'Только вручную'].filter(Boolean).join(' · ') || undefined
+            }
         }
         let group = groups.get(key)
         if (!group) {

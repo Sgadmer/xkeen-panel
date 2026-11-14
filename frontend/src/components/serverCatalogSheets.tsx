@@ -7,7 +7,8 @@ import { Sheet } from '@/components/sheet'
 import { useMultiPools, usePanelSettings, usePool, useServers, useServerSources } from '@/hooks/usePanelData'
 import { invalidateServerData } from '@/hooks/useServerActions'
 import { api } from '@/lib/api'
-import { countryLabel, serverCountry, timeAgo } from '@/lib/format'
+import { countryExcluded, countryLabel, poolCountry, timeAgo } from '@/lib/format'
+import { serverPathDetail } from '@/lib/serverPath'
 import { importWarnings, safeNotice } from '@/lib/subscription'
 import type { MultiPool, PoolMember, Server, ServerSource, SubscriptionUpdateResponse } from '@/types'
 
@@ -165,7 +166,7 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
     const sourceOptions = [...sources.map(source => ({ id: source.id, name: source.name })),
         ...sourceIds.filter(id => !sources.some(item => item.id === id)).map(id => ({ id, name: 'Удалённый источник' }))]
     const sourceServers = (servers.data ?? []).filter(s => s.protocol !== 'xray-profile' && (allSources || sourceIds.includes(s.source_id || 'legacy')))
-    const availableCountries = [...new Set([...sourceServers.map(serverCountry), ...countries])].filter(Boolean)
+    const availableCountries = [...new Set([...sourceServers.map(poolCountry), ...countries])].filter(Boolean)
         .sort((a, b) => countryLabel(a).localeCompare(countryLabel(b), 'ru'))
     const selectedKeys = new Set(members.map(memberKey))
     const choices = new Map<string, Server>()
@@ -177,7 +178,7 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
     const normalized = search.trim().toLocaleLowerCase('ru')
     const matches = [...choices.entries()].filter(([key, server]) =>
         (!selectedOnly || selectedKeys.has(key)) &&
-        [server.name, server.source_name, countryLabel(serverCountry(server))].join(' ').toLocaleLowerCase('ru').includes(normalized))
+        [server.name, server.source_name, countryLabel(poolCountry(server))].join(' ').toLocaleLowerCase('ru').includes(normalized))
     const missing = members.filter(member => !choices.has(memberKey(member)))
     const rulesValid = !filterEnabled || (allSources || !!sourceIds.length) && (allCountries || !!countries.length)
     const valid = !!name.trim() && rulesValid && (mode !== 'manual' || members.length > 0)
@@ -251,10 +252,10 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
             </div>
             <div className='max-h-72 overflow-auto overscroll-contain divide-y divide-white/10'>
                 {matches.map(([key, server]) => {
-                    const code = serverCountry(server)
+                    const unavailable = countryExcluded(server, excluded)
                     const selected = selectedKeys.has(key)
-                    return <Choice key={key} checked={selected} disabled={action.isPending || excluded.includes(code) && !selected}
-                        label={server.name} hint={[server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна'].filter(Boolean).join(' · ')}
+                    return <Choice key={key} checked={selected} disabled={action.isPending || unavailable && !selected}
+                        label={server.name} hint={[server.source_name, serverPathDetail(server, settings.data?.show_full_path !== false), server.protocol, unavailable && 'Исключённая страна'].filter(Boolean).join(' · ')}
                         onChange={() => setMembers(prev => selected ? prev.filter(item => memberKey(item) !== key) :
                             [...prev, { source_id: server.source_id || 'legacy', target_id: server.target_id! }])} />
                 })}

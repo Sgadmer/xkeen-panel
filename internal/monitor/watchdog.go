@@ -491,8 +491,7 @@ func (w *Watchdog) pinBest(rt xkeen.Runtime, top xkeen.Topology) (string, error)
 		return w.pinServerLocked(eligible[0], false, "")
 	}
 	tag, err := xkeen.PinBestNode(rt, w.config.XrayAPIAddr, w.config.OutboundsFile, top,
-		w.subscription.GetServers(), w.excludedNodes(),
-		time.Duration(w.config.ProbeTimeoutMs)*time.Millisecond, w.config.ProbeConcurrency)
+		w.subscription.GetServers(), w.excludedNodes(), xkeen.PoolSelectionFromConfig(w.config, w.geoip))
 	if err != nil {
 		return "", err
 	}
@@ -699,6 +698,7 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 
 	var candidates []models.Server
 	skippedGeo := 0
+	eligible := xkeen.AutoCountryEligibility(data.Servers, w.AutomaticServerAllowed)
 	for i, s := range data.Servers {
 		if i == data.ActiveID {
 			continue
@@ -709,7 +709,7 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 		if !xkeen.CanBuildServer(s) {
 			continue
 		}
-		if !w.AutomaticServerAllowed(s) {
+		if !eligible[i] {
 			skippedGeo++
 			continue
 		}
@@ -732,8 +732,9 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 
 	best := -1
 	bestLat := int(^uint(0) >> 1)
+	eligible = xkeen.AutoCountryEligibility(checked, w.AutomaticServerAllowed)
 	for i := range checked {
-		if checked[i].Latency >= 0 && checked[i].Latency < bestLat {
+		if eligible[i] && checked[i].Latency >= 0 && checked[i].Latency < bestLat {
 			bestLat = checked[i].Latency
 			best = i
 		}
@@ -755,6 +756,7 @@ func (w *Watchdog) checkCandidates(servers []models.Server) ([]models.Server, er
 		Timeout:     time.Duration(w.config.ProbeTimeoutMs) * time.Millisecond,
 		Concurrency: w.config.ProbeConcurrency,
 		StateDir:    w.config.DataDir,
+		GeoIPPath:   w.config.GeoIPPath,
 	})
 }
 
@@ -786,38 +788,10 @@ func (w *Watchdog) AllowedActiveOrBest() *models.Server {
 	return best
 }
 
-// AutomaticServerAllowed decides whether automatic switching may use a server. GeoIP is
-// the primary signal (it proves the server is not in a blocked country); the
-// name is the fallback.
+// AutomaticServerAllowed checks the measured exit or the legacy address and label.
 func (w *Watchdog) AutomaticServerAllowed(s models.Server) bool {
-	// Manual override or name-derived country: an avoided one is an immediate no
-	effCountry := xkeen.ServerCountry(s)
-	if effCountry != "" && w.isAvoidedCountry(effCountry) {
-		return false
-	}
-
-	// GeoIP is the authoritative check, against the real IP
-	if w.geoip != nil {
-		avoidCC, resolved := w.geoip.Inspect(s.Address)
-		if resolved {
-			return avoidCC == "" // resolves and is not in an avoided country
-		}
-		// does not resolve, fall through to the name check
-	}
-
-	// Fallback (no GeoIP, or it did not resolve): strict mode — allow only when
-	// the name yields a known, permitted country
-	return effCountry != ""
-}
-
-func (w *Watchdog) isAvoidedCountry(cc string) bool {
-	cc = strings.ToUpper(cc)
-	for _, a := range w.config.AvoidCountries() {
-		if strings.ToUpper(strings.TrimSpace(a)) == cc {
-			return true
-		}
-	}
-	return false
+	policy := xkeen.PoolSelection{AvoidCountries: w.config.AvoidCountries(), GeoIP: w.geoip}
+	return policy.CountryAllowed(s, true)
 }
 
 func (w *Watchdog) blacklistServer(uri string) {

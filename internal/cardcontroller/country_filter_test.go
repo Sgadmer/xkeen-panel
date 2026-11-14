@@ -151,3 +151,28 @@ func TestCountryGroupReadinessRejectsMissingAllowedMember(t *testing.T) {
 		t.Fatal("restore did not preserve group", err)
 	}
 }
+
+func TestCountryPolicyUsesExitForManagedPoolsAndKeepsNativeNameGuard(t *testing.T) {
+	foreign := poolServer("A", "RU", "10001")
+	foreign.Name, foreign.ExitCountry, foreign.ExitCheckedAt = "relay", "SO", time.Now()
+	blocked := poolServer("A", "DE", "10002")
+	blocked.Name, blocked.ExitCountry, blocked.ExitCheckedAt = "blocked", "RU", time.Now()
+	alias := blocked
+	alias.Name, alias.ExitCountry = "also blocked", "DE"
+	good := poolServer("A", "DE", "10003")
+	good.Name = "good"
+	servers := []models.Server{foreign, blocked, alias, good}
+	sel := xkeen.PoolSelection{AvoidCountries: []string{"RU"}}
+	c := Controller{}
+	c.SetCountryPolicy(func() []string { return sel.AvoidCountries }, func(s models.Server) bool { return sel.CountryAllowed(s, true) })
+	nodes := c.poolNodes(servers)
+	members := builtinPool(scopeHash("country:SO")).members(nodes)
+	if len(members) != 1 || members[0].Name != "relay" || len(builtinPool(allPoolID).members(nodes)) != 2 {
+		t.Fatal("managed pool did not use measured exit and veto its blocked aliases")
+	}
+	p := profile{doc: map[string]interface{}{"proxy-groups": []interface{}{map[string]interface{}{"name": "native", "type": "url-test"}}}}
+	groups, err := c.renderCountryFilter(&p, servers)
+	if err != nil || !reflect.DeepEqual(groups.allowed["native"], map[string]bool{"relay": false, "blocked": false, "also blocked": false, "good": true}) {
+		t.Fatal("unverified native names or aliases bypassed country policy", groups.allowed, err)
+	}
+}
