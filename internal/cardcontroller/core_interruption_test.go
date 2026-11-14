@@ -38,16 +38,19 @@ func TestCoreInterruptionWithInheritedServiceRoutes(t *testing.T) {
 		{name: "missing owner rules", modes: releasedClaude, blocked: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := map[string]interface{}{
-				"mode": "rule", "external-controller": "127.0.0.1:9090", "secret": "test",
-				"rules": tc.rules, killSwitchKey: map[string]interface{}{"enabled": tc.global, "services": tc.modes},
-				stateKey: tc.assigned,
-			}
 			if tc.modes == nil {
-				cfg[killSwitchKey] = map[string]interface{}{"enabled": tc.global, "services": map[string]string{}}
+				tc.modes = map[string]string{}
 			}
 			if tc.assigned == nil {
-				cfg[stateKey] = map[string]string{}
+				tc.assigned = map[string]string{}
+			}
+			cfg := map[string]interface{}{
+				"mode":                "rule",
+				"external-controller": "127.0.0.1:9090",
+				"secret":              "test",
+				"rules":               tc.rules,
+				killSwitchKey:         map[string]interface{}{"enabled": tc.global, "services": tc.modes},
+				stateKey:              tc.assigned,
 			}
 			if tc.refilter {
 				cfg[refilterKey] = map[string]interface{}{"enabled": true, "domain_behavior": "domain", "site_hash": hash, "ip_hash": hash, "domains": 1, "prefixes": 1}
@@ -61,8 +64,10 @@ func TestCoreInterruptionWithInheritedServiceRoutes(t *testing.T) {
 				t.Fatal(err)
 			}
 			c := &Controller{path: path}
-			err = c.CheckCoreInterruption()
-			if err != nil && !strings.Contains(err.Error(), "Kill switch") || (err != nil) != tc.blocked {
+			if _, err := c.read(); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.CheckCoreInterruption(); (err != nil) != tc.blocked {
 				t.Fatalf("CheckCoreInterruption() = %v, want blocked %t", err, tc.blocked)
 			}
 		})

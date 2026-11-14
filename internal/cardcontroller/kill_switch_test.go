@@ -323,12 +323,26 @@ func TestKillSwitchLegacyFallbackSockets(t *testing.T) {
 			{"id":"leak","chains":["DIRECT","%s"],"metadata":{"host":"chatgpt.com"}},
 			{"id":"relaxed","chains":["DIRECT","%s"],"metadata":{"host":"youtube.com"}},
 			{"id":"ordinary","chains":["DIRECT","%s"],"metadata":{"host":"example.test"}},
+			{"id":"udp-ip","chains":["DIRECT","XKP-card-direct"],"rule":"DstPort","rulePayload":"8443"},
+			{"id":"udp-registered","chains":["DIRECT","XKP-card-direct"],"rule":"RuleSet","rulePayload":"XKP-refilter-domains","metadata":{"host":"chatgpt.com"}},
 			{"id":"manual-direct","chains":["DIRECT"],"metadata":{"host":"chatgpt.com"}}]}`, fallback, fallback, fallback)
 	}))
 	defer srv.Close()
-	doc := map[string]interface{}{killSwitchKey: map[string]interface{}{"enabled": false, "services": map[string]interface{}{"youtube": "inherit"}}}
-	api := coreAPI{base: srv.URL, client: srv.Client()}
-	if !(&Controller{}).drainObsoleteFallback(context.Background(), api, map[string]string{fallback: "VPN"}, doc) || !slices.Equal(closed, []string{"leak"}) {
-		t.Fatalf("unexpected closed sockets %v", closed)
+	doc := map[string]interface{}{
+		killSwitchKey: map[string]interface{}{"enabled": false, "services": map[string]interface{}{"youtube": "inherit"}},
+		"rules":       []string{"DST-PORT,8443,ChatGPT", "MATCH,DIRECT"},
 	}
+	api := coreAPI{base: srv.URL, client: srv.Client()}
+	check := func(want ...string) {
+		t.Helper()
+		closed = nil
+		if !(&Controller{}).drainObsoleteFallback(context.Background(), api, map[string]string{fallback: "VPN", cardPrefix + "direct": "DIRECT"}, doc) || !slices.Equal(closed, want) {
+			t.Fatalf("unexpected closed sockets %v", closed)
+		}
+	}
+	check("leak", "udp-ip", "udp-registered")
+	doc[refilterKey] = map[string]interface{}{"enabled": true}
+	check("leak", "udp-registered")
+	doc["rules"] = []string{"RULE-SET," + refilterSites + ",DIRECT", "MATCH,DIRECT"}
+	check("leak")
 }

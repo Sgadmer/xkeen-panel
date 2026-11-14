@@ -624,20 +624,54 @@ func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, exp
 			protectedAuto[str(group["name"])] = true
 		}
 	}
+	registry := refilterEnabled(doc)
+	registryDirect := map[string]bool{}
+	ownerService := map[string]string{}
+	for _, rule := range namesOf(doc["rules"]) {
+		f, end := targetPart(rule)
+		if end != 2 || strings.HasPrefix(f[end], cardPrefix) {
+			continue
+		}
+		if f[0] == "RULE-SET" && f[end] == "DIRECT" {
+			registryDirect[f[1]] = true
+		}
+		// A terminal rule hides the preceding VPN adapter from the chain.
+		// For IP/port matches without a host, identify the owner's original
+		// service classifier from the predicate reported by the tracker.
+		key := strings.ToLower(strings.ReplaceAll(f[0], "-", "")) + "," + f[1]
+		if _, earlier := ownerService[key]; !earlier {
+			ownerService[key] = diagnosticServiceTags[f[end]]
+		}
+	}
 	for _, flow := range snapshot.Connections {
 		stale, fromAuto, wentDirect := false, false, false
 		// A general fallback remains available for other destinations after
 		// a card becomes strict. Drain established direct fallback sockets for
 		// this service without touching traffic explicitly routed to DIRECT.
-		if len(flow.Chains) >= 2 && direct[flow.Chains[0]] && strings.HasPrefix(flow.Chains[1], failoverPrefix) {
+		if len(flow.Chains) >= 2 && direct[flow.Chains[0]] {
+			adapter := flow.Chains[1]
 			id := xkeen.ServiceForHost(flow.Metadata.Host)
 			if id == "" {
 				id = xkeen.ServiceForHost(flow.Metadata.SniffHost)
 			}
-			if id == "" {
-				id = diagnosticServiceTags[expected[flow.Chains[1]]]
+			switch {
+			case strings.HasPrefix(adapter, failoverPrefix):
+				if id == "" {
+					id = diagnosticServiceTags[expected[adapter]]
+				}
+				stale = id != "" && policy.Protects(id)
+			case adapter == cardPrefix+"direct":
+				// In an ordinary profile this terminal belongs only to VPN
+				// failover (e.g. unsupported UDP). Re:filter also uses it
+				// for explicitly direct names, private ranges and its catch-all.
+				registryFallback := strings.EqualFold(flow.Rule, "RuleSet") && (flow.RulePayload == refilterSites || flow.RulePayload == refilterIPs) && !registryDirect[flow.RulePayload]
+				if !registry || registryFallback {
+					if id == "" {
+						id = ownerService[strings.ToLower(flow.Rule)+","+flow.RulePayload]
+					}
+					stale = id != "" && policy.Protects(id)
+				}
 			}
-			stale = id != "" && policy.Protects(id)
 		}
 		for _, chain := range flow.Chains {
 			fromAuto = fromAuto || protectedAuto[chain]
