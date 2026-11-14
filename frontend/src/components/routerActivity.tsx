@@ -6,8 +6,15 @@ import { useDevices } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { RouterMetrics, type RouterSample } from '@/components/routerMetrics'
 import { ServiceLogo } from '@/components/serviceLogo'
+import { countryName, withCountryFlag } from '@/lib/format'
 
-type Flow = { id: string; device: string; host: string; port?: string; network?: string; rule?: string; service_id?: string; route: string[]; start: string }
+type ServerLocation = { name?: string; country?: string; source?: string }
+type Flow = {
+    id: string; device: string; host: string; port?: string; network?: string; rule?: string
+    service_id?: string; route: string[]; start: string
+    exit?: ServerLocation & { kind: 'server' | 'direct' | 'reject' | 'unresolved' }
+    pool_current?: ServerLocation
+}
 type Activity = {
     system: RouterSample
     history?: RouterSample[]
@@ -17,6 +24,34 @@ type Activity = {
 }
 
 const clock = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+function LocationLine({ label, location }: { label: string; location: ServerLocation }) {
+    const country = countryName(location.country)
+    const title = location.name || country
+    const showCountry = country && !title.toLocaleLowerCase('ru').includes(country.toLocaleLowerCase('ru'))
+    return <p className='break-words text-sm'>
+        <span className='text-muted-foreground'>{label} · </span>
+        <span className='whitespace-pre-wrap font-medium'>{withCountryFlag(title, location.country)}</span>
+        {showCountry && <span> · {country}</span>}
+        {location.source && <span className='whitespace-pre-wrap text-muted-foreground'> · {location.source}</span>}
+    </p>
+}
+
+function FlowExit({ flow }: { flow: Flow }) {
+    const exit = flow.exit
+    if (!exit) return null
+    if (exit.kind === 'direct' || exit.kind === 'reject') {
+        const how = exit.kind === 'direct' ? 'Напрямую' : 'Блокировка'
+        return flow.route.at(-1) === how ? null : <p className='text-sm'>Выход · {how}</p>
+    }
+    if (exit.kind === 'server' && (exit.name || exit.country)) {
+        return <LocationLine label='Локация соединения' location={exit} />
+    }
+    return <>
+        {flow.pool_current && <LocationLine label='Выбор пула сейчас' location={flow.pool_current} />}
+        <p className='text-xs text-muted-foreground'>Конечный сервер этого соединения неизвестен</p>
+    </>
+}
 
 export function RouterActivity() {
     const [params, setParams] = useSearchParams()
@@ -42,15 +77,20 @@ export function RouterActivity() {
     for (const f of flows) if (f.device && !devices.has(f.device)) devices.set(f.device, '')
     if (device && !devices.has(device)) devices.set(device, '')
     const input = search.trim().toLowerCase()
-    const filtered = flows.filter(f => (!device || f.device === device) && (!service || f.service_id === service) &&
-        (!input || [f.host, f.rule, ...f.route].some(s => s?.toLowerCase().includes(input))))
+    const filtered = flows.filter(f => {
+        if ((device && f.device !== device) || (service && f.service_id !== service)) return false
+        if (!input) return true
+        const location = f.exit?.kind === 'server' ? f.exit : f.pool_current
+        return [f.host, f.rule, ...f.route, location?.name, location?.source, location?.country, countryName(location?.country)]
+            .some(s => s?.toLowerCase().includes(input))
+    })
     const pageSize = 25
     const last = Math.max(0, Math.ceil(filtered.length / pageSize) - 1)
     const current = Math.min(page, last)
     useEffect(() => { setPage(0) }, [search, device, service])
     return <>
         <RouterMetrics system={sys} history={data?.history}/>
-        <Group title='Соединения по устройствам' footer='Здесь видны активные соединения, прошедшие через Mihomo. Для HTTPS отображается домен или IP, путь страницы зашифрован. Если маршрут заканчивается пулом или профилем Xray, его внутренний выбор сервера Mihomo не видит.'>
+        <Group title='Соединения по устройствам' footer='Для активных HTTPS-соединений Mihomo показывает домен или IP. Страна сервера указана по каталогу. «Выбор пула сейчас» может отличаться от сервера ранее открытого соединения.'>
             <div className='grid gap-3 py-3 sm:grid-cols-2 lg:grid-cols-3'>
                 <label className='grid min-w-0 gap-1 text-sm text-muted-foreground'>Устройство
                     <select className='min-h-11 min-w-0 w-full rounded-xl bg-fill px-3 text-foreground' value={device} onChange={e => {
@@ -100,6 +140,7 @@ export function RouterActivity() {
                     </div>
                     <p className='break-words text-sm text-muted-foreground'>{name && name !== f.device ? name + ' · ' : ''}{f.device || 'Источник неизвестен'}</p>
                     <p className='mt-1 break-words text-sm'>{f.route.length ? f.route.join(' → ') : 'Ядро не сообщило маршрут'}</p>
+                    <FlowExit flow={f} />
                     {f.rule && <p className='break-words text-xs text-muted-foreground'>Правило · {f.rule}</p>}
                 </article>
             })}

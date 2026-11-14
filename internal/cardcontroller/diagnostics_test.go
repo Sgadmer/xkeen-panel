@@ -1,9 +1,14 @@
 package cardcontroller
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
+
+	"xkeen-panel/internal/models"
+	"xkeen-panel/internal/xkeen"
 )
 
 func TestConnectionUsesObservedChainAndOnlyPublicFields(t *testing.T) {
@@ -44,5 +49,74 @@ func TestConnectionUsesObservedChainAndOnlyPublicFields(t *testing.T) {
 		if row.ServiceID != want || !reflect.DeepEqual(row.Route, []string{"Google", "US"}) {
 			t.Errorf("wrong service or observed route for %s: %+v", host, row)
 		}
+	}
+}
+
+func TestConnectionRowsKeepWorkerObservationSeparateFromRecordedExit(t *testing.T) {
+	de := poolServer("provider-1", "DE", "10001")
+	de.Name, de.SourceName = "🇩🇪 Berlin", "⭐ Provider"
+	nl := poolServer("provider-2", "NL", "10002")
+	nl.CountryOverride = "BE"
+	composite := models.Server{Name: "Auto provider", RawProfile: json.RawMessage(`{"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)}
+	servers := []models.Server{de, nl, composite}
+	c := &Controller{catalog: func() []models.Server { return servers }}
+	member := xkeen.ServiceTargetID(de)
+	generation := strings.Repeat("a", 64)
+	workerTag := nodePrefix + allPoolID + "-" + generation
+	oldTag := nodePrefix + allPoolID + "-" + strings.Repeat("b", 64)
+	p := profile{doc: map[string]interface{}{"proxies": []interface{}{
+		map[string]interface{}{"name": workerTag, "server": "127.0.0.1", "port": 1234, "type": "vless"},
+		map[string]interface{}{"name": "🇳🇱 native", "type": "vless"},
+	}}}
+	flows := []connectionTracker{
+		{ID: "a", Chains: []string{workerTag, cardPrefix + defaultID}},
+		{ID: "b", Chains: []string{workerTag, cardPrefix + "youtube"}},
+		{ID: "c", Chains: []string{oldTag, cardPrefix + defaultID}},
+		{ID: "d", Chains: []string{nodePrefix + member}},
+		{ID: "e", Chains: []string{"DIRECT", cardPrefix + defaultID}},
+		{ID: "f", Chains: []string{"REJECT-DROP"}},
+		{ID: "g", Chains: []string{nodePrefix + xkeen.ServiceTargetID(composite)}},
+		{ID: "h", Chains: []string{"🇳🇱 native", "auto"}},
+	}
+	samples := 0
+	read := func(ctx context.Context, _ xkeen.Runtime, id string, port int) string {
+		samples++
+		if id != generation || port != 1234 {
+			t.Fatalf("unexpected worker %s, %d", id, port)
+		}
+		return member
+	}
+	rows := c.connectionRows(context.Background(), p, flows, read)
+	want := ConnectionExit{Kind: "server", Name: de.Name, Source: de.SourceName, Country: "DE"}
+	if samples != 1 || rows[0].Exit.Kind != "unresolved" || rows[1].Exit.Kind != "unresolved" ||
+		rows[0].PoolCurrent == nil || *rows[0].PoolCurrent != want || rows[1].PoolCurrent != rows[0].PoolCurrent {
+		t.Fatalf("expected one separate sample for the live worker, got %d across %+v", samples, rows[:2])
+	}
+	if rows[2].Exit.Kind != "unresolved" || rows[2].PoolCurrent != nil || rows[3].Exit != want || rows[3].PoolCurrent != nil ||
+		rows[4].Exit.Kind != "direct" || rows[5].Exit.Kind != "reject" || rows[6].Exit.Kind != "unresolved" ||
+		rows[7].Exit.Name != "🇳🇱 native" || rows[7].Exit.Kind != "server" {
+		t.Fatalf("unexpected projected exits: %+v", rows[2:])
+	}
+	member = xkeen.ServiceTargetID(nl)
+	changed := c.connectionRows(context.Background(), p, flows[:1], read)[0]
+	if changed.Exit.Kind != "unresolved" || changed.PoolCurrent == nil || changed.PoolCurrent.Country != "BE" {
+		t.Fatalf("pool changes must never become a per-flow exit: %+v", changed)
+	}
+	member = ""
+	missing := c.connectionRows(context.Background(), p, flows[:1], read)[0]
+	if missing.Exit.Kind != "unresolved" || missing.PoolCurrent != nil {
+		t.Fatalf("a worker without observations must not fabricate an exit: %+v", missing)
+	}
+}
+
+func TestDiagnosticCatalogProtectsConflictingAliases(t *testing.T) {
+	first := poolServer("A", "DE", "10001")
+	first.SourceName = "First"
+	alias := first
+	alias.SourceName, alias.CountryOverride, alias.Name = "Second", "AU", "Other name"
+	a := diagnosticCatalog([]models.Server{first, alias})[xkeen.ServiceTargetID(first)]
+	b := diagnosticCatalog([]models.Server{alias, first})[xkeen.ServiceTargetID(first)]
+	if a != b || a.Country != "" || a.Source != "" || a.Name == alias.Name || a.Name == first.Name || a.Kind != "server" {
+		t.Fatalf("ambiguous aliases exposed a source or location: %+v, %+v", a, b)
 	}
 }

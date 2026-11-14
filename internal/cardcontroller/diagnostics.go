@@ -7,21 +7,31 @@ import (
 	"strings"
 	"time"
 
+	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
 )
+
+type ConnectionExit struct {
+	Kind    string `json:"kind,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Country string `json:"country,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
 
 // Connection contains only the metadata needed by the local diagnostics view.
 // The core can also return process paths, proxy credentials and process names.
 type Connection struct {
-	ServiceID string    `json:"service_id,omitempty"`
-	ID        string    `json:"id"`
-	Device    string    `json:"device"`
-	Host      string    `json:"host"`
-	Port      string    `json:"port,omitempty"`
-	Network   string    `json:"network,omitempty"`
-	Rule      string    `json:"rule,omitempty"`
-	Route     []string  `json:"route"`
-	Start     time.Time `json:"start"`
+	ServiceID   string          `json:"service_id,omitempty"`
+	ID          string          `json:"id"`
+	Device      string          `json:"device"`
+	Host        string          `json:"host"`
+	Port        string          `json:"port,omitempty"`
+	Network     string          `json:"network,omitempty"`
+	Rule        string          `json:"rule,omitempty"`
+	Route       []string        `json:"route"`
+	Exit        ConnectionExit  `json:"exit"`
+	PoolCurrent *ConnectionExit `json:"pool_current,omitempty"`
+	Start       time.Time       `json:"start"`
 }
 
 type connectionTracker struct {
@@ -70,7 +80,7 @@ func (f connectionTracker) project(names map[string]string) Connection {
 		}
 		if pretty := names[tag]; pretty != "" {
 			tag = pretty
-		} else if strings.HasPrefix(tag, nodePrefix) {
+		} else if tag != "" && publicRouteName(tag, nil) == "" {
 			tag = "Выход панели"
 		}
 		if tag != "" {
@@ -105,48 +115,167 @@ func (c *Controller) Connections(ctx context.Context) ([]Connection, error) {
 	if err := p.api.request(ctx, "GET", "/connections", nil, &snapshot); err != nil {
 		return nil, err
 	}
+	return c.connectionRows(ctx, p, snapshot.Connections, xkeen.CardPoolMember), nil
+}
+
+// Mihomo records the terminal adapter for this flow. A panel-generated Xray
+// pool is itself one adapter: its current observatory result is a separate
+// sample and may have changed since this connection started.
+func (c *Controller) connectionRows(ctx context.Context, p profile, flows []connectionTracker, readMember func(context.Context, xkeen.Runtime, string, int) string) []Connection {
 	names := map[string]string{"DIRECT": "Напрямую", "REJECT": "Блокировка", "REJECT-DROP": "Блокировка", cardPrefix + defaultID: "Общий маршрут"}
 	for id, display := range groupNames {
 		names[cardPrefix+id] = display
 		names[cardPrefix+id+"-inherited"] = display + " (по правилам)"
 		names[dedicatedGroup(id)] = display + " (прокси устройства)"
 	}
-	rows := make([]Connection, 0, len(snapshot.Connections))
-	needNames := map[string]bool{}
-	for _, f := range snapshot.Connections {
-		for _, tag := range f.Chains {
-			if _, ok := names[tag]; ok {
+	proxies := map[string]map[string]interface{}{}
+	for _, raw := range list(p.doc["proxies"]) {
+		proxy := object(raw)
+		proxies[str(proxy["name"])] = proxy
+	}
+	leaves := map[string]bool{}
+	for _, f := range flows {
+		if len(f.Chains) > 0 {
+			leaves[f.Chains[0]] = true
+		}
+	}
+
+	unresolved := ConnectionExit{Kind: "unresolved"}
+	exits := map[string]ConnectionExit{}
+	poolNow := map[string]*ConnectionExit{}
+	type worker struct {
+		generation string
+		port       int
+	}
+	observations := map[worker]string{}
+	var catalog map[string]ConnectionExit
+	lookup := func(id string) ConnectionExit {
+		if catalog == nil {
+			catalog = diagnosticCatalog(c.catalog())
+		}
+		return catalog[id]
+	}
+	var providers map[string]selector
+	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	for tag := range leaves {
+		rest, managed := strings.CutPrefix(tag, nodePrefix)
+		if !managed {
+			if tag == "DIRECT" || tag == "REJECT" || tag == "REJECT-DROP" {
+				exits[tag] = nativeConnectionExit(tag, tag)
 				continue
 			}
-			if rest, ok := strings.CutPrefix(tag, nodePrefix); ok {
-				id, _, _ := strings.Cut(rest, "-")
-				if pool := p.pool(id); pool != nil {
-					names[tag] = pool.Name + " (мультипул Xray)"
+			if publicRouteName(tag, nil) == "" {
+				continue
+			}
+			typ := str(proxies[tag]["type"])
+			if typ == "" && len(object(p.doc["proxy-providers"])) > 0 {
+				if providers == nil {
+					providers = p.api.providerNodes(ctx)
+				}
+				typ = providers[tag].Type
+			}
+			exits[tag] = nativeConnectionExit(tag, typ)
+			continue
+		}
+
+		id, generation, grouped := strings.Cut(rest, "-")
+		if !validHash(id) {
+			continue
+		}
+		if !grouped {
+			endpoint := lookup(id)
+			if endpoint.Name != "" {
+				names[tag] = endpoint.Name
+				if endpoint.Kind == "server" {
+					exits[tag] = endpoint
 				} else {
-					needNames[tag] = true
+					names[tag] += " (профиль Xray)"
 				}
 			}
+			continue
+		}
+
+		pool := p.pool(id)
+		if pool == nil || !validHash(generation) {
+			continue
+		}
+		names[tag] = pool.Name + " (мультипул Xray)"
+		proxy := proxies[tag]
+		port, _ := proxy["port"].(int)
+		if str(proxy["server"]) != "127.0.0.1" || port <= 0 || port > 65535 {
+			continue
+		}
+		key := worker{generation, port}
+		member, cached := observations[key]
+		if !cached && metricsCtx.Err() == nil {
+			member = readMember(metricsCtx, c.rt, generation, port)
+			observations[key] = member
+		}
+		if member != "" {
+			if current := lookup(member); current.Kind == "server" {
+				poolNow[tag] = &current
+			}
 		}
 	}
-	if len(needNames) > 0 {
-		for _, s := range c.catalog() {
-			tag := nodePrefix + xkeen.ServiceTargetID(s)
-			if !needNames[tag] {
-				continue
+	rows := make([]Connection, 0, len(flows))
+	for _, f := range flows {
+		row := f.project(names)
+		row.Exit = unresolved
+		if len(f.Chains) > 0 {
+			tag := f.Chains[0]
+			if exit, ok := exits[tag]; ok {
+				row.Exit = exit
 			}
-			names[tag] = s.Name
-			if len(s.RawProfile) > 0 {
-				names[tag] += " (профиль Xray)"
-			}
-			delete(needNames, tag)
-			if len(needNames) == 0 {
-				break
-			}
+			row.PoolCurrent = poolNow[tag]
 		}
-	}
-	for _, f := range snapshot.Connections {
-		rows = append(rows, f.project(names))
+		rows = append(rows, row)
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Start.After(rows[j].Start) })
-	return rows, nil
+	return rows
+}
+
+func nativeConnectionExit(tag, typ string) ConnectionExit {
+	switch strings.ToLower(typ) {
+	case "direct":
+		return ConnectionExit{Kind: "direct"}
+	case "reject", "rejectdrop", "reject-drop":
+		return ConnectionExit{Kind: "reject"}
+	case "http", "socks5", "ss", "shadowsocks", "ssr", "shadowsocksr", "snell", "vmess", "vless", "trojan", "hysteria", "hysteria2",
+		"wireguard", "tuic", "ssh", "anytls", "mieru", "sudoku", "trusttunnel", "masque", "openvpn":
+		return ConnectionExit{Kind: "server", Name: tag}
+	}
+	return ConnectionExit{Kind: "unresolved"}
+}
+
+// Worker tags identify the complete outbound. Catalog entries sharing that
+// identity may have different user-defined labels or subscription names.
+func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
+	index := map[string]ConnectionExit{}
+	for _, s := range servers {
+		id := xkeen.ServiceTargetID(s)
+		if id == "" {
+			continue
+		}
+		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.ServerCountry(s), Source: publicRouteName(s.SourceName, nil)}
+		if len(s.RawProfile) > 0 {
+			exit.Kind = "unresolved"
+		}
+		if prior, exists := index[id]; exists {
+			if prior.Source != exit.Source {
+				exit.Source = ""
+			}
+			if prior.Country != exit.Country {
+				exit.Country = ""
+			}
+			if prior.Name != exit.Name {
+				exit.Name = "Сервер с несколькими названиями"
+			}
+		}
+		if exit.Name == "" {
+			exit.Name = "Выход панели"
+		}
+		index[id] = exit
+	}
+	return index
 }
