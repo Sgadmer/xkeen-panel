@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-const cloudflareHealthURL = "https://www.cloudflare.com/robots.txt"
-
 // DefaultHealthURLs are the services worth watching: they are the ones that
 // break first when an exit IP has a bad reputation, while plain connectivity
 // checks keep passing.
@@ -23,10 +21,10 @@ const cloudflareHealthURL = "https://www.cloudflare.com/robots.txt"
 // The endpoints are deliberately small and quick: a probe travels through the
 // VPN, and a heavy page turns a healthy exit into a timeout.
 var DefaultHealthURLs = []string{
-	cloudflareHealthURL,                    // Cloudflare edge, static resource
-	"https://web.telegram.org/",            // Telegram
-	"https://www.youtube.com/generate_204", // Google, empty 204
-	"https://soundcloud.com/",              // CloudFront
+	"https://www.cloudflare.com/cdn-cgi/trace", // Cloudflare edge, a few lines of text
+	"https://web.telegram.org/",                // Telegram
+	"https://www.youtube.com/generate_204",     // Google, empty 204
+	"https://soundcloud.com/",                  // CloudFront
 }
 
 // healthVerdict is the outcome of one probe.
@@ -57,13 +55,6 @@ type HealthChecker struct {
 func NewHealthChecker(urls []string, threshold, quorum int) *HealthChecker {
 	if len(urls) == 0 {
 		urls = DefaultHealthURLs
-	}
-	// Some older configurations persisted the defaults as explicit URLs.
-	urls = append([]string(nil), urls...)
-	for i, url := range urls {
-		if url == "https://www.cloudflare.com/cdn-cgi/trace" {
-			urls[i] = cloudflareHealthURL
-		}
 	}
 	if threshold < 1 {
 		threshold = 2

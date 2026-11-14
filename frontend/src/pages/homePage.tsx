@@ -13,7 +13,6 @@ import {
     useDevices,
     useLogs,
     useMultiPools,
-    usePanelSettings,
     usePool,
     useServers,
     useStatus,
@@ -25,8 +24,8 @@ import {
     countryName,
     countryFlag,
     panelEvents,
-    scopeLabel,
     serverCountry,
+    scopeLabel,
     statusInfo,
     timeAgo,
     toneDot,
@@ -34,7 +33,6 @@ import {
     toneText,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { serverPathDetail } from '@/lib/serverPath'
 
 export function HomePage() {
     const status = useStatus().data
@@ -44,7 +42,6 @@ export function HomePage() {
     const devices = useDevices().data
     const update = useUpdate().data
     const logs = useLogs().data ?? []
-    const fullPath = usePanelSettings().data?.show_full_path !== false
     const { auto, pin } = useServerActions()
     const setup = useSetupState().data
 
@@ -61,10 +58,9 @@ export function HomePage() {
     const actualName = pool?.current_name ?? status?.current_server
     const direct = actualName === 'DIRECT'
     const blocked = actualName === 'REJECT'
-    const code = direct || blocked ? '' : serverCountry(current ?? node)
+    const code = direct || blocked ? '' : node?.country || serverCountry(current)
     const source = pool?.source_name || ((!pool?.selection_kind || !['native', 'auto'].includes(pool.selection_kind)) ? current?.source_name : undefined)
     const awaitingMember = pool?.selection_kind === 'auto' && !pool.current_tag
-    const path = !direct && !blocked && !awaitingMember && serverPathDetail(current, fullPath, countryName(code))
     const endpoint = direct ? 'Прямое подключение' : blocked ? 'Маршрут заблокирован' : awaitingMember ? 'Пул проверяет доступные узлы' : current?.name || node?.name || actualName
     const mode = pool?.selection_kind ?? (isAuto ? 'auto' : 'manual')
     const route = mode === 'auto'
@@ -134,7 +130,6 @@ export function HomePage() {
                             <p className='break-words'><span className='text-muted-foreground'>{selective ? 'Маршрут для Re:filter' : 'Основной маршрут'} · </span>{route}</p>
                             {selective && <p className='text-muted-foreground'>После правил сервисов и исключений адреса из списка идут по выбранному маршруту. Остальные адреса открываются напрямую.</p>}
                             {source && <p className='break-words'><span className='text-muted-foreground'>Подписка · </span>{source}</p>}
-                            {path && <p className='break-words'>{path}</p>}
                         </div>}
                         {isPool && (
                             <div className='flex min-h-11 items-center gap-3 border-t border-white/10 pt-2.5'>

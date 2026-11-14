@@ -436,7 +436,11 @@ func main() {
 	}
 	var candidates []models.Server
 	for _, server := range servers {
-		if excluded[xkeen.ServerCountry(server)] {
+		country := strings.ToUpper(strings.TrimSpace(server.CountryOverride))
+		if country == "" {
+			country = strings.ToUpper(strings.TrimSpace(server.Country))
+		}
+		if excluded[country] {
 			counts.Excluded++
 			continue
 		}

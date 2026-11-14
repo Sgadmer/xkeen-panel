@@ -10,17 +10,15 @@ import (
 	"xkeen-panel/internal/xkeen"
 )
 
-func publicServer(server models.Server) serverView {
-	path := xkeen.ServerCountryPath(server)
-	server.Country = xkeen.ServerCountry(server)
+func publicServer(server models.Server) models.Server {
 	server.RawURI = ""
 	server.RawOutbound = nil
 	server.RawProfile = nil
-	return serverView{Server: server, DeclaredCountryPath: path}
+	return server
 }
 
-func publicServers(servers []models.Server) []serverView {
-	result := make([]serverView, len(servers))
+func publicServers(servers []models.Server) []models.Server {
+	result := make([]models.Server, len(servers))
 	for i, server := range servers {
 		result[i] = publicServer(server)
 	}

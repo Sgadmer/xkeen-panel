@@ -235,10 +235,7 @@ func (c *Controller) setScope(ctx context.Context, id string) error {
 func poolViews(servers []models.Server) []xkeen.PoolNodeView {
 	result := make([]xkeen.PoolNodeView, 0, len(servers))
 	for _, s := range servers {
-		result = append(result, xkeen.PoolNodeView{
-			Tag: xkeen.ServiceTargetID(s), ServerID: s.ID, Name: s.Name, Address: s.Address, Port: s.Port,
-			Country: xkeen.ServerCountry(s), DeclaredCountryPath: xkeen.ServerCountryPath(s), Latency: s.Latency,
-		})
+		result = append(result, xkeen.PoolNodeView{Tag: xkeen.ServiceTargetID(s), ServerID: s.ID, Name: s.Name, Address: s.Address, Port: s.Port, Country: xkeen.ServerCountry(s), Latency: s.Latency})
 	}
 	return result
 }

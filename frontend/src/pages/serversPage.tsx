@@ -40,17 +40,15 @@ import { useStreamLatency } from '@/hooks/useStreamLatency'
 import {
     countryName,
     countryLabel,
-    countryExcluded,
     latencyTone,
     scopeLabel,
     serverCountry,
     timeAgo,
     toneText,
     unavailableCountryReason,
-    serverDisplayName,
+    withCountryFlag,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { serverPathDetail } from '@/lib/serverPath'
 import { importWarnings, safeNotice } from '@/lib/subscription'
 import type { AutoScope, Server } from '@/types'
 
@@ -116,9 +114,7 @@ export function ServersPage() {
         && (scope.unavailable_reason !== 'no_servers' || scope.id === selectedScope?.id))
     const customScopes = scopes.filter(scope => scope.kind === 'custom')
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
-    const settings = usePanelSettings().data
-    const avoidCountries = settings?.avoid_countries ?? []
-    const fullPath = settings?.show_full_path !== false
+    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
     const subscription = useSubscription().data
     const {
@@ -184,7 +180,6 @@ export function ServersPage() {
                 const server = byId.get(n.server_id)
                 return {
                     node: n,
-                    server,
                     country: server ? serverCountry(server) : n.country,
                     protocol: server?.protocol,
                     source: server?.source_name,
@@ -209,8 +204,7 @@ export function ServersPage() {
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
-        path: serverPathDetail(s, fullPath, s.name),
-        countryExcluded: countryExcluded(s, avoidCountries),
+        countryExcluded: avoidCountries.includes(serverCountry(s)),
         busy: routeBusy,
         measuring: isPendingServer(s.id),
         liveLatency: latencyFor(s.id),
@@ -270,7 +264,7 @@ export function ServersPage() {
                                 ? progress.completed > 0
                                     ? `Проверено ${progress.completed} из ${progress.total} серверов`
                                     : `Проверка ${progress.total} серверов может занять минуту`
-                                : 'Проверить доступность и задержку серверов'
+                                : 'Реальное соединение через каждый сервер'
                         }
                         onClick={check}
                         disabled={checking}
@@ -433,15 +427,15 @@ export function ServersPage() {
                             {poolRows.map(r => (
                                 <PoolRow
                                     key={r.node.tag}
-                                    name={serverDisplayName(r.node.name, r.country)}
+                                    name={r.node.name}
+                                    country={r.country}
                                     protocol={r.protocol}
                                     source={r.source}
-                                    path={serverPathDetail(r.server ?? r.node, fullPath, r.node.name)}
                                     latency={latencyFor(r.node.server_id) ?? r.latency}
                                     measuring={isPendingServer(r.node.server_id)}
                                     current={r.current}
                                     excludedUntil={r.node.excluded_until}
-                                    countryExcluded={r.server ? countryExcluded(r.server, avoidCountries) : avoidCountries.includes(r.country ?? '')}
+                                    countryExcluded={avoidCountries.includes(r.country ?? '')}
                                     busy={routeBusy}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
@@ -667,9 +661,9 @@ function siteLabel(domains: string[]) {
 
 function PoolRow({
     name,
+    country,
     protocol,
     source,
-    path,
     latency,
     measuring,
     current,
@@ -679,9 +673,9 @@ function PoolRow({
     onSelect,
 }: {
     name: string
+    country?: string
     protocol?: string
     source?: string
-    path: string
     latency: number
     measuring: boolean
     current: boolean
@@ -691,6 +685,7 @@ function PoolRow({
     onSelect: () => void
 }) {
     const notes = [
+        countryName(country),
         source,
         countryExcluded && 'Страна исключена в разделе «Автоматика»',
         excludedUntil &&
@@ -711,7 +706,7 @@ function PoolRow({
                         excludedUntil && 'text-muted-foreground',
                     )}
                 >
-                    {name}
+                    {withCountryFlag(name, country)}
                     {protocol && <ProtocolBadge protocol={protocol} />}
                 </span>
                 {notes.length > 0 && (
@@ -719,7 +714,6 @@ function PoolRow({
                         {notes.join(' · ')}
                     </span>
                 )}
-                {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{path}</span>}
             </span>
             <Latency measuring={measuring} ms={latency} />
             <span className='flex w-6 justify-center'>
@@ -878,7 +872,6 @@ function SearchField({
 
 function ServerRow({
     server,
-    path,
     liveLatency,
     measuring,
     countryExcluded,
@@ -887,7 +880,6 @@ function ServerRow({
     onSetCountry,
 }: {
     server: Server
-    path: string
     measuring: boolean
     liveLatency?: number
     countryExcluded: boolean
@@ -950,11 +942,10 @@ function ServerRow({
             >
                 <span className='min-w-0 flex-1'>
                     <span className='block break-words text-[17px] tracking-[-0.43px]'>
-                        {serverDisplayName(server.name, serverCountry(server))}
+                        {withCountryFlag(server.name, serverCountry(server))}
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
                     {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
-                    {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{path}</span>}
                     {!measuring && status && (
                         <span
                             className={cn(

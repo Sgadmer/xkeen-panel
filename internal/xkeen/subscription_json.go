@@ -73,7 +73,7 @@ func ParseSubscriptionDetailed(content string) ([]models.Server, ImportReport, e
 	for i := range servers {
 		servers[i].ID = i
 		servers[i].Latency = -1
-		servers[i].Country = ServerCountry(servers[i])
+		servers[i].Country = detectCountry(servers[i].Name)
 	}
 	return servers, report, nil
 }

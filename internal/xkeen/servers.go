@@ -69,6 +69,7 @@ func parseURISubscription(content string) ([]models.Server, error) {
 
 		server.ID = len(servers)
 		server.RawURI = line
+		server.Country = detectCountry(server.Name)
 		servers = append(servers, *server)
 	}
 

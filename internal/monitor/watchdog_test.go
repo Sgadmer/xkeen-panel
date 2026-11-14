@@ -20,22 +20,22 @@ func newWatchdog(t *testing.T, cfg *models.Config) *Watchdog {
 	return NewWatchdog(cfg, sub, xkeen.NewDetector(t.TempDir(), "", "", "", "", "", ""))
 }
 
-func TestAutomaticCountryCheckIgnoresCase(t *testing.T) {
+func TestIsAvoidedCountry(t *testing.T) {
 	w := newWatchdog(t, &models.Config{AutoSwitchAvoidCountries: []string{"RU", "BY"}})
 
 	cases := []struct {
 		cc   string
 		want bool
 	}{
-		{"RU", false},
-		{"ru", false},
-		{"BY", false},
-		{"NL", true},
+		{"RU", true},
+		{"ru", true},
+		{"BY", true},
+		{"NL", false},
 		{"", false},
 	}
 	for _, c := range cases {
-		if got := w.AutomaticServerAllowed(models.Server{Country: c.cc}); got != c.want {
-			t.Errorf("AutomaticServerAllowed(%q) = %v, want %v", c.cc, got, c.want)
+		if got := w.isAvoidedCountry(c.cc); got != c.want {
+			t.Errorf("isAvoidedCountry(%q) = %v, want %v", c.cc, got, c.want)
 		}
 	}
 }
@@ -122,10 +122,7 @@ func TestIsServerAllowedWithGeoIP(t *testing.T) {
 	}{
 		{"ip in RU range", models.Server{Address: "1.2.3.5"}, false},
 		{"ip resolved not avoided", models.Server{Address: "8.8.8.8"}, true},
-		{"foreign label through RU entry", models.Server{Address: "1.2.3.5", Country: "NL"}, true},
-		{"RU label through foreign entry", models.Server{Address: "8.8.8.8", Country: "RU"}, false},
-		{"manual exclusion vetoes allowed label", models.Server{Address: "8.8.8.8", Country: "SO", CountryOverride: "BY"}, false},
-		{"unlabelled host stays unknown", models.Server{Address: "relay.invalid"}, false},
+		{"geoip authoritative over name", models.Server{Address: "1.2.3.5", Country: "NL"}, false},
 	}
 	for _, c := range cases {
 		if got := w.AutomaticServerAllowed(c.s); got != c.want {

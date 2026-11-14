@@ -21,12 +21,9 @@ export function countryLabel(code?: string) {
     return [countryFlag(code), countryName(code)].filter(Boolean).join(' ')
 }
 
-const nameFlag = /\p{Regional_Indicator}{2}\uFE0F?/u
-
-export function serverDisplayName(name: string, country?: string) {
-    if (nameFlag.test(name)) return name
-    const flag = countryFlag(country)
-    return flag ? flag + ' ' + name : name
+export function withCountryFlag(name: string, code?: string) {
+    const flag = countryFlag(code)
+    return flag && !/\p{Regional_Indicator}{2}/u.test(name) ? flag + ' ' + name : name
 }
 
 export function scopeLabel(scope: { kind: string; country?: string; name: string }) {
@@ -45,12 +42,8 @@ export function unavailableCountryReason(scope: AutoScope, avoided: string[]) {
     }
 }
 
-export function serverCountry(server?: Pick<Server, 'country_override' | 'country'>) {
+export function serverCountry(server?: Server) {
     return (server?.country_override || server?.country || '').toUpperCase()
-}
-
-export function countryExcluded(server: Server, avoided: string[]) {
-    return avoided.includes(serverCountry(server))
 }
 
 // Go marshals an unset time as year 1

@@ -9,8 +9,7 @@ import { ServiceKillSwitch, serviceKillSwitch, useKillSwitch } from '@/component
 import { ServiceRoutePicker } from '@/components/serviceRoutePicker'
 import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
-import { countryLabel } from '@/lib/format'
-import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
+import { countryLabel, withCountryFlag } from '@/lib/format'
 import { serviceRouteOptions, type ServiceTarget } from '@/lib/serviceRouteOptions'
 
 interface InheritedRoute {
@@ -29,11 +28,12 @@ interface Service {
     target: string
     blocked: boolean
     inherited_route?: InheritedRoute
-    current_route?: ServerCountries & {
+    current_route?: {
         pool?: string
         pool_country?: string
         kind: 'server' | 'direct' | 'reject' | 'unknown'
         name?: string
+        country?: string
         source?: string
     }
 }
@@ -63,13 +63,13 @@ function currentRoute(route: InheritedRoute) {
     return current
 }
 
-function routeSummary(service: Service, fullPath: boolean) {
+function routeSummary(service: Service) {
     const current = service.current_route
     if (service.target === 'direct') return 'Через домашнего провайдера'
     if (current?.kind === 'reject' || service.blocked) return 'Соединение заблокировано'
     if (current?.kind === 'direct') return 'Напрямую'
     if (current?.kind === 'server') {
-        const location = serverPathDetail(current, fullPath) || current.name || 'Локация не указана'
+        const location = countryLabel(current.country) || 'Локация неизвестна'
         return current.source ? current.source + ' → ' + location : location
     }
     if (!service.target && service.inherited_route) {
@@ -132,8 +132,8 @@ function useClaudeApiFirewall(enabled: boolean) {
     return { state, install }
 }
 
-function ServiceDetails({ service, selected, fresh, mihomo, firewall, protectionEnabled, fullPath }: {
-    service: Service; selected?: ServiceTarget; fresh: boolean; mihomo: boolean; firewall: ReturnType<typeof useClaudeApiFirewall>; protectionEnabled?: boolean; fullPath: boolean
+function ServiceDetails({ service, selected, fresh, mihomo, firewall, protectionEnabled }: {
+    service: Service; selected?: ServiceTarget; fresh: boolean; mihomo: boolean; firewall: ReturnType<typeof useClaudeApiFirewall>; protectionEnabled?: boolean
 }) {
     const claude = service.id === 'claude'
     const { state, install } = firewall
@@ -160,7 +160,7 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
                 <IconChevronDown aria-hidden className='size-4 shrink-0 transition-transform group-open/details:rotate-180' />
             </summary>
             <div className='space-y-4 pb-2'>
-                {live?.kind === 'server' && live.name && <p className='break-words'>{inherited?.kind === 'conditional' ? 'Для адресов из списка блокировок' : 'Сейчас'} · {[countryLabel(live.pool_country) || live.pool, live.name, serverPathDetail(live, fullPath, live.name)].filter(Boolean).join(' → ')}</p>}
+                {live?.kind === 'server' && live.name && <p className='break-words'>{inherited?.kind === 'conditional' ? 'Для адресов из списка блокировок' : 'Сейчас'} · {[countryLabel(live.pool_country) || live.pool, withCountryFlag(live.name, live.country)].filter(Boolean).join(' → ')}</p>}
                 {(live?.source || providers) && <p className='break-words'>Провайдер{!live?.source && (selected?.sources?.length ?? 0) > 1 ? 'ы' : ''} · {live?.source || providers}</p>}
                 {claude && !needsAttention && <div>
                     <h3 className='font-medium'>Фильтр API на роутере</h3>
@@ -211,9 +211,7 @@ function ClientProxy({service}: {service: Service}) {
 
 export function ServiceRoutesPage() {
     const qc = useQueryClient()
-    const settings = usePanelSettings().data
-    const avoidCountries = settings?.avoid_countries
-    const fullPath = settings?.show_full_path !== false
+    const avoidCountries = usePanelSettings().data?.avoid_countries
     const [notice, setNotice] = useState('')
     const key = ['service-routes']
     const query = useQuery({
@@ -250,7 +248,7 @@ export function ServiceRoutesPage() {
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
     const targets = view?.targets
     const defaultServiceTarget = mihomo ? view.default_service_target : undefined
-    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries, defaultServiceTarget, fullPath), [targets, scopes, avoidCountries, defaultServiceTarget, fullPath])
+    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries, defaultServiceTarget), [targets, scopes, avoidCountries, defaultServiceTarget])
 
     return (
         <>
@@ -293,7 +291,7 @@ export function ServiceRoutesPage() {
                         {order.services.map(service => {
                             const isClaude = service.id === 'claude'
                             const selected = view.targets.find(t => t.id === service.target)
-                            const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service, fullPath)
+                            const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service)
                             const busy = pendingService?.service_id === service.id
                             const label = 'service-' + service.id
                             return (
@@ -323,7 +321,7 @@ export function ServiceRoutesPage() {
                                         {busy ? 'Меняем маршрут…' : summary}
                                     </p>
                                     {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
-                                    <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall} fullPath={fullPath}
+                                    <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
                                         protectionEnabled={claudeProtection} />
                                 </section>
                             )

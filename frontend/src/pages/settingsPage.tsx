@@ -8,11 +8,10 @@ import {
     IconFingerprint,
     IconWand,
 } from '@tabler/icons-react'
-import { Group, IconTile, PageTitle, Row, Switch } from '@/components/ios'
+import { Group, IconTile, PageTitle, Row } from '@/components/ios'
 import { GlobalKillSwitch } from '@/components/killSwitch'
 import { useAuth } from '@/hooks/useAuth'
-import { usePanelSettings, useStatus, useUpdate } from '@/hooks/usePanelData'
-import type { PanelSettings } from '@/types'
+import { useStatus, useUpdate } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { passkeySupported, registerPasskey } from '@/lib/webauthn'
 
@@ -27,11 +26,6 @@ export function SettingsPage() {
     const { logout } = useAuth()
     const status = useStatus().data
     const update = useUpdate().data
-    const settings = usePanelSettings()
-    const appearance = useMutation({
-        mutationFn: (show_full_path: boolean) => api.put<PanelSettings>('/api/panel/settings/appearance', { show_full_path }),
-        onSuccess: data => qc.setQueryData(['panel-settings'], data),
-    })
 
     const passkeys = useQuery({
         queryKey: ['passkeys'],
@@ -90,12 +84,6 @@ export function SettingsPage() {
 
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <div className='flex min-w-0 flex-col gap-5'>
-                    <Group title='Вид панели' footer={appearance.error && <span role='alert' className='text-destructive'>{appearance.error.message}</span>}>
-                        <Row label='Показывать полный путь VPN'
-                            hint='Если в подписке указан путь через несколько стран, показывать их по порядку. При выключении видна только конечная страна.'
-                            trailing={<Switch label='Показывать полный путь VPN' checked={settings.data?.show_full_path !== false}
-                                disabled={!settings.data || appearance.isPending} onChange={value => appearance.mutate(value)} />} />
-                    </Group>
                     <Group title='Сведения'>
                         <dl className='grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 py-3 text-sm'>
                             <dt className='text-muted-foreground'>Ядро</dt><dd>{[core, status?.mode].filter(Boolean).join(' · ') || '—'}</dd>

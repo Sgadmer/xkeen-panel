@@ -21,7 +21,6 @@ export type Server = {
     latency_ms: number
     country?: string
     country_override?: string
-    declared_country_path?: string[]
     last_checked?: string
     probe_kind?: string
     check_error?: string
@@ -82,7 +81,6 @@ export type PoolNode = {
 }
 
 export type PanelSettings = {
-    show_full_path?: boolean
     avoid_countries: string[]
     subscription_refresh_minutes: number
 }

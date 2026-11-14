@@ -1,7 +1,6 @@
 package xkeen
 
 import (
-	"strings"
 	"time"
 
 	"xkeen-panel/internal/models"
@@ -15,15 +14,14 @@ func (t Topology) Selector() string {
 }
 
 type PoolNodeView struct {
-	Tag                 string     `json:"tag"`
-	ServerID            int        `json:"server_id"` // -1 when the node is not in the subscription
-	Name                string     `json:"name"`
-	Address             string     `json:"address"`
-	Port                int        `json:"port"`
-	Country             string     `json:"country,omitempty"`
-	DeclaredCountryPath []string   `json:"declared_country_path,omitempty"`
-	Latency             int        `json:"latency_ms"`
-	ExcludedUntil       *time.Time `json:"excluded_until,omitempty"`
+	Tag           string     `json:"tag"`
+	ServerID      int        `json:"server_id"` // -1 when the node is not in the subscription
+	Name          string     `json:"name"`
+	Address       string     `json:"address"`
+	Port          int        `json:"port"`
+	Country       string     `json:"country,omitempty"`
+	Latency       int        `json:"latency_ms"`
+	ExcludedUntil *time.Time `json:"excluded_until,omitempty"`
 }
 
 func DescribePool(nodes []PoolNode, excluded map[string]time.Time) []PoolNodeView {
@@ -44,7 +42,6 @@ func DescribePool(nodes []PoolNode, excluded map[string]time.Time) []PoolNodeVie
 			view.Name = server.Name
 			view.Latency = server.Latency
 			view.Country = ServerCountry(*server)
-			view.DeclaredCountryPath = ServerCountryPath(*server)
 		}
 
 		if until, ok := excluded[node.Tag]; ok && time.Now().Before(until) {
@@ -58,23 +55,13 @@ func DescribePool(nodes []PoolNode, excluded map[string]time.Time) []PoolNodeVie
 	return views
 }
 
-// The owner's correction takes precedence over the subscription's destination.
+// ServerCountry is the owner's override when set, otherwise the country read
+// from the server name.
 func ServerCountry(server models.Server) string {
 	if server.CountryOverride != "" {
-		return strings.ToUpper(server.CountryOverride)
+		return server.CountryOverride
 	}
-	if code, hasArrow := providerArrowDestination(server.Name); hasArrow {
-		return code
-	}
-	// A hostname used as the display name for an unlabelled link is not a
-	// provider declaration, even when it contains a country code.
-	if server.Address != "" && server.Name == server.Address {
-		return ""
-	}
-	if server.Country == "" {
-		return detectCountry(server.Name)
-	}
-	return strings.ToUpper(server.Country)
+	return server.Country
 }
 
 func ServerForNode(servers []models.Server, node string) (models.Server, bool) {

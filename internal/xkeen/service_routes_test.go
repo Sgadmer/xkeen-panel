@@ -3,36 +3,10 @@ package xkeen
 import (
 	"encoding/json"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"xkeen-panel/internal/models"
 )
-
-func TestServiceTargetPathClearsConflictingAliasExit(t *testing.T) {
-	rt := Runtime{XrayConfDir: t.TempDir()}
-	server := poolServers()[0]
-	server.SourceName, server.Name = "A", "🇷🇺 → 🇸🇪"
-	alias := server
-	alias.SourceName = "B"
-	view := func() ServiceTarget {
-		t.Helper()
-		result, err := ReadServiceRoutes(rt, []models.Server{server, alias})
-		if err != nil || len(result.Targets) != 1 {
-			t.Fatalf("read target: %v", err)
-		}
-		return result.Targets[0]
-	}
-	got := view()
-	if !slices.Equal(got.DeclaredCountryPath, []string{"RU", "SE"}) || got.Country != "SE" || len(got.Sources) != 2 {
-		t.Fatal(got)
-	}
-	alias.Name = "🇷🇺 → 🇳🇱"
-	got = view()
-	if got.Country != "" || len(got.DeclaredCountryPath) != 0 {
-		t.Fatal(got)
-	}
-}
 
 func TestServiceRoutesPreserveDirectAndPinExactTarget(t *testing.T) {
 	rt, path, _, baseline := profileApplyBaseline(t)

@@ -57,7 +57,6 @@ type Config struct {
 	// Countries to avoid when switching automatically
 	GeoIPPath                string   `yaml:"geoip_path"`
 	AutoSwitchAvoidCountries []string `yaml:"auto_switch_avoid_countries"`
-	HideServerPath           bool     `yaml:"-"` // panel display preference from settings.json
 
 	// Trust proxy headers (X-Forwarded-For/Host/Proto). Enable ONLY behind a
 	// trusted proxy that rewrites them — otherwise they can be spoofed on the

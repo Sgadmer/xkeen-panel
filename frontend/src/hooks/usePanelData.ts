@@ -41,7 +41,6 @@ export function usePool() {
 export function usePanelSettings() {
     return useQuery({
         queryKey: ['panel-settings'],
-        refetchOnWindowFocus: 'always',
         queryFn: () => api.get<PanelSettings>('/api/panel/settings'),
     })
 }

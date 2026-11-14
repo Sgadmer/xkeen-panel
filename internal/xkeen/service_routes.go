@@ -151,12 +151,11 @@ func ServiceTargetID(server models.Server) string {
 }
 
 type ServiceTarget struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name"`
-	Kind                string   `json:"kind"`
-	Country             string   `json:"country,omitempty"`
-	Sources             []string `json:"sources,omitempty"`
-	DeclaredCountryPath []string `json:"declared_country_path,omitempty"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Country string   `json:"country,omitempty"`
+	Sources []string `json:"sources,omitempty"`
 }
 type ServiceRouteView struct {
 	RoutingService
@@ -170,13 +169,12 @@ type ServiceRouteView struct {
 // CurrentServiceRoute describes the next selection reported by the live core.
 // For a conditional rule this is the VPN branch only.
 type CurrentServiceRoute struct {
-	DeclaredCountryPath []string `json:"declared_country_path,omitempty"`
-	Pool                string   `json:"pool,omitempty"`
-	PoolCountry         string   `json:"pool_country,omitempty"`
-	Kind                string   `json:"kind"`
-	Name                string   `json:"name,omitempty"`
-	Country             string   `json:"country,omitempty"`
-	Source              string   `json:"source,omitempty"`
+	Pool        string `json:"pool,omitempty"`
+	PoolCountry string `json:"pool_country,omitempty"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name,omitempty"`
+	Country     string `json:"country,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 // InheritedRoute describes the service's own active Mihomo group in rule mode.
@@ -208,7 +206,6 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 			continue
 		}
 		i, exists := positions[id]
-		country, path := ServerCountry(s), ServerCountryPath(s)
 		if !exists {
 			kind := "server"
 			if len(s.RawProfile) > 0 {
@@ -216,14 +213,7 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 			}
 			i = len(view.Targets)
 			positions[id] = i
-			view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: country, DeclaredCountryPath: path})
-		} else {
-			if view.Targets[i].Country != country {
-				view.Targets[i].Country = ""
-			}
-			if !slices.Equal(view.Targets[i].DeclaredCountryPath, path) {
-				view.Targets[i].DeclaredCountryPath = nil
-			}
+			view.Targets = append(view.Targets, ServiceTarget{ID: id, Name: s.Name, Kind: kind, Country: ServerCountry(s)})
 		}
 		if s.SourceName != "" && !slices.Contains(view.Targets[i].Sources, s.SourceName) {
 			view.Targets[i].Sources = append(view.Targets[i].Sources, s.SourceName)

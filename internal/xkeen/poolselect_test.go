@@ -149,19 +149,6 @@ func TestSelectPoolServersEmptyWhenAllAvoided(t *testing.T) {
 	}
 }
 
-func TestProviderCountryXrayPoolAndConflictingAlias(t *testing.T) {
-	entry := vlessAt("Provider label", "SO", "entry.example", 443)
-	sel := PoolSelection{AvoidCountries: []string{"RU"}}
-	if got := SelectPoolServers([]models.Server{entry}, sel); len(got) != 1 || ServerCountry(got[0]) != "SO" {
-		t.Fatal("provider destination missing from the pool")
-	}
-	alias := entry
-	alias.SourceID, alias.Country = "other", "RU"
-	if got := SelectPoolServers([]models.Server{entry, alias}, sel); len(got) != 0 {
-		t.Fatal("alias of a disallowed destination entered the pool")
-	}
-}
-
 // Probe load scales with pool size, so the interval has to scale with it.
 func TestProbeIntervalScalesWithPoolSize(t *testing.T) {
 	cases := map[int]string{5: "1m", 20: "1m", 21: "3m", 40: "3m", 81: "5m"}

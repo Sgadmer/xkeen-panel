@@ -3,8 +3,8 @@ package xkeen
 import (
 	"fmt"
 	"log"
-	"slices"
 	"sort"
+	"time"
 
 	"xkeen-panel/internal/models"
 )
@@ -105,7 +105,7 @@ func PinDrifted(outboundsPath, selector, tag, node string) bool {
 // Pinning is what makes a pool usable for everyday traffic: a balancer picks an
 // outbound per connection, so without an override the outgoing IP moves between
 // nodes and anything IP-bound — Telegram sessions, CDN anti-abuse — breaks.
-func PinBestNode(rt Runtime, apiAddr, outboundsPath string, top Topology, servers []models.Server, excluded map[string]bool, sel PoolSelection) (string, error) {
+func PinBestNode(rt Runtime, apiAddr, outboundsPath string, top Topology, servers []models.Server, excluded map[string]bool, probeTimeout time.Duration, concurrency int) (string, error) {
 	selector := DefaultPoolSelector
 	if len(top.Selectors) > 0 {
 		selector = top.Selectors[0]
@@ -117,26 +117,6 @@ func PinBestNode(rt Runtime, apiAddr, outboundsPath string, top Topology, server
 	}
 	if len(nodes) == 0 {
 		return "", fmt.Errorf("в пуле нет нод")
-	}
-	if len(sel.AvoidCountries) != 0 {
-		// The file may still contain a previous member, for example when a
-		// new exit measurement arrived before a pool refresh. Country vetoes
-		// must also survive the all-unhealthy fallback below.
-		denied := make(map[string]bool)
-		for _, s := range servers {
-			if !sel.CountryAllowed(s, false) {
-				denied[NodeKeyOfServer(s)] = true
-			}
-		}
-		nodes = slices.DeleteFunc(nodes, func(n PoolNode) bool {
-			if n.Server != nil {
-				return denied[n.NodeKey]
-			}
-			return !sel.CountryAllowed(models.Server{Address: n.Address}, false)
-		})
-		if len(nodes) == 0 {
-			return "", fmt.Errorf("в пуле нет серверов из разрешённых стран")
-		}
 	}
 	// leastPing uses observatory requests through the actual outbound. Unlike
 	// a TCP connect to the endpoint, this verifies REALITY/TLS credentials and
@@ -187,8 +167,8 @@ func PinBestNode(rt Runtime, apiAddr, outboundsPath string, top Topology, server
 		return "", fmt.Errorf("в пуле нет нод с успешной проверкой HTTPS")
 	}
 
-	if sel.ProbeTimeout > 0 {
-		checked := checkPoolLatencies(candidates, sel.ProbeTimeout, sel.ProbeConcurrency)
+	if probeTimeout > 0 {
+		checked := checkPoolLatencies(candidates, probeTimeout, concurrency)
 		sort.SliceStable(checked, func(i, j int) bool {
 			switch {
 			case checked[i].Latency < 0:

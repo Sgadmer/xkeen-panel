@@ -2,7 +2,6 @@ package xkeen
 
 import (
 	"log"
-	"net"
 	"sort"
 	"strings"
 	"time"
@@ -55,8 +54,7 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 
 	var allowed []models.Server
 	var pinned []models.Server
-	eligible := AutoCountryEligibility(servers, func(s models.Server) bool { return sel.CountryAllowed(s, false) })
-	for i, server := range servers {
+	for _, server := range servers {
 		// A provider profile owns its own balancing and routing. Selecting it
 		// explicitly must never nest that policy inside the ordinary auto pool.
 		if len(server.RawProfile) > 0 {
@@ -74,7 +72,7 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 		if server.ProbeKind == "https" && server.Latency < 0 {
 			continue
 		}
-		if !eligible[i] {
+		if sel.avoided(server) {
 			continue
 		}
 		allowed = append(allowed, server)
@@ -229,42 +227,19 @@ func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurre
 	return checked
 }
 
-// Only unlabelled nodes need the conservative local IP exclusion check. It
-// neither resolves provider names nor determines the displayed destination.
-func (sel PoolSelection) CountryAllowed(server models.Server, requireKnown bool) bool {
-	if country := ServerCountry(server); country != "" {
-		return !sel.isAvoidedCode(country)
+func (sel PoolSelection) avoided(server models.Server) bool {
+	if country := ServerCountry(server); country != "" && sel.isAvoidedCode(country) {
+		return true
 	}
-	if sel.GeoIP != nil {
-		if ip := net.ParseIP(server.Address); ip != nil {
-			_, denied := sel.GeoIP.Match(ip)
-			return !denied
-		}
-	}
-	return !requireKnown
-}
 
-// AutoCountryEligibility denies every alias of a disallowed outbound, including
-// a second subscription with a conflicting location label.
-func AutoCountryEligibility(servers []models.Server, allowed func(models.Server) bool) []bool {
-	result := make([]bool, len(servers))
-	denied := make(map[string]bool)
-	for i, server := range servers {
-		result[i] = allowed(server)
-		if !result[i] {
-			if id := ServiceTargetID(server); id != "" {
-				denied[id] = true
-			}
+	// GeoIP is authoritative when the name says nothing useful
+	if sel.GeoIP != nil {
+		if code, resolved := sel.GeoIP.Inspect(server.Address); resolved && code != "" {
+			return true
 		}
 	}
-	if len(denied) > 0 {
-		for i, server := range servers {
-			if result[i] && denied[ServiceTargetID(server)] {
-				result[i] = false
-			}
-		}
-	}
-	return result
+
+	return false
 }
 
 func (sel PoolSelection) isAvoidedCode(code string) bool {

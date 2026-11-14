@@ -30,9 +30,8 @@ export function ServerAutomation() {
     const countries = useMemo(() => {
         const codes = new Set<string>()
         for (const server of servers.data ?? []) {
-            if (server.protocol === 'xray-profile') continue
-            const code = serverCountry(server)
-            if (/^[A-Z]{2}$/.test(code)) codes.add(code)
+            const code = serverCountry(server).trim()
+            if (server.protocol !== 'xray-profile' && /^[A-Z]{2}$/.test(code)) codes.add(code)
         }
         return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
     }, [servers.data])

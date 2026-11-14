@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Group, Row } from '@/components/ios'
-import { useDevices, usePanelSettings } from '@/hooks/usePanelData'
+import { useDevices } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { RouterMetrics, type RouterSample } from '@/components/routerMetrics'
 import { ServiceLogo } from '@/components/serviceLogo'
-import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
+import { countryName, withCountryFlag } from '@/lib/format'
 
-type ServerLocation = ServerCountries & { name?: string; source?: string }
+type ServerLocation = { name?: string; country?: string; source?: string }
 type Flow = {
     id: string; device: string; host: string; port?: string; network?: string; rule?: string
     service_id?: string; route: string[]; start: string
@@ -25,11 +25,10 @@ type Activity = {
 
 const clock = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-function FlowRoute({ flow, service, full }: { flow: Flow; service?: string; full: boolean }) {
+function FlowRoute({ flow, service }: { flow: Flow; service?: string }) {
     const location = flow.exit?.kind === 'server' ? flow.exit : flow.pool_current
-    const path = serverPathDetail(location, full)
-    const name = location?.name
-    const node = path || name
+    const country = countryName(location?.country)
+    const node = location && withCountryFlag(location.name || country, location.country)
     const hops = [...flow.route]
     if (node && flow.exit?.kind === 'server' && (hops.at(-1) === location?.name || hops.at(-1) === node)) hops.pop()
     if (service && (hops.length || node)) {
@@ -39,7 +38,7 @@ function FlowRoute({ flow, service, full }: { flow: Flow; service?: string; full
     }
     const outcome = flow.exit?.kind === 'direct' ? 'Напрямую' : flow.exit?.kind === 'reject' ? 'Блокировка' : ''
     if (outcome && hops.at(-1) !== outcome) hops.push(outcome)
-    const hint = [flow.pool_current && 'Текущий выбор пула', name].filter(Boolean).join(' · ')
+    const hint = flow.pool_current ? ['Текущий выбор пула', country].filter(Boolean).join(' · ') : country
     return <>
         <p className='mt-1 whitespace-pre-wrap break-words text-sm' title={flow.route.join(' → ')}>
             {hops.join(' → ')}{node && <>{hops.length > 0 && ' → '}<span title={hint || undefined}
@@ -61,7 +60,6 @@ export function RouterActivity() {
     const paused = snapshot !== null
     const [page, setPage] = useState(0)
     const known = useDevices().data?.devices ?? []
-    const fullPath = usePanelSettings().data?.show_full_path !== false
     const query = useQuery({
         queryKey: ['router-activity'], queryFn: () => api.get<Activity>('/api/diagnostics'),
         enabled: !paused, refetchInterval: paused ? false : 3000, retry: false,
@@ -82,7 +80,7 @@ export function RouterActivity() {
         if ((device && f.device !== device) || (service && f.service_id !== service)) return false
         if (!input) return true
         const location = f.exit?.kind === 'server' ? f.exit : f.pool_current
-        return [f.host, f.rule, f.service_id && services.get(f.service_id), ...f.route, location?.name, location?.source, location?.country, serverPathDetail(location, fullPath)]
+        return [f.host, f.rule, f.service_id && services.get(f.service_id), ...f.route, location?.name, location?.source, location?.country, countryName(location?.country)]
             .some(s => s?.toLowerCase().includes(input))
     })
     const pageSize = 25
@@ -140,7 +138,7 @@ export function RouterActivity() {
                         <span className='text-xs text-muted-foreground'>{f.network}</span>
                     </div>
                     <p className='break-words text-sm text-muted-foreground'>{name && name !== f.device ? name + ' · ' : ''}{f.device || 'Источник неизвестен'}</p>
-                    <FlowRoute flow={f} service={f.service_id && services.get(f.service_id)} full={fullPath} />
+                    <FlowRoute flow={f} service={f.service_id && services.get(f.service_id)} />
                 </article>
             })}
             {last > 0 && <div className='flex items-center justify-between py-1 text-sm'>

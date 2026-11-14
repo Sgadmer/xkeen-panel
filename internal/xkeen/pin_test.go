@@ -73,7 +73,7 @@ func TestPinBestNodeSkipsExcluded(t *testing.T) {
 	// No dispatcher in the fixture, so the override call fails — but the choice
 	// is made before that, and the error names the tag it tried
 	_, err := PinBestNode(rt, "", outboundsPath, Topology{BalancerTag: "balancer"},
-		poolServers(), map[string]bool{"sub-1": true}, PoolSelection{})
+		poolServers(), map[string]bool{"sub-1": true}, 0, 1)
 	if err == nil {
 		t.Skip("override unexpectedly succeeded without a core")
 	}
@@ -91,7 +91,7 @@ func TestPinBestNodeFallsBackWhenAllExcluded(t *testing.T) {
 	}
 
 	_, err := PinBestNode(rt, "", outboundsPath, Topology{BalancerTag: "balancer"},
-		poolServers(), map[string]bool{"sub-1": true, "sub-2": true}, PoolSelection{})
+		poolServers(), map[string]bool{"sub-1": true, "sub-2": true}, 0, 1)
 
 	if err == nil {
 		t.Skip("override unexpectedly succeeded without a core")
@@ -105,23 +105,8 @@ func TestPinBestNodeEmptyPool(t *testing.T) {
 	rt, outboundsPath := liveConfDir(t)
 
 	if _, err := PinBestNode(rt, "", outboundsPath, Topology{BalancerTag: "balancer"},
-		[]models.Server{}, nil, PoolSelection{}); err == nil {
+		[]models.Server{}, nil, 0, 1); err == nil {
 		t.Error("expected an error when the config holds no pool")
-	}
-}
-
-func TestPinBestNodeObservesNewlyDeniedCountry(t *testing.T) {
-	rt, path := liveConfDir(t)
-	servers := poolServers()
-	if _, err := EnablePool(rt, path, servers, PoolOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	for i := range servers {
-		servers[i].Country = "RU"
-	}
-	_, err := PinBestNode(rt, "", path, Topology{BalancerTag: "balancer"}, servers, nil, PoolSelection{AvoidCountries: []string{"RU"}})
-	if err == nil || !contains(err.Error(), "из разрешённых стран") {
-		t.Fatal("stale pool members selected despite their forbidden exit", err)
 	}
 }
 

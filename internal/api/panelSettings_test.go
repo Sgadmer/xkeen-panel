@@ -74,33 +74,6 @@ func TestPanelSettingsApplyAndPersist(t *testing.T) {
 	}
 }
 
-func TestAppearanceIsSharedAndIndependentOfRouting(t *testing.T) {
-	cfg := &models.Config{DataDir: t.TempDir(), AutoSwitchAvoidCountries: []string{"RU"}, SubscriptionRefreshInterval: 3600}
-	reset := make(chan struct{}, 1)
-	h := NewPanelSettingsHandler(cfg, nil, "", reset)
-	h.BindCountryPolicy(func() { t.Fatal("appearance touched route lock") }, func() {}, nil)
-	if !*h.current().ShowFullPath {
-		t.Fatal("expected full path by default")
-	}
-	rec := httptest.NewRecorder()
-	h.HandleAppearance(rec, httptest.NewRequest(http.MethodPut, "/api/panel/settings/appearance", strings.NewReader(`{"show_full_path":false}`)))
-	if rec.Code != http.StatusOK || *h.current().ShowFullPath || len(reset) != 0 {
-		t.Fatal("appearance change failed or reset refresh")
-	}
-	h.BindCountryPolicy(nil, nil, nil)
-	rec = putSettings(h, `{"avoid_countries":["BY"],"subscription_refresh_minutes":30}`)
-	if rec.Code != http.StatusOK {
-		t.Fatal(rec.Body.String())
-	}
-	fresh := &models.Config{DataDir: cfg.DataDir}
-	if err := LoadPanelSettings(fresh); err != nil {
-		t.Fatal(err)
-	}
-	if !fresh.HideServerPath || strings.Join(fresh.AvoidCountries(), ",") != "BY" || fresh.RefreshInterval() != 30*time.Minute {
-		t.Fatal("an unrelated settings update overwrote the display preference")
-	}
-}
-
 func TestPanelSettingsRejectsBadInput(t *testing.T) {
 	cfg := &models.Config{DataDir: t.TempDir(), SubscriptionRefreshInterval: 1800}
 	h := NewPanelSettingsHandler(cfg, nil, "", make(chan struct{}, 1))

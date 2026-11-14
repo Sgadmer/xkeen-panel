@@ -162,11 +162,9 @@ func (h *Handlers) applySubscription(servers []models.Server, resp map[string]in
 		if err := h.waitForBalancer(rt); err != nil {
 			return err
 		}
-		selection := xkeen.PoolSelectionFromConfig(h.config, h.geoip)
-		if preferred == nil && len(xkeen.SelectPoolServers(servers, selection)) == 0 {
-			allowed := xkeen.AutoCountryEligibility(servers, func(s models.Server) bool { return selection.CountryAllowed(s, false) })
+		if preferred == nil && len(xkeen.SelectPoolServers(servers, xkeen.PoolSelectionFromConfig(h.config, h.geoip))) == 0 {
 			for i := range servers {
-				if allowed[i] && servers[i].ProbeKind == "https" && servers[i].Latency >= 0 && xkeen.CanBuildServer(servers[i]) {
+				if servers[i].ProbeKind == "https" && servers[i].Latency >= 0 && xkeen.CanBuildServer(servers[i]) {
 					selected := servers[i]
 					preferred = &selected
 					break
@@ -246,16 +244,15 @@ func (h *Handlers) refreshPool(servers []models.Server) (xkeen.SyncResult, error
 // HandleGetServers — GET /api/servers
 type serverView struct {
 	models.Server
-	PoolTag             string   `json:"pool_tag,omitempty"`
-	TargetID            string   `json:"target_id,omitempty"`
-	DeclaredCountryPath []string `json:"declared_country_path,omitempty"`
+	PoolTag  string `json:"pool_tag,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
 }
 
 func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
 	servers := h.subscription.GetServers()
 	views := make([]serverView, len(servers))
 	for i, server := range servers {
-		views[i] = publicServer(server)
+		views[i] = serverView{Server: publicServer(server)}
 	}
 
 	// In pool mode the active entry is the pinned node, not the server the pool was built from

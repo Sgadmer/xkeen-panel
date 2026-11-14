@@ -108,14 +108,11 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	type probeKey struct {
-		source, identity string
-		id               int
-	}
+	type probeKey struct{ source, identity string }
 	results := make(map[probeKey]models.Server, len(checked))
 	for _, c := range checked {
-		if key := sourceServerKey(c); key != "" {
-			results[probeKey{c.SourceID, key, c.ID}] = c
+		if key := ServerIdentity(c); key != "" {
+			results[probeKey{c.SourceID, key}] = c
 		}
 	}
 
@@ -124,10 +121,10 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	sm.data.Servers = append([]models.Server(nil), previous...)
 	for i := range sm.data.Servers {
 		s := &sm.data.Servers[i]
-		identity := sourceServerKey(*s)
-		result, ok := results[probeKey{s.SourceID, identity, s.ID}]
+		identity := ServerIdentity(*s)
+		result, ok := results[probeKey{s.SourceID, identity}]
 		if !ok && s.SourceID == "legacy" {
-			result, ok = results[probeKey{"", identity, s.ID}]
+			result, ok = results[probeKey{"", identity}]
 		}
 		if ok {
 			if sm.data.Servers[i].ProbeKind == "https" && result.ProbeKind != "https" {

@@ -65,7 +65,6 @@ export function useEventSource() {
             })
 
             es.addEventListener('pool', () => {
-                qc.invalidateQueries({ queryKey: ['multipools'] })
                 qc.invalidateQueries({ queryKey: ['pool'] })
                 qc.invalidateQueries({ queryKey: ['servers'] })
                 qc.invalidateQueries({ queryKey: ['status'] })

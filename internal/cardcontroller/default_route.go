@@ -415,11 +415,16 @@ func (c *Controller) RecoverDefault(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	var candidates []models.Server
-	for _, n := range c.poolNodes(servers) {
-		if !n.allowed || n.id == state.Pinned || !strings.EqualFold(xkeen.ServerCountry(n.server), country) {
+	for _, s := range servers {
+		if len(s.RawProfile) != 0 || !strings.EqualFold(xkeen.ServerCountry(s), country) {
 			continue
 		}
-		candidates = append(candidates, n.server)
+		if c.avoidCountries != nil && len(c.avoidCountries()) > 0 && !c.autoAllowed(s) {
+			continue
+		}
+		if key := xkeen.ServiceTargetID(s); key != "" && key != state.Pinned {
+			candidates = append(candidates, s)
+		}
 	}
 	if len(candidates) == 0 {
 		return "", errors.New("резерв того же региона отсутствует")
@@ -428,14 +433,18 @@ func (c *Controller) RecoverDefault(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, n := range c.poolNodes(checked) {
-		s := n.server
-		if n.allowed && strings.EqualFold(xkeen.ServerCountry(s), country) && s.ProbeKind == "https" && s.Latency >= 0 {
-			if err := c.setDefault(ctx, n.id, s.SourceID, true); err != nil {
-				return "", err
-			}
-			return s.Name, nil
+	best := -1
+	for i, s := range checked {
+		if s.ProbeKind == "https" && s.Latency >= 0 && (best < 0 || s.Latency < checked[best].Latency) {
+			best = i
 		}
 	}
-	return "", errors.New("резерв того же региона не прошёл HTTPS-проверку")
+	if best < 0 {
+		return "", errors.New("резерв того же региона не прошёл HTTPS-проверку")
+	}
+	err = c.setDefault(ctx, xkeen.ServiceTargetID(checked[best]), checked[best].SourceID, true)
+	if err != nil {
+		return "", err
+	}
+	return checked[best].Name, nil
 }

@@ -351,7 +351,33 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 			transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport, Timeout: options.Timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-			checked[index].Latency = measureHTTPSLatency(nodeCtx, client)
+			for targetIndex, target := range []string{"https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"} {
+				attemptCtx := nodeCtx
+				attemptCancel := func() {}
+				if targetIndex == 0 {
+					attemptCtx, attemptCancel = context.WithTimeout(nodeCtx, options.Timeout/2)
+				}
+				request, e := http.NewRequestWithContext(attemptCtx, http.MethodGet, target, nil)
+				if e != nil {
+					attemptCancel()
+					continue
+				}
+				start := time.Now()
+				response, e := client.Do(request)
+				if e != nil {
+					attemptCancel()
+					continue
+				}
+				response.Body.Close()
+				attemptCancel()
+				if response.StatusCode == http.StatusNoContent {
+					checked[index].Latency = int(time.Since(start) / time.Millisecond)
+					if checked[index].Latency < 1 {
+						checked[index].Latency = 1
+					}
+					break
+				}
+			}
 		}(i, port)
 	}
 	wg.Wait()
@@ -364,33 +390,4 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		return nil, fmt.Errorf("проверка отменена; рабочие настройки сохранены")
 	}
 	return checked, nil
-}
-
-// Use the second connectivity endpoint only when the first did not answer 204.
-func measureHTTPSLatency(ctx context.Context, client *http.Client) int {
-	for i, target := range []string{"https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"} {
-		if ctx.Err() != nil {
-			break
-		}
-		budget := client.Timeout
-		if i == 0 {
-			budget /= 2
-		}
-		attempt, cancel := context.WithTimeout(ctx, budget)
-		request, err := http.NewRequestWithContext(attempt, http.MethodGet, target, nil)
-		if err != nil {
-			cancel()
-			continue
-		}
-		start := time.Now()
-		response, err := client.Do(request)
-		if err == nil {
-			response.Body.Close()
-		}
-		cancel()
-		if err == nil && response.StatusCode == http.StatusNoContent {
-			return max(1, int(time.Since(start).Milliseconds()))
-		}
-	}
-	return -1
 }

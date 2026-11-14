@@ -109,7 +109,6 @@ func (s *Server) Handler() http.Handler {
 		if err := s.subscription.UpdateLatencies(checked); err != nil {
 			return err
 		}
-		defer s.eventBus.Publish(sse.Event{Type: "pool", Data: struct{}{}})
 		if s.Cards != nil && s.Cards.Reconcile(ctx) != nil {
 			return sse.ErrPoolUpdate
 		}
@@ -219,7 +218,6 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/panel/settings", s.settings.HandleGet)
 			r.Put("/panel/settings", s.settings.HandlePut)
-			r.Put("/panel/settings/appearance", s.settings.HandleAppearance)
 
 			r.Get("/devices", devicesHandler.HandleList)
 			r.Post("/devices/rename", devicesHandler.HandleRename)

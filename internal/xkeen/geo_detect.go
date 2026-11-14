@@ -5,12 +5,10 @@ import (
 	"unicode"
 )
 
-// Read the destination from the provider's label. A declared chain ends at
-// its last hop; ordinary names can specify the country with a flag or text.
+// detectCountry derives an ISO country code from a server name: flag emoji
+// first, then a keyword table. Returns "" when nothing matches. This is a
+// cosmetic fallback — GeoIP is the authoritative source.
 func detectCountry(name string) string {
-	if code, hasArrow := providerArrowDestination(name); hasArrow {
-		return code
-	}
 	if c := countryFromFlag(name); c != "" {
 		return c
 	}
@@ -77,8 +75,6 @@ var countryTokens = map[string]string{
 	"no": "NO", "norway": "NO", "норвегия": "NO",
 	"dk": "DK", "denmark": "DK", "дания": "DK",
 	"cz": "CZ", "czech": "CZ", "чехия": "CZ", "prague": "CZ", "прага": "CZ",
-	"cn": "CN", "china": "CN", "китай": "CN",
-	"so": "SO", "somalia": "SO", "сомали": "SO",
 }
 
 // countrySubstrings matches inside names without separators; only long, unambiguous words.

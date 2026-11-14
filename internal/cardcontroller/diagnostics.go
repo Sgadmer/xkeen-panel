@@ -3,7 +3,6 @@ package cardcontroller
 import (
 	"context"
 	"net/netip"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,11 +12,10 @@ import (
 )
 
 type ConnectionExit struct {
-	Kind                string   `json:"kind,omitempty"`
-	Name                string   `json:"name,omitempty"`
-	Country             string   `json:"country,omitempty"`
-	Source              string   `json:"source,omitempty"`
-	DeclaredCountryPath []string `json:"declared_country_path,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Country string `json:"country,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
 // Connection contains only the metadata needed by the local diagnostics view.
@@ -201,8 +199,7 @@ func nativeConnectionExit(tag, typ string) ConnectionExit {
 		return ConnectionExit{Kind: "reject"}
 	case "http", "socks5", "ss", "shadowsocks", "ssr", "shadowsocksr", "snell", "vmess", "vless", "trojan", "hysteria", "hysteria2",
 		"wireguard", "tuic", "ssh", "anytls", "mieru", "sudoku", "trusttunnel", "masque", "openvpn":
-		native := models.Server{Name: tag}
-		return ConnectionExit{Kind: "server", Name: tag, Country: xkeen.ServerCountry(native), DeclaredCountryPath: xkeen.ServerCountryPath(native)}
+		return ConnectionExit{Kind: "server", Name: tag}
 	}
 	return ConnectionExit{Kind: "unresolved"}
 }
@@ -216,8 +213,7 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 		if id == "" {
 			continue
 		}
-		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.ServerCountry(s), Source: publicRouteName(s.SourceName, nil),
-			DeclaredCountryPath: xkeen.ServerCountryPath(s)}
+		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.ServerCountry(s), Source: publicRouteName(s.SourceName, nil)}
 		if len(s.RawProfile) > 0 {
 			exit.Kind = "unresolved"
 		}
@@ -227,9 +223,6 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 			}
 			if prior.Country != exit.Country {
 				exit.Country = ""
-			}
-			if !slices.Equal(prior.DeclaredCountryPath, exit.DeclaredCountryPath) {
-				exit.DeclaredCountryPath = nil
 			}
 			if prior.Name != exit.Name {
 				exit.Name = "Сервер с несколькими названиями"

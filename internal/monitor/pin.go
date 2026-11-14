@@ -290,16 +290,14 @@ func (w *Watchdog) restorePinRuntime(rt xkeen.Runtime, top xkeen.Topology, oldSt
 // other than the one that just failed.
 func (w *Watchdog) sameCountryReplacement(country, failedURI string) (*models.Server, error) {
 	var candidates []models.Server
-	servers := w.subscription.GetServers()
-	eligible := xkeen.AutoCountryEligibility(servers, w.AutomaticServerAllowed)
-	for i, s := range servers {
+	for _, s := range w.subscription.GetServers() {
 		if s.RawURI == failedURI || w.isBlacklisted(s.RawURI) {
 			continue
 		}
 		if !xkeen.CanBuildServer(s) {
 			continue
 		}
-		if !eligible[i] || xkeen.ServerCountry(s) != country {
+		if xkeen.ServerCountry(s) != country {
 			continue
 		}
 		candidates = append(candidates, s)
@@ -315,9 +313,8 @@ func (w *Watchdog) sameCountryReplacement(country, failedURI string) (*models.Se
 	w.subscription.UpdateLatencies(checked)
 
 	var live []models.Server
-	eligible = xkeen.AutoCountryEligibility(checked, w.AutomaticServerAllowed)
-	for i, s := range checked {
-		if eligible[i] && xkeen.ServerCountry(s) == country && s.Latency >= 0 {
+	for _, s := range checked {
+		if s.Latency >= 0 {
 			live = append(live, s)
 		}
 	}

@@ -89,10 +89,10 @@ func TestConnectionRowsKeepWorkerObservationSeparateFromRecordedExit(t *testing.
 	rows := c.connectionRows(context.Background(), p, flows, read)
 	want := ConnectionExit{Kind: "server", Name: de.Name, Source: de.SourceName, Country: "DE"}
 	if samples != 1 || rows[0].Exit.Kind != "unresolved" || rows[1].Exit.Kind != "unresolved" ||
-		rows[0].PoolCurrent == nil || !reflect.DeepEqual(*rows[0].PoolCurrent, want) || rows[1].PoolCurrent != rows[0].PoolCurrent {
+		rows[0].PoolCurrent == nil || *rows[0].PoolCurrent != want || rows[1].PoolCurrent != rows[0].PoolCurrent {
 		t.Fatalf("expected one separate sample for the live worker, got %d across %+v", samples, rows[:2])
 	}
-	if rows[2].Exit.Kind != "unresolved" || rows[2].PoolCurrent != nil || !reflect.DeepEqual(rows[3].Exit, want) || rows[3].PoolCurrent != nil ||
+	if rows[2].Exit.Kind != "unresolved" || rows[2].PoolCurrent != nil || rows[3].Exit != want || rows[3].PoolCurrent != nil ||
 		rows[4].Exit.Kind != "direct" || rows[5].Exit.Kind != "reject" || rows[6].Exit.Kind != "unresolved" ||
 		rows[7].Exit.Name != "🇳🇱 native" || rows[7].Exit.Kind != "server" {
 		t.Fatalf("unexpected projected exits: %+v", rows[2:])
@@ -116,34 +116,7 @@ func TestDiagnosticCatalogProtectsConflictingAliases(t *testing.T) {
 	alias.SourceName, alias.CountryOverride, alias.Name = "Second", "AU", "Other name"
 	a := diagnosticCatalog([]models.Server{first, alias})[xkeen.ServiceTargetID(first)]
 	b := diagnosticCatalog([]models.Server{alias, first})[xkeen.ServiceTargetID(first)]
-	if !reflect.DeepEqual(a, b) || a.Country != "" || a.Source != "" || a.Name == alias.Name || a.Name == first.Name || a.Kind != "server" {
+	if a != b || a.Country != "" || a.Source != "" || a.Name == alias.Name || a.Name == first.Name || a.Kind != "server" {
 		t.Fatalf("ambiguous aliases exposed a source or location: %+v, %+v", a, b)
-	}
-}
-
-func TestDiagnosticCountriesBelongToEachResolvedEndpoint(t *testing.T) {
-	a := poolServer("A", "SO", "10001")
-	a.Name = "🇷🇺 → 🇸🇪"
-	other := poolServer("A", "SO", "10002")
-	other.Name = "🇷🇺 → 🇳🇱"
-	ordinary := poolServer("A", "FR", "10003")
-	forward := diagnosticCatalog([]models.Server{a, other, ordinary})
-	if got := forward[xkeen.ServiceTargetID(a)]; got.Country != "SE" || !reflect.DeepEqual(got.DeclaredCountryPath, []string{"RU", "SE"}) {
-		t.Fatal(got)
-	}
-	if got := forward[xkeen.ServiceTargetID(other)]; !reflect.DeepEqual(got.DeclaredCountryPath, []string{"RU", "NL"}) {
-		t.Fatal(got)
-	}
-	if got := forward[xkeen.ServiceTargetID(ordinary)]; got.Country != "FR" || len(got.DeclaredCountryPath) > 0 {
-		t.Fatal(got)
-	}
-	alias := a
-	alias.Name = "🇩🇪 → 🇸🇪"
-	ambiguous := diagnosticCatalog([]models.Server{a, alias})[xkeen.ServiceTargetID(a)]
-	if ambiguous.Country != "SE" || len(ambiguous.DeclaredCountryPath) > 0 {
-		t.Fatal(ambiguous)
-	}
-	if result := nativeConnectionExit("x", "direct"); len(result.DeclaredCountryPath) > 0 || result.Country != "" {
-		t.Fatal(result)
 	}
 }
