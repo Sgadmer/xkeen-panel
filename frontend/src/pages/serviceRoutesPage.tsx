@@ -63,24 +63,21 @@ function currentRoute(route: InheritedRoute) {
     return current
 }
 
-function routeSummary(service: Service, selected?: ServiceTarget) {
+function routeSummary(service: Service) {
     const current = service.current_route
-    const conditional = service.inherited_route?.kind === 'conditional'
-    const pool = countryLabel(current?.pool_country) || current?.pool || (selected?.kind === 'pool' ? countryLabel(selected.country) || selected.name : '')
     if (service.target === 'direct') return 'Через домашнего провайдера'
-    const branch = conditional ? 'VPN · ' : ''
-    if (current?.kind === 'reject' || service.blocked) return branch + [pool, 'Соединение заблокировано'].filter(Boolean).join(' → ')
-    if (current?.kind === 'direct') return branch + [pool, 'Напрямую'].filter(Boolean).join(' → ')
-    if (current?.kind === 'server' && (pool || conditional || !service.target)) {
-        const location = pool && (current.pool_country || selected?.country) === current.country && current.country
-            ? current.name : countryLabel(current.country) || current.name
-        const path = [pool, location].filter(Boolean).join(' → ')
-        if (path) return current.source ? current.source + ' · ' + path : branch + path
+    if (current?.kind === 'reject' || service.blocked) return 'Соединение заблокировано'
+    if (current?.kind === 'direct') return 'Напрямую'
+    if (current?.kind === 'server') {
+        const location = countryLabel(current.country) || 'Локация неизвестна'
+        return current.source ? current.source + ' → ' + location : location
     }
-    if (pool) return branch + pool
-    if (conditional) return 'По списку блокировок'
-    if (!service.target && service.inherited_route) return currentRoute(service.inherited_route)
-    return selected?.sources?.join(', ') || ''
+    if (!service.target && service.inherited_route) {
+        if (current?.kind === 'unknown') return 'Локация неизвестна'
+        if (service.inherited_route.kind === 'server') return 'Локация неизвестна'
+        return currentRoute(service.inherited_route)
+    }
+    return 'Локация неизвестна'
 }
 
 function InheritedRouteInfo({route, fresh}: {route: InheritedRoute; fresh: boolean}) {
@@ -294,7 +291,7 @@ export function ServiceRoutesPage() {
                         {order.services.map(service => {
                             const isClaude = service.id === 'claude'
                             const selected = view.targets.find(t => t.id === service.target)
-                            const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service, selected)
+                            const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service)
                             const busy = pendingService?.service_id === service.id
                             const label = 'service-' + service.id
                             return (
