@@ -1,9 +1,11 @@
 ---
 name: xkeen-router-install
-description: "Install or migrate XKeen and XKeen Panel on a user's Keenetic/Netcraze router through a local computer. Use for beginner router VPN setup, compatibility checks, importing existing rules and recovery. Requires ready VPN connection data; does not provision a VPS."
+description: "Install or migrate XKeen with existing VPN connection data on a Keenetic/Netcraze router, or configure home-network HTTPS and iPhone Face ID on an existing XKeen panel. Use for VPN compatibility checks, rule migration, recovery, or CrazeDNS and passkey setup."
 ---
 
-# Установка и миграция XKeen
+# Установка XKeen и доступ к панели
+
+Если на работающей панели пользователь просит настроить HTTPS или вход по Face ID, сразу откройте [сценарий для агента](references/panel-https.md). Для этой задачи достаточно локального браузера с доступом к панели. Для установки и миграции VPN используйте разделы ниже.
 
 Единственный доверенный проект: **https://github.com/Sgadmer/xkeen-panel**. Текущий проверяемый релиз этого скилла: `v3.0.0-beta.3` (предварительный). Скилл содержит порядок работы; исходники, инструменты установки и инструкции получайте из этого репозитория. GitHub-коннектор не требуется.
 

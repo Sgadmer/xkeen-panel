@@ -149,7 +149,7 @@ export function AccessPage() {
     return <>
         <PageTitle title='Вход с компьютера и телефона' back={{ to: '/settings', label: 'Настройки' }} />
         <div id='face-id'>
-            <Group title='Face ID на iPhone'>
+            <Group title='Face ID на iPhone' footer='Если Face ID не нужен, настройку HTTPS можно пропустить. По локальному адресу панели можно войти с логином, паролем и одноразовым кодом.'>
                 {query.isLoading && <Row label='Проверяем HTTPS-адрес панели…' />}
                 {ready ? <>
                     <Row label='HTTPS-адрес готов' hint='Откройте этот адрес в Safari, подключившись к домашнему Wi-Fi.' />
@@ -159,6 +159,12 @@ export function AccessPage() {
                     : access && <Row label={face?.status === 'external' || access.passkey_domain_configured ? 'Для ключей входа задан домен' : 'Для Face ID нужен HTTPS-адрес'}
                         hint={face?.message || (access.passkey_domain_configured ? 'Откройте настроенный HTTPS-домен панели в Safari на iPhone.' : 'Для этой конфигурации задайте HTTPS-домен панели и доверенный сертификат.')} />}
                 {query.error && <Row label='Не удалось проверить адрес' hint={query.error.message} tone='tint' onClick={() => void query.refetch()} />}
+                {face?.available && <details className='py-3 text-sm'>
+                    <summary className='cursor-pointer text-tint'>Как настроить HTTPS самостоятельно или с агентом</summary>
+                    <p className='mt-3'>Для нового адреса нажмите «Подготовить адрес для iPhone». Оставьте предложенное имя или введите своё. Нажмите «Проверить адрес и параметры» и посмотрите, как изменится доступ к роутеру. После подтверждения роутер сам получит сертификат через CrazeDNS. Когда появится готовая ссылка или QR-код, откройте панель в Safari.</p>
+                    <p className='mt-3'>Можно поручить настройку агенту с доступом к панели в домашней сети. Скопируйте запрос для агента, а ключ доступа сохраните сами на iPhone.</p>
+                    <blockquote className='mt-2 select-all border-l-2 border-tint pl-3'>Подготовь домашний HTTPS-адрес для Face ID через панель XKeen. Используй инструкцию xkeen-router-install. Проверь доступ из домашней сети и покажи ссылку или QR-код для Safari.</blockquote>
+                </details>}
             </Group>
         </div>
         <Group title='Подключение в Safari' footer='При следующих входах откройте тот же HTTPS-адрес, нажмите «Войти по Face ID» и подтвердите вход на iPhone.'>

@@ -74,9 +74,9 @@ trust_proxy_headers: false
 # Setting the domain is enough — passkeys are then allowed on the standard
 # KeenDNS HTTPS ports (443 without a port + 8443/5443/8083/5083/65083), so they
 # work both locally and through the cloud on :8443.
-# webauthn_rp_id: xkeen.superwifi.netcraze.link
+# webauthn_rp_id: panel.example.com
 # webauthn_rp_name: XKeen Panel
 # webauthn_origins:        # optional — override the origin list by hand
-#   - https://xkeen.superwifi.netcraze.link
+#   - https://panel.example.com
 # If the domain cannot be set — trust_proxy_headers: true, and the RP is derived
 # from X-Forwarded-Host (only behind a trusted proxy!).

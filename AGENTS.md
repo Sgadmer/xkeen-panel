@@ -6,6 +6,8 @@
   `Co-authored-by: Codex <codex@openai.com>` without replacing the human author.
 - Never commit runtime data, subscriptions, HWID values, RCI tokens, credentials,
   router backups, logs or screenshots containing real user/device/server data.
+  Keep a router's real CrazeDNS hostname, address QR, certificates and private
+  keys out of source, release assets and public reports.
   Use `example.com`, documentation IP ranges and synthetic fixtures.
 - Preserve provider profiles and manual selection during transactions. Reject
   unsupported combinations clearly; keep the old configuration on failure.

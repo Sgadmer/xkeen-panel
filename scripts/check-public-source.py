@@ -15,12 +15,19 @@ if not args.tracked_only:
     command += ['--cached', '--others', '--exclude-standard']
 names = set(subprocess.check_output(command, cwd=root).decode().split('\0')) - {''}
 forbidden = {'.git', 'node_modules', 'data', 'build', '__pycache__'}
-private = {'user.json', 'subscription.json', 'subscription-client.json', 'exclusions.json', 'key.txt', '.env', 'config.dev.yaml'}
+private = {'user.json', 'subscription.json', 'subscription-client.json', 'exclusions.json', 'face-id-origin.json', 'key.txt', '.env', 'config.dev.yaml'}
+router_domain = re.compile(
+    rb'(?<![a-z0-9-])xk-[0-9a-f]{10}\.(?:netcraze\.(?:link|pro|club)|crazedns\.ru)(?![a-z0-9-]|\.[a-z0-9-])',
+    re.IGNORECASE,
+)
 home_prefix = b'C:' + bytes([92]) + b'Users' + bytes([92])
 private_keys = [b'-----BEGIN ' + part + b'PRIVATE KEY-----' for part in (b'', b'RSA ', b'OPENSSH ', b'EC ')]
 failures = []
 for name in sorted(names):
     p = root / name
+    if router_domain.search(name.encode()):
+        failures.append(('[redacted path]', 'personal router domain in filename'))
+        continue
     if forbidden.intersection(Path(name).parts) or p.name in private or p.name.endswith(('.dpapi.json', '.log', '.tsbuildinfo')):
         failures.append((name, 'private/generated path'))
         continue
@@ -28,6 +35,10 @@ for name in sorted(names):
         failures.append((name, 'not a regular source file'))
         continue
     content = p.read_bytes()
+    # Windows exports may use UTF-16. Use the BOM to avoid treating binaries as text.
+    domain_input = content.decode('utf-16', errors='replace').encode() if content.startswith((b'\xff\xfe', b'\xfe\xff')) else content
+    if router_domain.search(domain_input):
+        failures.append((name, 'personal router domain'))
     if home_prefix.lower() in content.lower() or b'C:' + b'/Users/' in content:
         failures.append((name, 'personal workstation path'))
     if any(marker in content for marker in private_keys):

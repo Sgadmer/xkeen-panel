@@ -3,6 +3,7 @@ build/
 
 # Data (credentials, logs)
 data/
+face-id-origin.json
 *.log
 
 # Dev config
