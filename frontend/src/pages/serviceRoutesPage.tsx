@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconShield, IconWorld } from '@tabler/icons-react'
@@ -7,7 +7,7 @@ import { PageTitle } from '@/components/ios'
 import { ServiceKillSwitch, useKillSwitch } from '@/components/killSwitch'
 import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
-import { countryLabel, scopeLabel, withCountryFlag } from '@/lib/format'
+import { serviceRouteOptions, type ServiceTarget } from '@/lib/serviceRouteOptions'
 
 interface InheritedRoute {
     group: string
@@ -34,7 +34,7 @@ interface ServiceRoutes {
     controller_ready?: boolean
     scope?: string
     services: Service[]
-    targets: { id: string; name: string; kind: 'server' | 'profile' | 'pool'; country?: string; sources?: string[] }[]
+    targets: ServiceTarget[]
 }
 
 function InheritedRouteInfo({route}: {route: InheritedRoute}) {
@@ -131,7 +131,7 @@ function ClientProxy({service}: {service: Service}) {
 
 export function ServiceRoutesPage() {
     const qc = useQueryClient()
-    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
+    const avoidCountries = usePanelSettings().data?.avoid_countries
     const [notice, setNotice] = useState('')
     const key = ['service-routes']
     const query = useQuery({
@@ -157,29 +157,8 @@ export function ServiceRoutesPage() {
     const killSwitch = useKillSwitch(view?.scope === 'mihomo')
     const error = change.error ?? query.error ?? killSwitch.error
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
-    const scopeById = new Map(scopes?.map(scope => [scope.id, scope]))
-    const category = (target: ServiceRoutes['targets'][number]) =>
-        target.kind === 'pool' ? (scopeById.get(target.id)?.kind ?? (target.country ? 'country' : 'pool')) : target.kind
-    const groups = [
-        ['all', 'Автовыбор'], ['country', 'Пулы стран'], ['custom', 'Мультипулы'], ['pool', 'Пулы'],
-        ['profile', 'Режимы провайдера'], ['server', 'Отдельные серверы'],
-    ] as const
-    const options = groups.map(([kind, title]) => ({
-        kind, title, targets: (view?.targets ?? []).filter(target => category(target) === kind).map(target => {
-            const scope = scopeById.get(target.id)
-            const name = scope ? scopeLabel(scope) : kind === 'country' ? countryLabel(target.country) : withCountryFlag(target.name, target.country)
-            const label = [name, scope && String(scope.member_count), target.sources?.join(', '),
-                kind === 'server' && target.country && avoidCountries.includes(target.country) && 'только вручную'].filter(Boolean).join(' · ')
-            return { id: target.id, label }
-        }),
-    })).filter(group => group.targets.length)
-    for (const group of options) {
-        // A provider can reuse the same name for different configurations. Two
-        // user-defined subscriptions or pools can also have identical names.
-        const counts = new Map<string, number>()
-        for (const item of group.targets) counts.set(item.label, (counts.get(item.label) ?? 0) + 1)
-        for (const item of group.targets) if (counts.get(item.label)! > 1) item.label += ' · ' + item.id.slice(0, 8)
-    }
+    const targets = view?.targets
+    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries), [targets, scopes, avoidCountries])
 
     return (
         <>
@@ -206,7 +185,8 @@ export function ServiceRoutesPage() {
                         {view.services.map(service => {
                             const Glyph = serviceIcons[service.id] ?? IconWorld
                             const isClaude = service.id === 'claude'
-                            const missing = !!service.target && (isClaude || service.target !== 'direct') && !view.targets.some(t => t.id === service.target)
+                            const selected = view.targets.find(t => t.id === service.target)
+                            const missing = !!service.target && (isClaude || service.target !== 'direct') && !selected
                             const busy = change.isPending && change.variables?.service_id === service.id
                             const label = 'service-' + service.id
                             return (
@@ -231,12 +211,15 @@ export function ServiceRoutesPage() {
                                         <option value='' disabled={isClaude}>{isClaude ? 'Выберите VPN' : (view.scope === 'mihomo' ? 'По правилам сервиса в Mihomo' : 'По правилам Xray')}</option>
                                         {!isClaude && view.scope === 'mihomo' && <option value='direct'>Напрямую</option>}
                                         {missing && <option value={service.target} disabled>Назначенный маршрут недоступен</option>}
-                                        {options.map(({kind, title, targets}) => (
-                                            <optgroup key={kind} label={title}>
+                                        {options.map(({key, title, targets}) => (
+                                            <optgroup key={key} label={title}>
                                                 {targets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
                                             </optgroup>
                                         ))}
                                     </select>
+                                    {!busy && !!selected?.sources?.length && <p className='mt-1 break-words text-sm text-muted-foreground'>
+                                        {selected.sources.length === 1 ? 'Провайдер' : 'Провайдеры'} · {selected.sources.join(', ')}
+                                    </p>}
                                     {!service.target && service.inherited_route && <InheritedRouteInfo route={service.inherited_route} />}
                                     {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
                                     {busy && <p role='status' className='mt-2 text-sm text-muted-foreground'>Применяем маршрут…</p>}
