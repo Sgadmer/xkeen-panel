@@ -319,7 +319,7 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 					change.Effects = []string{"После следующей перезагрузки роутера XKeen при запуске отключит IPv6 для всей домашней сети. Если автозапуск выключен, это произойдёт, когда вы запустите XKeen вручную."}
 				}
 			} else if setting.ID == "native_geodata_schedule" {
-				change.Effects = []string{"XKeen перестанет скачивать геобазы по этому расписанию. Установленные базы сохранятся. Для Re:filter действует своё расписание."}
+				change.Effects = []string{"XKeen перестанет скачивать геобазы по этому расписанию. Re:filter продолжит работать по сохранённым правилам. Если только XKeen скачивал его базы, новые правила перестанут поступать."}
 			}
 		} else if req.Setting == "ipv6" {
 			plan.Warnings = append(plan.Warnings, "IPv6 изменится для всего роутера. Это может повлиять на другие устройства домашней сети.")

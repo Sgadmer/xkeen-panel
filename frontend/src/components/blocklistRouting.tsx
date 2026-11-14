@@ -39,11 +39,11 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
                     onChange={enabled => update.mutate(enabled)} /> : <span role='status' className='text-sm text-muted-foreground'>{state.isPending ? 'Загружаем…' : 'Нет данных'}</span>} />
         </Group>
         <Group title='Геобазы' footer='GeoSite проверяет имя сайта. GeoIP проверяет IP, когда имя определить не удалось. Это сохраняет прямой выход для обычных сайтов на общем IP с заблокированным сервисом.'>
-            <Row label='Re:filter' hint='Список включает блокировки и сервисы с региональными ограничениями. Панель перечитывает файлы GeoSite и GeoIP после их обновления на роутере.' />
+            <Row label='Re:filter' hint='Список включает блокировки и сервисы с региональными ограничениями. Панель раз в минуту проверяет файлы на роутере и применяет новые правила. Свежие файлы должен скачивать XKeen или другой загрузчик.' />
             {data && (data.domains > 0 || data.prefixes > 0) && <>
                 <Row label='Доменные правила' detail={count.format(data.domains)} />
                 <Row label='IP-префиксы' detail={count.format(data.prefixes)} />
-                {data.updated_at && <Row label='Обновление списка' detail={new Date(data.updated_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}
+                {data.updated_at && <Row label='Последнее изменение правил' detail={new Date(data.updated_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}
             </>}
             {data?.enabled && <button type='button' className='min-h-11 py-2 text-tint disabled:opacity-60' disabled={update.isPending}
                 onClick={() => update.mutate('refresh')}>Перечитать геобазы роутера</button>}

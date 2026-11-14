@@ -57,8 +57,8 @@ func NewComponentsHandler(h *Handlers) *ComponentsHandler {
 		if h.Cards == nil {
 			go manager.Start(context.Background())
 		} else {
-			// The Mihomo panel has its own geodata updater. Recover only
-			// an interrupted change to XKeen's local settings here.
+			// Mihomo imports local Re:filter files in its maintenance loop.
+			// Recover interrupted setting changes without starting the downloader.
 			go manager.Recover(context.Background())
 		}
 	}
