@@ -82,16 +82,14 @@ func (c *Controller) poolNodes(servers []models.Server) []poolNode {
 			continue
 		}
 		id := xkeen.ServiceTargetID(s)
-		if id == "" {
-			continue
-		}
-		if filter && (c.autoAllowed == nil || !c.autoAllowed(s)) {
+		if id != "" && filter && (c.autoAllowed == nil || !c.autoAllowed(s)) {
 			denied[id] = true
 		}
+		// Keep unsupported subscription entries for the country catalogue only.
 		nodes = append(nodes, poolNode{id: id, server: s})
 	}
 	for i := range nodes {
-		nodes[i].allowed = !denied[nodes[i].id]
+		nodes[i].allowed = nodes[i].id != "" && !denied[nodes[i].id]
 	}
 	sort.SliceStable(nodes, func(i, j int) bool {
 		a, b := nodes[i], nodes[j]

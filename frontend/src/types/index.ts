@@ -173,6 +173,8 @@ export type AutoScope = {
     member_count: number
     limit?: number
     eligible_count?: number
+    catalog_count?: number
+    unavailable_reason?: 'country_filter' | 'unsupported' | 'no_servers'
 }
 
 export type MultiPool = {

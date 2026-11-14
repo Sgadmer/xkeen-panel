@@ -47,30 +47,37 @@ func builtinPool(id string) *MultiPool {
 }
 
 type AutoScope struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Kind          string `json:"kind"`
-	Country       string `json:"country,omitempty"`
-	MemberCount   int    `json:"member_count"`
-	EligibleCount int    `json:"eligible_count"`
-	Limit         int    `json:"limit,omitempty"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Kind              string `json:"kind"`
+	Country           string `json:"country,omitempty"`
+	MemberCount       int    `json:"member_count"`
+	EligibleCount     int    `json:"eligible_count"`
+	Limit             int    `json:"limit,omitempty"`
+	CatalogCount      *int   `json:"catalog_count,omitempty"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
 func scopes(p profile, nodes []poolNode) []AutoScope {
-	ids := map[string]bool{}
+	byCountry := make(map[string][]poolNode)
 	for _, node := range nodes {
 		code := strings.ToUpper(xkeen.ServerCountry(node.server))
 		if len(code) == 2 {
-			ids[scopeHash("country:"+code)] = true
+			byCountry[code] = append(byCountry[code], node)
+		}
+	}
+	keepAssigned := func(id string) {
+		if code := countryPoolCodes[id]; code != "" && byCountry[code] == nil {
+			byCountry[code] = nil
 		}
 	}
 	for _, id := range p.assigned {
-		ids[id] = true
+		keepAssigned(id)
 	}
-	ids[p.scopeID()] = true
-	countries := make([]string, 0, len(ids))
-	for id := range ids {
-		if code := countryPoolCodes[id]; code != "" {
+	keepAssigned(p.scopeID())
+	countries := make([]string, 0, len(byCountry))
+	for code := range byCountry {
+		if countryPoolCodes[scopeHash("country:"+code)] == code {
 			countries = append(countries, code)
 		}
 	}
@@ -79,15 +86,41 @@ func scopes(p profile, nodes []poolNode) []AutoScope {
 	all.members(nodes)
 	result := []AutoScope{{ID: all.ID, Name: all.Name, Kind: "all", MemberCount: all.MemberCount, EligibleCount: all.EligibleCount, Limit: all.limit}}
 	for _, code := range countries {
-		pool := builtinPool(scopeHash("country:" + code))
-		pool.members(nodes)
-		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "country", Country: code, MemberCount: pool.MemberCount, EligibleCount: pool.EligibleCount})
+		result = append(result, countryScope(code, byCountry[code]))
 	}
 	for _, pool := range p.pools {
 		pool.members(nodes)
 		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "custom", MemberCount: pool.MemberCount, EligibleCount: pool.EligibleCount})
 	}
 	return result
+}
+
+func countryScope(code string, nodes []poolNode) AutoScope {
+	pool := builtinPool(scopeHash("country:" + code))
+	pool.members(nodes)
+	configs := make(map[string]bool)
+	unsupported := 0
+	for _, node := range nodes {
+		if node.id == "" {
+			unsupported++
+		} else {
+			configs[node.id] = true
+		}
+	}
+	count := len(configs) + unsupported
+	scope := AutoScope{ID: pool.ID, Name: pool.Name, Kind: "country", Country: code,
+		MemberCount: pool.MemberCount, EligibleCount: pool.EligibleCount, CatalogCount: &count}
+	if scope.MemberCount == 0 {
+		switch {
+		case len(configs) > 0:
+			scope.UnavailableReason = "country_filter"
+		case unsupported > 0:
+			scope.UnavailableReason = "unsupported"
+		default:
+			scope.UnavailableReason = "no_servers"
+		}
+	}
+	return scope
 }
 
 func (p profile) scopeID() string {

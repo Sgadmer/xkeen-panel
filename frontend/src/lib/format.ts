@@ -1,4 +1,4 @@
-import type { Server, Status } from '@/types'
+import type { AutoScope, Server, Status } from '@/types'
 
 const regions = new Intl.DisplayNames(['ru'], { type: 'region' })
 
@@ -30,6 +30,16 @@ export function scopeLabel(scope: { kind: string; country?: string; name: string
     if (scope.kind === 'all') return 'Все локации'
     if (scope.kind === 'country' && scope.country) return countryLabel(scope.country)
     return scope.name
+}
+
+export function unavailableCountryReason(scope: AutoScope, avoided: string[]) {
+    switch (scope.unavailable_reason) {
+        case 'country_filter': return scope.country && avoided.includes(scope.country)
+            ? 'страна исключена в настройках' : 'адреса исключены фильтром стран'
+        case 'unsupported': return 'нет совместимых серверов'
+        case 'no_servers': return 'больше нет в подписках'
+        default: return 'нет подходящих серверов'
+    }
 }
 
 export function serverCountry(server?: Server) {

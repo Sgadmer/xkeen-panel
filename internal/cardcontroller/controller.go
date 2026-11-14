@@ -515,6 +515,13 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 			}
 		}
 	}
+	var nodes []poolNode
+	if id != "" && countryPoolCodes[target] != "" {
+		nodes = c.poolNodes(servers)
+		if len(p.pool(target).members(nodes)) == 0 {
+			return View{}, errors.New("в выбранном пуле страны нет доступных серверов")
+		}
+	}
 	if target != "" && target != directTarget {
 		if _, ok := catalog[target]; !ok && p.pool(target) == nil {
 			return View{}, errors.New("сервер исчез из подписки")
@@ -522,7 +529,6 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	}
 	peers := map[string]cardEndpoint{}
 	workers := map[string]xkeen.CardProxy{}
-	var nodes []poolNode
 	keys := []string{}
 	for service, key := range p.assigned {
 		if service == defaultID && !defaultSourceAvailable {

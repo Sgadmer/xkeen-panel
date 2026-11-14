@@ -1,4 +1,4 @@
-import { countryLabel, scopeLabel } from '@/lib/format'
+import { countryLabel, scopeLabel, unavailableCountryReason } from '@/lib/format'
 import type { AutoScope } from '@/types'
 
 export interface ServiceTarget {
@@ -13,6 +13,7 @@ interface RouteOption {
     id: string
     label: string
     detail?: string
+    disabled?: boolean
     kind: ServiceTarget['kind']
 }
 
@@ -41,6 +42,7 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
         let order: number
         let label = target.name
         let detail: string | undefined
+        let disabled = false
         if (target.kind === 'pool') {
             const scope = scopeById.get(target.id)
             const kind = target.id === defaultServiceTarget ? 'all' : scope?.kind ?? (target.country ? 'country' : 'pool')
@@ -49,7 +51,8 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             order = poolGroups[kind].order
             if (scope) {
                 label = scopeLabel(scope)
-                detail = 'Серверов: ' + scope.member_count
+                disabled = kind === 'country' && scope.member_count === 0
+                detail = disabled ? unavailableCountryReason(scope, avoided) : 'Серверов: ' + scope.member_count
             } else if (target.country) {
                 label = countryLabel(target.country)
             }
@@ -66,7 +69,7 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             group = { key, title, order, targets: [] }
             groups.set(key, group)
         }
-        group.targets.push({ id: target.id, label, detail, kind: target.kind })
+        group.targets.push({ id: target.id, label, detail, kind: target.kind, disabled })
     }
     for (const group of groups.values()) {
         if (group.targets[0].kind !== 'pool') {

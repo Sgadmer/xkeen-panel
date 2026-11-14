@@ -45,11 +45,12 @@ import {
     serverCountry,
     timeAgo,
     toneText,
+    unavailableCountryReason,
     withCountryFlag,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { importWarnings, safeNotice } from '@/lib/subscription'
-import type { Server } from '@/types'
+import type { AutoScope, Server } from '@/types'
 
 const OTHER = '—'
 
@@ -64,6 +65,16 @@ type Tab = 'pool' | 'all'
 const TAB_KEY = 'servers_tab'
 const COUNTRY_ORDER_KEY = 'servers_country_order'
 const countryCollator = new Intl.Collator('ru', { sensitivity: 'base' })
+
+function countryPoolOption(scope: AutoScope, avoided: string[]) {
+    const name = scopeLabel(scope)
+    const total = scope.catalog_count ?? scope.member_count
+    if (scope.member_count > 0) {
+        const count = scope.member_count === total ? total : `${scope.member_count} из ${total}`
+        return <option key={scope.id} value={scope.id}>{name} · {count}</option>
+    }
+    return <option key={scope.id} value={scope.id} disabled>{name}{total > 0 && ` · ${total} в подписках`} · {unavailableCountryReason(scope, avoided)}</option>
+}
 
 function countryOrder(value: string | null): CountryOrder {
     return value === 'name-desc' || value === 'latency' ? value : 'name-asc'
@@ -96,6 +107,12 @@ export function ServersPage() {
     const scopes = poolCatalog.data?.scopes ?? []
     const selectedScope = scopes.find(item => item.id === pool?.auto_scope_id)
     const allLocations = scopes.find(item => item.kind === 'all')
+    const countries = scopes.filter(scope => scope.kind === 'country')
+        .sort((a, b) => countryCollator.compare(countryName(a.country), countryName(b.country)))
+    const availableCountries = countries.filter(scope => scope.member_count > 0)
+    const unavailableCountries = countries.filter(scope => !scope.member_count
+        && (scope.unavailable_reason !== 'no_servers' || scope.id === selectedScope?.id))
+    const customScopes = scopes.filter(scope => scope.kind === 'custom')
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
     const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
@@ -379,22 +396,26 @@ export function ServersPage() {
                                     }
                                 />
                             </div>
-                            {mihomo && scopes.length > 0 && <label className='flex min-h-[52px] flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2'>
-                                <span className='text-[15px] font-medium'>Пул автовыбора</span>
-                                <select className='min-h-10 min-w-0 max-w-full flex-1 rounded-xl border border-white/10 bg-fill px-2 text-[15px] sm:max-w-72'
+                            {mihomo && scopes.length > 0 && <div className='py-2'>
+                              <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1'>
+                                <label htmlFor='auto-pool-scope' className='text-[15px] font-medium'>Пул автовыбора</label>
+                                <select id='auto-pool-scope' aria-describedby='auto-pool-scope-hint' className='min-h-10 min-w-0 max-w-full flex-1 rounded-xl border border-white/10 bg-fill px-2 text-[15px] sm:max-w-72'
                                     value={setScope.isPending ? setScope.variables : isAuto ? (selectedScope?.id ?? allLocations?.id ?? '') : ''}
                                     disabled={routeBusy || !pool?.api_available}
                                     onChange={e => setScope.mutate(e.target.value)}>
                                     {!isAuto && <option value='' disabled>Выберите пул…</option>}
-                                    {scopes.filter(item => item.kind === 'all').map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)}</option>)}
-                                    {(['country', 'custom'] as const).map(kind => {
-                                        const options = scopes.filter(item => item.kind === kind)
-                                        return options.length > 0 && <optgroup key={kind} label={kind === 'country' ? 'Страны' : 'Мультипулы'}>
-                                            {options.map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)} · {item.member_count}</option>)}
-                                        </optgroup>
-                                    })}
+                                    {allLocations && <option value={allLocations.id} disabled={!allLocations.member_count}>{scopeLabel(allLocations)}</option>}
+                                    {availableCountries.length > 0 && <optgroup label='Пулы стран'>{availableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
+                                    {customScopes.length > 0 && <optgroup label='Мультипулы'>
+                                        {customScopes.map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)} · {item.member_count || 'нет подходящих серверов'}</option>)}
+                                    </optgroup>}
+                                    {unavailableCountries.length > 0 && <optgroup label='Недоступные страны'>{unavailableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
                                 </select>
-                            </label>}
+                              </div>
+                              <p id='auto-pool-scope-hint' className='mt-1 text-[13px] text-muted-foreground'>
+                                  Выберите страну, и роутер будет искать быстрый сервер в ней среди всех ваших подписок.
+                              </p>
+                            </div>}
                             {mihomo && allLocations?.limit != null && allLocations.eligible_count != null
                                 && (!isAuto || (selectedScope ?? allLocations).kind === 'all') && (
                                 <AllLocationsLimit

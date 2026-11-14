@@ -118,7 +118,7 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                                     </h3>
                                     {active && <div id={contentId} className='divide-y border-t'>
                                         {group.targets.map(target => <RouteChoice key={target.id} label={target.label} detail={target.detail}
-                                            current={value === target.id} disabled={disabled} onClick={() => choose(target.id)} />)}
+                                            current={value === target.id} disabled={disabled || !!target.disabled} onClick={() => choose(target.id)} />)}
                                     </div>}
                                 </section>
                             )

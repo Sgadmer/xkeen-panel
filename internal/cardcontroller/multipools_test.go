@@ -139,6 +139,50 @@ func TestAutoScopesRankAllSourcesAndKeepExplicitOwnership(t *testing.T) {
 	t.Fatal("missing assigned empty country")
 }
 
+func TestCountryCatalogueIndependentOfCurrentScopeAndLimit(t *testing.T) {
+	fast := poolServer("A", "DE", "10001")
+	fast.Latency = 5
+	first, second := poolServer("B", "SE", "10002"), poolServer("C", "SE", "10003")
+	blocked := poolServer("A", "SO", "10004")
+	blocked.Address = "192.0.2.2"
+	alias := blocked
+	alias.SourceID = "C"
+	unsupported := models.Server{SourceID: "C", Country: "NO", RawURI: "unsupported://sample"}
+	composite := models.Server{SourceID: "A", Country: "CN", RawProfile: json.RawMessage(`{"outbounds":[]}`)}
+	c := &Controller{}
+	c.SetCountryPolicy(func() []string { return []string{"RU"} }, func(s models.Server) bool { return s.Address != blocked.Address })
+	nodes := c.poolNodes([]models.Server{fast, first, second, blocked, alias, unsupported, composite})
+	p := profile{
+		autoLimit: 1,
+		doc:       map[string]interface{}{autoScopeKey: scopeHash("country:DE")},
+		assigned:  map[string]string{"claude": scopeHash("country:FR")},
+	}
+	got := scopes(p, nodes)
+	if all := got[0]; all.MemberCount != 1 || all.EligibleCount != 3 || all.CatalogCount != nil {
+		t.Fatalf("unexpected global pool %+v", all)
+	}
+	type counts struct {
+		catalog, eligible int
+		reason            string
+	}
+	want := map[string]counts{"DE": {1, 1, ""}, "SE": {2, 2, ""}, "SO": {1, 0, "country_filter"},
+		"NO": {1, 0, "unsupported"}, "FR": {0, 0, "no_servers"}}
+	for _, scope := range got[1:] {
+		expected, ok := want[scope.Country]
+		if !ok || scope.CatalogCount == nil || *scope.CatalogCount != expected.catalog ||
+			scope.MemberCount != expected.eligible || scope.EligibleCount != expected.eligible || scope.UnavailableReason != expected.reason {
+			t.Fatalf("unexpected country catalogue entry %+v", scope)
+		}
+		delete(want, scope.Country)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing country entries %+v", want)
+	}
+	if got := p.pool(scopeHash("country:SE")).members(nodes); len(got) != 2 || got[0].Country != "SE" || got[1].Country != "SE" {
+		t.Fatal("selecting another country lost its unmeasured nodes outside the current global pool")
+	}
+}
+
 func TestDefaultSourceProvenanceAndReplacement(t *testing.T) {
 	item := poolServer("A", "SE", "10001")
 	item.SourceName = "First"
@@ -246,6 +290,13 @@ func TestNamedPoolThroughMihomoAndXray(t *testing.T) {
 	}
 	if _, err = c.Set(ctx, "openai", pool.ID); err != nil {
 		t.Fatal(err)
+	}
+	if _, err = c.Set(ctx, "openai", scopeHash("country:SO")); err == nil {
+		t.Fatal("accepted empty country for a new service assignment")
+	}
+	persisted, err := c.read()
+	if err != nil || persisted.assigned["openai"] != pool.ID {
+		t.Fatal("invalid assignment changed the current service route", err)
 	}
 	if err = c.SetDefault(ctx, pool.ID); err != nil {
 		t.Fatal(err)
