@@ -27,7 +27,7 @@ export function GlobalKillSwitch() {
     return (
         <Group title='Защита VPN' footer={policy.error
             ? <span role='alert' className='text-destructive'>{policy.error.message}</span>
-            : 'Индивидуальный переключатель в карточке сервиса имеет приоритет. Прямые маршруты продолжают работать.'}>
+            : 'В карточке каждого сервиса можно выбрать своё правило. Прямые маршруты продолжают работать.'}>
             <Row label='Kill switch' hint={policy.data?.enabled === false
                 ? 'При отказе VPN разрешён запасной прямой выход.'
                 : 'Блокировать прямой выход, если выбранный VPN недоступен.'}
@@ -43,22 +43,19 @@ export function ServiceKillSwitch({ policy, id, name }: {
     policy: ReturnType<typeof useKillSwitch>; id: string; name: string
 }) {
     if (!policy.data) return null
-    const override = policy.data.services?.[id]
-    const checked = override ? override === 'on' : policy.data.enabled
     return (
-        <div className='mt-3 border-t border-separator pt-3 text-sm'>
-            <div className='flex items-center justify-between gap-3'>
-                <div>
-                    <p className='font-semibold'>Kill switch</p>
-                    <p className='text-muted-foreground'>{override ? 'Своё правило' : 'По общему правилу'} · {checked ? 'включён' : 'выключен'}</p>
-                </div>
-                <Switch label={'Kill switch · ' + name} checked={checked} disabled={policy.busy}
-                    onChange={enabled => policy.save({ service_id: id, mode: enabled ? 'on' : 'off' })} />
-            </div>
-            <button type='button' disabled={policy.busy} className='mt-1 min-h-9 text-tint disabled:opacity-60'
-                onClick={() => policy.save({ service_id: id, mode: override ? 'inherit' : (checked ? 'on' : 'off') })}>
-                {override ? 'Использовать общее правило' : 'Закрепить для этого сервиса'}
-            </button>
-        </div>
+        <label className='mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-separator pt-2 text-sm'>
+            <span className='font-medium'>Kill switch</span>
+            <select aria-label={'Kill switch · ' + name} value={policy.data.services?.[id] ?? 'inherit'} disabled={policy.busy}
+                className='min-h-10 max-w-full cursor-pointer rounded-lg bg-fill px-2 text-sm text-foreground disabled:opacity-60'
+                onChange={event => {
+                    const mode = event.target.value
+                    if (mode === 'inherit' || mode === 'on' || mode === 'off') policy.save({ service_id: id, mode })
+                }}>
+                <option value='inherit'>Как в настройках · {policy.data.enabled ? 'вкл.' : 'выкл.'}</option>
+                <option value='on'>Всегда включён</option>
+                <option value='off'>Всегда выключен</option>
+            </select>
+        </label>
     )
 }

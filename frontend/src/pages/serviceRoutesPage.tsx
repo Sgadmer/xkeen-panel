@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { IconShield } from '@tabler/icons-react'
+import { IconChevronDown, IconShield } from '@tabler/icons-react'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { PageTitle } from '@/components/ios'
 import { ServiceKillSwitch, useKillSwitch } from '@/components/killSwitch'
@@ -38,7 +38,7 @@ interface ServiceRoutes {
     targets: ServiceTarget[]
 }
 
-function InheritedRouteInfo({route}: {route: InheritedRoute}) {
+function CurrentRoute({route}: {route: InheritedRoute}) {
     if (route.kind === 'conditional') {
         return <p className='mt-2 text-sm text-muted-foreground'>Совпадения с Re:filter идут через основной VPN. Остальные адреса идут напрямую. Действуют исключения VPN.</p>
     }
@@ -48,30 +48,31 @@ function InheritedRouteInfo({route}: {route: InheritedRoute}) {
     if (route.kind === 'reject') current = 'Соединения блокируются'
     if (route.strategy === 'load-balance' && route.kind === 'unknown') current = 'Сервер зависит от соединения'
 
+    return <p className='mt-2 break-words text-sm'><span className='text-muted-foreground'>Сейчас · </span>{current}</p>
+}
+
+function InheritedRouteInfo({route}: {route: InheritedRoute}) {
     const groupPath = [route.group, ...route.via].filter(Boolean).join(' → ')
     const members = route.members?.filter(member => member !== 'REJECT' && member !== 'REJECT-DROP')
     return (
-        <div className='mt-2 text-sm'>
-            <p className='break-words'><span className='text-muted-foreground'>Сейчас · </span>{current}</p>
-            <details className='mt-1.5'>
-                <summary className='cursor-pointer text-tint'>Как выбран маршрут</summary>
-                <div className='mt-2 space-y-2 text-muted-foreground'>
-                    {groupPath && <p className='break-words'>Группа Mihomo · {groupPath}</p>}
-                    {route.strategy === 'url-test' && <p>Mihomo сравнивает задержку доступных серверов и сам выбирает узел. Выбор может меняться.</p>}
-                    {route.strategy === 'fallback' && <p>Mihomo использует первый доступный сервер группы. Если он перестаёт отвечать, ядро переходит к следующему.</p>}
-                    {route.strategy === 'load-balance' && <p>Mihomo распределяет соединения между серверами группы.</p>}
-                    {!route.strategy && route.group && <p>Для этого сервиса действует выбор его группы в Mihomo. Здесь можно назначить отдельный сервер или профиль.</p>}
-                    {!route.group && <p>Для этой карточки Mihomo пока не подтвердил отдельную группу. Можно назначить сервер или профиль в списке выше.</p>}
-                    {!!members?.length && (
-                        <div>
-                            <p className='font-medium text-foreground'>Кандидаты группы · {members.length}</p>
-                            <ul className='mt-1 max-h-44 overflow-y-auto' aria-label='Кандидаты группы'>
-                                {members.map(member => <li key={member} className='break-words py-0.5'>{member === 'DIRECT' ? 'Напрямую, без VPN' : member}</li>)}
-                            </ul>
-                        </div>
-                    )}
-                </div>
-            </details>
+        <div className='space-y-1'>
+            <h3 className='font-medium'>Как выбран маршрут</h3>
+            <div className='space-y-1 text-muted-foreground'>
+                {groupPath && <p className='break-words'>Группа Mihomo · {groupPath}</p>}
+                {route.strategy === 'url-test' && <p>Mihomo сравнивает задержку доступных серверов и сам выбирает узел. Выбор может меняться.</p>}
+                {route.strategy === 'fallback' && <p>Mihomo использует первый доступный сервер группы. Если он перестаёт отвечать, ядро переходит к следующему.</p>}
+                {route.strategy === 'load-balance' && <p>Mihomo распределяет соединения между серверами группы.</p>}
+                {!route.strategy && route.group && <p>Для этого сервиса действует выбор его группы в Mihomo. Здесь можно назначить отдельный сервер или профиль.</p>}
+                {!route.group && <p>Для этой карточки Mihomo пока не подтвердил отдельную группу. Можно назначить сервер или профиль в списке выше.</p>}
+                {!!members?.length && (
+                    <div>
+                        <p className='font-medium text-foreground'>Кандидаты группы · {members.length}</p>
+                        <ul className='mt-1 max-h-44 overflow-y-auto' aria-label='Кандидаты группы'>
+                            {members.map(member => <li key={member} className='break-words py-0.5'>{member === 'DIRECT' ? 'Напрямую, без VPN' : member}</li>)}
+                        </ul>
+                    </div>
+                )}
+            </div>
         </div>
     )
 }
@@ -82,34 +83,61 @@ interface ClaudeFirewall {
     ready: boolean
 }
 
-function ClaudeApiFirewall({ protectionEnabled }: { protectionEnabled?: boolean }) {
+function useClaudeApiFirewall(enabled: boolean) {
     const client = useQueryClient()
     const key = ['claude-api-firewall']
     const path = '/api/service-routes/claude-api-firewall'
-    const state = useQuery({queryKey: key, queryFn: () => api.get<ClaudeFirewall>(path), refetchInterval: 30000})
+    const state = useQuery({queryKey: key, queryFn: () => api.get<ClaudeFirewall>(path), enabled, refetchInterval: enabled ? 30000 : false})
     const install = useMutation({
         mutationFn: () => api.post<ClaudeFirewall>(path),
         onSuccess: result => client.setQueryData(key, result),
         onError: () => { void client.invalidateQueries({queryKey: key}) },
     })
+    return { state, install }
+}
+
+function ServiceDetails({ service, mihomo, firewall, protectionEnabled }: {
+    service: Service; mihomo: boolean; firewall: ReturnType<typeof useClaudeApiFirewall>; protectionEnabled?: boolean
+}) {
+    const claude = service.id === 'claude'
+    const { state, install } = firewall
     const error = install.error ?? state.error
-    if (state.data?.ready && !error) {
-        return <details className='mt-3 text-sm text-muted-foreground'>
-            <summary className='cursor-pointer'>Фильтр API на роутере · активен</summary>
-            <p className='mt-1'>Даже при остановке Mihomo роутер блокирует прямой выход к трём сетям Anthropic API и Console.</p>
-        </details>
-    }
-    return (
-        <div className='mt-3 text-sm'>
-            <p className='text-muted-foreground'>Фильтр API на роутере · {error ? 'ошибка проверки' : !state.data ? 'проверяем…'
-                : !state.data.available ? 'недоступен' : protectionEnabled === false ? 'выключен' : 'не активен'}</p>
+    const proxy = mihomo && !!service.target && service.target !== 'direct'
+    const inherited = !service.target && service.inherited_route?.kind !== 'conditional' && service.inherited_route
+    const domains = service.domains ?? []
+    if (!claude && !proxy && !inherited && !domains.length) return null
+    const needsAttention = claude && (!!error || (!!state.data && !state.data.ready && protectionEnabled !== false))
+    return <>
+        {needsAttention && <div className='mt-2 text-sm' role='status'>
+            <p className='text-warning'>Фильтр API на роутере · {error ? 'ошибка проверки' : state.data?.available ? 'не активен' : 'недоступен'}</p>
             {state.data?.available && !state.data.ready && protectionEnabled !== false && <button type='button' disabled={install.isPending}
                 className='mt-2 min-h-11 rounded-xl px-3 font-semibold text-tint disabled:opacity-60'
                 onClick={() => install.mutate()}>{install.isPending ? 'Проверяем правила…' : (state.data.installed ? 'Восстановить фильтр API' : 'Включить фильтр API')}</button>}
             {state.data && !state.data.available && <p className='mt-1 text-muted-foreground'>Для включения фильтра нужна панель на роутере.</p>}
             {error && <p role='alert' className='mt-2 text-destructive'>{error.message}</p>}
-        </div>
-    )
+        </div>}
+        <details className='group/details mt-2 border-t border-separator text-sm'>
+            <summary className='flex min-h-10 cursor-pointer list-none items-center justify-between gap-2 text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden'>
+                Подробнее <IconChevronDown aria-hidden className='size-4 transition-transform group-open/details:rotate-180' />
+            </summary>
+            <div className='space-y-4 pb-2'>
+                {claude && !needsAttention && <div>
+                    <h3 className='font-medium'>Фильтр API на роутере</h3>
+                    <p className='mt-1 text-muted-foreground'>{state.data?.ready
+                        ? 'Активен. Блокирует прямой выход к трём сетям Anthropic API и Console даже при остановке VPN.'
+                        : state.data ? 'Выключен.' : 'Проверяем…'}</p>
+                </div>}
+                {inherited && <InheritedRouteInfo route={inherited} />}
+                {proxy && <ClientProxy service={service} />}
+                {domains.length > 0 && <div>
+                    <h3 className='font-medium'>Домены сервиса</h3>
+                    <ul aria-label='Домены сервиса' className='mt-1 max-h-36 overflow-y-auto break-words text-muted-foreground'>
+                        {domains.map(d => <li key={d}>{d.replace(/^domain:/, '').replace(/^ext:geosite_v2fly\.dat:/, 'GeoSite · ')}</li>)}
+                    </ul>
+                </div>}
+            </div>
+        </details>
+    </>
 }
 
 function ClientProxy({service}: {service: Service}) {
@@ -117,9 +145,9 @@ function ClientProxy({service}: {service: Service}) {
         mutationFn: () => api.post<{address: string; username: string; password: string}>('/api/service-routes/' + service.id + '/client'),
     })
     return (
-        <details className='mt-3 text-sm'>
-            <summary className='cursor-pointer text-tint'>Отдельный прокси для {service.name}</summary>
-            <p className='mt-2 text-muted-foreground'>Клиент с обязательным HTTP-прокси использует этот маршрут и для сторонних адресов. В клиенте нужно отключить прямое подключение при отказе прокси.</p>
+        <div>
+            <h3 className='font-medium'>Прокси для приложения</h3>
+            <p className='mt-1 text-muted-foreground'>Чтобы приложение использовало этот маршрут для всех своих запросов, укажите HTTP-прокси и отключите в приложении прямой выход при его отказе.</p>
             {access.data ? (
                 <div className='mt-3 space-y-1 break-all rounded-xl bg-fill p-3'>
                     <p>HTTP-прокси · {access.data.address}</p>
@@ -129,7 +157,7 @@ function ClientProxy({service}: {service: Service}) {
                 </div>
             ) : <button type='button' disabled={access.isPending} className='mt-1 min-h-11 text-tint' onClick={() => access.mutate()}>{access.isPending ? 'Проверяем вход…' : 'Получить доступ'}</button>}
             {access.error && <p role='alert' className='text-destructive'>{access.error.message}</p>}
-        </details>
+        </div>
     )
 }
 
@@ -159,6 +187,7 @@ export function ServiceRoutesPage() {
     })
     const view = query.data
     const killSwitch = useKillSwitch(view?.scope === 'mihomo')
+    const firewall = useClaudeApiFirewall(!!view?.services.some(service => service.id === 'claude'))
     const error = change.error ?? query.error ?? killSwitch.error
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
     const targets = view?.targets
@@ -217,19 +246,12 @@ export function ServiceRoutesPage() {
                                     {!busy && !!selected?.sources?.length && <p className='mt-1 whitespace-pre-wrap text-sm text-muted-foreground [overflow-wrap:anywhere]'>
                                         {selected.sources.length === 1 ? 'Провайдер' : 'Провайдеры'} · {selected.sources.join(', ')}
                                     </p>}
-                                    {!service.target && service.inherited_route && <InheritedRouteInfo route={service.inherited_route} />}
+                                    {!service.target && service.inherited_route && <CurrentRoute route={service.inherited_route} />}
                                     {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
                                     {busy && <p role='status' className='mt-2 text-sm text-muted-foreground'>Применяем маршрут…</p>}
-                                    {isClaude && <ClaudeApiFirewall protectionEnabled={killSwitch.data?.services?.claude
-                                        ? killSwitch.data.services.claude === 'on' : killSwitch.data?.enabled} />}
-                                    {view.scope === 'mihomo' && !!service.target && service.target !== 'direct' && <ClientProxy service={service} />}
                                     {!busy && service.blocked && view.active && <p className='mt-2 text-sm text-warning'>Ядро блокирует соединения этого сервиса</p>}
-                                    {service.domains?.length > 0 && (
-                                        <details className='mt-3 text-sm text-muted-foreground'>
-                                            <summary className='cursor-pointer'>Домены сервиса</summary>
-                                            <p className='mt-2 break-words'>{service.domains.map(d => d.replace(/^domain:/, '').replace(/^ext:geosite_v2fly\.dat:/, 'GeoSite · ')).join(' · ')}</p>
-                                        </details>
-                                    )}
+                                    <ServiceDetails service={service} mihomo={view.scope === 'mihomo'} firewall={firewall}
+                                        protectionEnabled={killSwitch.data?.services?.claude ? killSwitch.data.services.claude === 'on' : killSwitch.data?.enabled} />
                                 </section>
                             )
                         })}
