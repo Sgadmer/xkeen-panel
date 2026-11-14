@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"xkeen-panel/internal/xkeen"
 )
@@ -284,6 +285,9 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		p.doc["listeners"] = kept
 	}
 	priority := []string{}
+	var specific []string
+	earlierDomains := map[string]bool{}
+	autoDefaults := p.doc[serviceAutoKey] == true
 	var registryDomainOverrides, registryIPOverrides []string
 	claudeRuleCount := 0
 	for _, service := range services {
@@ -345,6 +349,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		if id == "google" && p.assigned["youtube"] == "" {
 			withoutYouTube = youtubeCondition(services, original)
 		}
+		destination := &priority
 		add := func(r string) {
 			if withoutYouTube != "" && !strings.HasPrefix(r, "IN-NAME,") {
 				fields, end := targetPart(r)
@@ -365,14 +370,14 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 					seen[r] = true
 					return
 				}
-				priority = append(priority, r)
+				*destination = append(*destination, r)
 				// Mihomo continues to the next rule if a matched adapter lacks
 				// UDP, is missing or is PASS. A second identical predicate
 				// terminates that path in REJECT before any owner DIRECT.
 				if key != directTarget {
 					fields, end := targetPart(r)
 					fields[end] = terminal(protected)
-					priority = append(priority, strings.Join(fields, ","))
+					*destination = append(*destination, strings.Join(fields, ","))
 				}
 				seen[r] = true
 			}
@@ -380,14 +385,33 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		if forced[id] {
 			add("IN-NAME," + serviceInbound(id) + "," + dedicatedGroup(id))
 		}
-		if id == "claude" {
-			for _, cidr := range []string{"160.79.104.0/23", "153.61.224.0/22", "2607:6bc0::/48"} {
+		if id == "claude" || autoDefaults {
+			for _, cidr := range xkeen.ServiceNetworks(id) {
 				add("IP-CIDR," + cidr + "," + name + ",no-resolve")
 			}
 		}
 		for _, domain := range service.Domains {
 			if suffix, ok := strings.CutPrefix(domain, "domain:"); ok {
+				// A specific app such as Gemini can share its parent domain
+				// with a card that comes earlier (Google). Promote only that
+				// suffix, leaving broad GeoSite categories in their original order.
+				if autoDefaults {
+					for _, parent, found := strings.Cut(suffix, "."); found; _, parent, found = strings.Cut(parent, ".") {
+						if earlierDomains[parent] {
+							destination = &specific
+							break
+						}
+					}
+				}
 				add("DOMAIN-SUFFIX," + suffix + "," + name)
+				destination = &priority
+			}
+		}
+		if autoDefaults {
+			for _, domain := range service.Domains {
+				if suffix, ok := strings.CutPrefix(domain, "domain:"); ok {
+					earlierDomains[suffix] = true
+				}
 			}
 		}
 		// Reuse the classifier from this installation (including GeoSite
@@ -417,6 +441,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	rules := make([]string, 0, len(priority)+len(original))
 	rules = append(rules, priority[:claudeRuleCount]...)
 	rules = append(rules, original[:head]...)
+	rules = append(rules, specific...)
 	rules = append(rules, priority[claudeRuleCount:]...)
 	defaultKey := p.assigned[defaultID]
 	if defaultKey != "" || registry.Enabled {
@@ -523,80 +548,122 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	return expected, nil
 }
 
-func (c *Controller) drain(ctx context.Context, a coreAPI, id, want string, services []xkeen.ServiceRouteView) bool {
-	var snapshot struct {
-		Connections []struct {
-			ID       string
-			Chains   []string
-			Rule     string
-			Metadata struct {
-				Host          string
-				SniffHost     string
-				DestinationIP string
-				InboundName   string
+// drainChanged samples established connections once for the whole transaction.
+// A connection can match both a parent and a child card, so decide its service
+// before comparing its live chain to the new destination.
+func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[string]string, services []xkeen.ServiceRouteView) map[string]bool {
+	failed := map[string]bool{}
+	if len(changes) == 0 {
+		return failed
+	}
+	var snapshot struct{ Connections []connectionTracker }
+	if err := p.api.request(ctx, "GET", "/connections", nil, &snapshot); err != nil {
+		for id := range changes {
+			failed[id] = true
+		}
+		return failed
+	}
+
+	domains := map[string]string{}
+	inbounds := map[string]string{}
+	type network struct {
+		id     string
+		prefix netip.Prefix
+	}
+	var networks []network
+	for _, service := range services {
+		id := service.ID
+		inbounds[serviceInbound(id)] = id
+		for _, domain := range service.Domains {
+			if suffix, ok := strings.CutPrefix(domain, "domain:"); ok && domains[suffix] == "" {
+				domains[suffix] = id
+			}
+		}
+		if id == "claude" || p.doc[serviceAutoKey] == true {
+			for _, cidr := range xkeen.ServiceNetworks(id) {
+				networks = append(networks, network{id, netip.MustParsePrefix(cidr)})
 			}
 		}
 	}
-	if a.request(ctx, "GET", "/connections", nil, &snapshot) != nil {
-		return false
-	}
-	var suffixes []string
-	for _, s := range services {
-		if s.ID == id {
-			suffixes = s.Domains
-			break
+
+	// Owner direct exemptions are before ordinary service rules. A connection
+	// matched on one of these predicates may survive the new service policy.
+	exempt := map[string]bool{}
+	ownerHead := true
+	for _, raw := range namesOf(p.doc["rules"]) {
+		f, end := targetPart(raw)
+		if end < 1 || strings.HasPrefix(f[end], cardPrefix) {
+			continue
+		}
+		if end > 1 && ownerHead && f[end] == "DIRECT" && f[0] != "MATCH" {
+			exempt[strings.ToLower(strings.ReplaceAll(f[0], "-", ""))+","+strings.Join(f[1:end], ",")] = true
+		} else {
+			ownerHead = false
+		}
+		id := diagnosticServiceTags[f[end]]
+		if end == 2 && id != "" && (f[0] == "IP-CIDR" || f[0] == "IP-CIDR6") {
+			if prefix, err := netip.ParsePrefix(f[1]); err == nil {
+				networks = append(networks, network{id, prefix})
+			}
 		}
 	}
 	for _, flow := range snapshot.Connections {
-		relevant, current := false, false
-		if id == defaultID && strings.EqualFold(flow.Rule, "Match") {
-			relevant = true
-		}
-		for _, chain := range flow.Chains {
-			if chain == cardPrefix+id || chain == cardPrefix+id+"-inherited" || chain != "" && chain == groupNames[id] || chain == dedicatedGroup(id) {
-				relevant = true
-			}
-			if chain == want {
-				current = true
-			}
-		}
-		for _, name := range []string{flow.Metadata.Host, flow.Metadata.SniffHost} {
-			name = strings.TrimSuffix(strings.ToLower(name), ".")
-			for _, d := range suffixes {
-				if suffix, ok := strings.CutPrefix(d, "domain:"); ok && (name == suffix || strings.HasSuffix(name, "."+suffix)) {
-					relevant = true
+		id := inbounds[flow.Metadata.InboundName]
+		if id == "" {
+			for _, name := range []string{flow.Metadata.SniffHost, flow.Metadata.Host} {
+				for host := strings.ToLower(strings.TrimSuffix(name, ".")); host != ""; {
+					if id = domains[host]; id != "" {
+						break
+					}
+					_, host, _ = strings.Cut(host, ".")
+				}
+				if id != "" {
+					break
 				}
 			}
-		}
-		if flow.Metadata.InboundName == serviceInbound(id) {
-			relevant = true
-		}
-		if id == "claude" {
 			if ip, err := netip.ParseAddr(flow.Metadata.DestinationIP); err == nil {
-				for _, cidr := range []string{"160.79.104.0/23", "153.61.224.0/22", "2607:6bc0::/48"} {
-					if netip.MustParsePrefix(cidr).Contains(ip) {
-						relevant = true
+				for _, net := range networks {
+					if net.prefix.Contains(ip) && (id == "" || net.id == "claude") {
+						id = net.id
 					}
 				}
 			}
-		}
-		// On removal, terminate only traffic previously using the protected
-		// group, not all connections sharing today's ordinary classifier.
-		if want == "" {
-			relevant = flow.Metadata.InboundName == serviceInbound(id)
-			for _, chain := range flow.Chains {
-				if chain == cardPrefix+id || chain == dedicatedGroup(id) {
-					relevant = true
+			if id == "" {
+				for _, tag := range flow.Chains {
+					if id = diagnosticServiceTags[tag]; id != "" {
+						break
+					}
 				}
 			}
-		}
-		if relevant && !current {
-			if flow.ID == "" || a.request(ctx, "DELETE", "/connections/"+url.PathEscape(flow.ID), nil, nil) != nil {
-				return false
+			if id != "claude" && slices.Contains(flow.Chains, "DIRECT") &&
+				exempt[strings.ToLower(strings.ReplaceAll(flow.Rule, "-", ""))+","+flow.RulePayload] {
+				continue
 			}
 		}
+		if strings.EqualFold(flow.Rule, "Match") {
+			_, cardChanged := changes[id]
+			if id == "" || !cardChanged && p.assigned[id] == "" {
+				id = defaultID
+			}
+		}
+		want, changed := changes[id]
+		if !changed || slices.Contains(flow.Chains, want) {
+			continue
+		}
+		if want == "" && flow.Metadata.InboundName != serviceInbound(id) &&
+			!slices.Contains(flow.Chains, cardPrefix+id) && !slices.Contains(flow.Chains, dedicatedGroup(id)) {
+			continue
+		}
+		if flow.ID == "" {
+			failed[id] = true
+			continue
+		}
+		err := p.api.request(ctx, "DELETE", "/connections/"+url.PathEscape(flow.ID), nil, nil)
+		if err != nil && !errors.Is(err, apiResponseError(404)) {
+			failed[id] = true
+		}
 	}
-	return true
+	return failed
 }
 
 func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, expected map[string]string, doc map[string]interface{}) bool {

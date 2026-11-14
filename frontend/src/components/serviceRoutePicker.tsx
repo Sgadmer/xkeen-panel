@@ -10,7 +10,6 @@ interface ServiceRoutePickerProps {
     groups: RouteGroup[]
     value: string
     inheritedLabel: string
-    inheritedHint: string
     allowInherited: boolean
     allowDirect: boolean
     disabled: boolean
@@ -53,13 +52,14 @@ function moveFocus(event: KeyboardEvent<HTMLDivElement>) {
     buttons[next].focus()
 }
 
-export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLabel, inheritedHint, allowInherited, allowDirect, disabled, onSelect }: ServiceRoutePickerProps) {
+export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLabel, allowInherited, allowDirect, disabled, onSelect }: ServiceRoutePickerProps) {
     const [open, setOpen] = useState(false)
     const [expanded, setExpanded] = useState<string | null>(null)
     const selectedGroup = groups.find(group => group.targets.some(target => target.id === value))
     const selected = selectedGroup?.targets.find(target => target.id === value)
+    const auto = groups.find(group => group.key === 'all')?.targets[0]
     const missing = !!value && !(value === 'direct' && allowDirect) && !selected
-    const currentLabel = selected?.label ?? (missing ? 'Назначенный маршрут недоступен' : value === 'direct' ? 'Напрямую' : inheritedLabel)
+    const currentLabel = auto && value === auto.id ? 'Автовыбор' : selected?.label ?? (missing ? 'Назначенный маршрут недоступен' : value === 'direct' ? 'Напрямую' : inheritedLabel)
 
     function choose(next: string) {
         if (disabled) return
@@ -90,12 +90,14 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                     </header>
                     <div className='min-h-0 overflow-y-auto overscroll-contain bg-muted/40' onKeyDown={moveFocus}>
                       <div className='space-y-2.5 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))]'>
-                        {(allowInherited || allowDirect || missing) && <div className='divide-y overflow-hidden rounded-2xl border bg-card'>
+                        {(auto || allowInherited || allowDirect || missing) && <div className='divide-y overflow-hidden rounded-2xl border bg-card'>
                             {missing && <p className='px-4 py-3 text-sm text-muted-foreground'>{currentLabel}</p>}
-                            {allowInherited && <RouteChoice label={inheritedLabel} detail={inheritedHint} current={value === ''} disabled={disabled} onClick={() => choose('')} />}
+                            {auto && <RouteChoice label='Автовыбор' detail='Роутер сам выберет VPN-сервер из пула «Все локации» по скорости отклика.'
+                                current={value === auto.id} disabled={disabled} onClick={() => choose(auto.id)} />}
+                            {allowInherited && <RouteChoice label={inheritedLabel} detail='Роутер проверит адрес и применит к нему обычные правила.' current={value === ''} disabled={disabled} onClick={() => choose('')} />}
                             {allowDirect && <RouteChoice label='Напрямую' detail='Открывать этот сервис без VPN.' current={value === 'direct'} disabled={disabled} onClick={() => choose('direct')} />}
                         </div>}
-                        {groups.map((group, index) => {
+                        {groups.filter(group => group.key !== 'all').map((group, index) => {
                             const active = expanded === group.key
                             const contentId = id + '-options-' + index
                             return (
@@ -106,12 +108,11 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                                             onClick={() => setExpanded(active ? null : group.key)}>
                                             <span className='min-w-0 flex-1'>
                                                 <span className='block whitespace-pre-wrap font-semibold [overflow-wrap:anywhere]'>{group.title}</span>
-                                                {group.key === 'all' && <span className='block text-[13px] text-muted-foreground'>Сервис пойдёт через VPN. Сервер с наименьшей задержкой роутер выберет сам.</span>}
                                                 {group.key === 'country' && <span className='block text-[13px] text-muted-foreground'>Выберите страну. Роутер сам подберёт в ней VPN-сервер.</span>}
                                                 {group.key === 'custom' && <span className='block text-[13px] text-muted-foreground'>Выберите свой список VPN-серверов для этого сервиса.</span>}
                                                 {selectedGroup === group && <span className='block whitespace-pre-wrap text-[13px] text-primary [overflow-wrap:anywhere] dark:text-tint'>{selected?.label}</span>}
                                             </span>
-                                            {group.key !== 'all' && <span aria-hidden className='text-sm tabular-nums text-muted-foreground'>{group.targets.length}</span>}
+                                            <span aria-hidden className='text-sm tabular-nums text-muted-foreground'>{group.targets.length}</span>
                                             <IconChevronDown aria-hidden className={cn('size-4 shrink-0 text-muted-foreground', active && 'rotate-180')} />
                                         </button>
                                     </h3>

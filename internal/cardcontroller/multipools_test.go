@@ -228,8 +228,21 @@ func TestNamedPoolThroughMihomoAndXray(t *testing.T) {
 	if err != nil || pool.MemberCount != 1 {
 		t.Fatal("create pool", pool.MemberCount, err)
 	}
-	if _, err = c.Set(ctx, "claude", xkeen.ServiceTargetID(pinned)); err != nil {
-		t.Fatal(err)
+	freshSetup, err := c.Set(ctx, "claude", xkeen.ServiceTargetID(pinned))
+	if err != nil || !freshSetup.ServiceAutoDefault {
+		t.Fatal("first managed service did not enable automatic routes", err)
+	}
+	for _, card := range freshSetup.Services {
+		want := allPoolID
+		switch card.ID {
+		case "claude":
+			want = xkeen.ServiceTargetID(pinned)
+		case "steam":
+			want = directTarget
+		}
+		if card.Target != want || card.Blocked {
+			t.Fatal("new profile assigned an unexpected route to", card.ID)
+		}
 	}
 	if _, err = c.Set(ctx, "openai", pool.ID); err != nil {
 		t.Fatal(err)

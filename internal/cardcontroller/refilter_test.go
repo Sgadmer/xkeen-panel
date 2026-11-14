@@ -174,7 +174,17 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 	if _, err := c.Set(ctx, "youtube", ""); err != nil {
 		t.Fatal(err)
 	}
-	assertDirect("i.ytimg.com", false)
+	assertBlockedYouTube := func() {
+		t.Helper()
+		res, err := hc.Get("http://i.ytimg.com:" + portOf(dst.Listener.Addr()) + "/")
+		if err == nil {
+			res.Body.Close()
+			if res.StatusCode < 400 {
+				t.Fatal("empty automatic VPN pool allowed YouTube to open")
+			}
+		}
+	}
+	assertBlockedYouTube()
 	first, _ := os.ReadFile(config)
 	if !strings.Contains(string(first), "MATCH,General") {
 		t.Fatal("owner MATCH lost")
@@ -191,7 +201,7 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 	assertDirect("ordinary.test", true)
 	write(siteFile, file(domain("ordinary.test"), domain("habr.test")))
 	check(nil, true)
-	assertDirect("i.ytimg.com", true)
+	assertBlockedYouTube()
 	assertDirect("ordinary.test", false)
 	assertDirect("blocked.test", true)
 	assertDirect("habr.test", true)

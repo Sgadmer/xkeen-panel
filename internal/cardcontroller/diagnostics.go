@@ -40,7 +40,7 @@ type connectionTracker struct {
 	Chains            []string
 	Rule, RulePayload string
 	Metadata          struct {
-		SourceIP, DestinationIP, Host, SniffHost, DestinationPort, Network string
+		SourceIP, DestinationIP, Host, SniffHost, DestinationPort, Network, InboundName string
 	}
 }
 

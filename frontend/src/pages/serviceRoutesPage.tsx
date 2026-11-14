@@ -44,6 +44,8 @@ interface ServiceRoutes {
     guard_ready: boolean
     controller_ready?: boolean
     scope?: string
+    default_service_target?: string
+    service_auto_default?: boolean
     services: Service[]
     targets: ServiceTarget[]
 }
@@ -222,29 +224,34 @@ export function ServiceRoutesPage() {
         refetchOnWindowFocus: 'always',
     })
     const change = useMutation({
-        mutationFn: (selection: { service_id: string; target_id: string }) =>
-            api.put<ServiceRoutes>('/api/service-routes', selection),
+        mutationFn: (selection: { service_id: string; target_id: string } | 'auto-default') =>
+            selection === 'auto-default' ? api.post<ServiceRoutes>('/api/service-routes/auto-default')
+                : api.put<ServiceRoutes>('/api/service-routes', selection),
         onMutate: async () => { await qc.cancelQueries({ queryKey: key }) },
         onSuccess: async (view, selection) => {
             await qc.cancelQueries({ queryKey: key })
             qc.setQueryData(key, view)
-            const service = view.services.find(item => item.id === selection.service_id)
-            setNotice(view.active_connections_pending
-                ? 'Маршрут сохранён. Часть прежних соединений ещё требует проверки.'
-                : 'Маршрут сохранён' + (service ? ' · ' + service.name : ''))
+            const service = selection !== 'auto-default' && view.services.find(item => item.id === selection.service_id)
+            const saved = selection === 'auto-default' ? 'Автовыбор включён' : 'Маршрут сохранён' + (service ? ' · ' + service.name : '')
+            setNotice(view.active_connections_pending ? saved + '. Проверяем прежние соединения.' : saved)
         },
         onError: () => { void qc.invalidateQueries({ queryKey: key }) },
     })
     const view = query.data
     const order = useServiceOrder(view?.services ?? [])
-    const usesBlocklist = view?.services.some(service => service.inherited_route?.kind === 'conditional')
+    const mihomo = view?.scope === 'mihomo'
+    const needsMigration = mihomo && view.service_auto_default === false
+    const unassigned = needsMigration ? view.services.filter(service => !service.target) : []
+    const autoCount = unassigned.filter(service => service.id !== 'steam').length
+    const pendingService = change.isPending && change.variables !== 'auto-default' ? change.variables : undefined
     const killSwitch = useKillSwitch(view?.scope === 'mihomo')
     const claudeProtection = killSwitch.data && serviceKillSwitch(killSwitch.data, 'claude').enabled
     const firewall = useClaudeApiFirewall(!!view?.services.some(service => service.id === 'claude'))
     const error = change.error ?? query.error ?? killSwitch.error
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
     const targets = view?.targets
-    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries), [targets, scopes, avoidCountries])
+    const defaultServiceTarget = mihomo ? view.default_service_target : undefined
+    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries, defaultServiceTarget), [targets, scopes, avoidCountries, defaultServiceTarget])
 
     return (
         <>
@@ -270,12 +277,25 @@ export function ServiceRoutesPage() {
                             {view.scope === 'mihomo' && <Link to='/settings#kill-switch' className='mt-1 inline-block text-sm text-tint'>Общий kill switch в настройках</Link>}
                         </div>
                     </div>
+                    {needsMigration && <div className='rounded-card bg-card p-4'>
+                        <h2 className='font-semibold'>Автовыбор для сервисов</h2>
+                        <p className='mt-1 text-sm text-muted-foreground'>
+                            {autoCount ? <>Карточек для перевода на VPN — {autoCount}. Для них роутер сам выберет сервер из пула «Все локации». </> : 'Новые сервисы будут использовать автовыбор VPN. '}
+                            {unassigned.some(service => service.id === 'steam') && 'Steam будет открываться напрямую. '}
+                            Ваши ручные назначения сохранятся.
+                        </p>
+                        <button type='button' disabled={change.isPending || !view.controller_ready || !defaultServiceTarget}
+                            className='mt-3 min-h-11 rounded-xl bg-primary px-4 font-semibold text-primary-foreground disabled:opacity-50'
+                            onClick={() => { setNotice(''); change.mutate('auto-default') }}>
+                            {change.isPending && change.variables === 'auto-default' ? 'Применяем…' : 'Применить'}
+                        </button>
+                    </div>}
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
                         {order.services.map(service => {
                             const isClaude = service.id === 'claude'
                             const selected = view.targets.find(t => t.id === service.target)
                             const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service, selected)
-                            const busy = change.isPending && change.variables?.service_id === service.id
+                            const busy = pendingService?.service_id === service.id
                             const label = 'service-' + service.id
                             return (
                                 <section key={service.id} className='min-w-0 rounded-card bg-card p-4' aria-labelledby={label}>
@@ -290,12 +310,9 @@ export function ServiceRoutesPage() {
                                         id={'vpn-' + service.id}
                                         serviceName={service.name}
                                         groups={options}
-                                        value={(busy ? change.variables?.target_id : service.target) || ''}
-                                        inheritedLabel={isClaude ? 'Выберите VPN' : 'По правилам роутера'}
-                                        inheritedHint={usesBlocklist
-                                            ? 'Адрес есть в списке блокировок — через VPN. Остальные — напрямую. Действуют ваши исключения.'
-                                            : 'Роутер проверит адрес и применит к нему обычные правила. Отдельный VPN для сервиса выбирать не нужно.'}
-                                        allowInherited={!isClaude}
+                                        value={(busy ? pendingService.target_id : service.target) || ''}
+                                        inheritedLabel={isClaude || (mihomo && !needsMigration) ? 'Выберите VPN' : 'По правилам роутера'}
+                                        allowInherited={!isClaude && !mihomo}
                                         allowDirect={!isClaude && view.scope === 'mihomo'}
                                         disabled={change.isPending || !(view.guard_ready || (view.scope === 'mihomo' && view.controller_ready))}
                                         onSelect={targetId => {

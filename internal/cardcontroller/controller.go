@@ -33,6 +33,8 @@ type View struct {
 	Scope                    string `json:"scope"`
 	ControllerReady          bool   `json:"controller_ready"`
 	ActiveConnectionsPending bool   `json:"active_connections_pending,omitempty"`
+	ServiceAutoDefault       bool   `json:"service_auto_default"`
+	DefaultServiceTarget     string `json:"default_service_target"`
 }
 
 type Controller struct {
@@ -45,6 +47,7 @@ type Controller struct {
 	validate           func(context.Context, string) error
 	prepare            func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
 	pending            map[string]bool
+	autoFlowsChecked   bool
 	refilterError      string
 	avoidCountries     func() []string
 	autoAllowed        func(models.Server) bool
@@ -138,9 +141,17 @@ func (a coreAPI) reload(ctx context.Context, path string) error {
 }
 
 const stateKey = "x-xkeen-panel-routes"
+const serviceAutoKey = "x-xkeen-panel-service-auto-default"
 const cardPrefix = "XKP-card-"
 const nodePrefix = "XKP-endpoint-"
 const directTarget = "direct"
+
+func defaultServiceTarget(id string) string {
+	if id == "steam" {
+		return directTarget
+	}
+	return allPoolID
+}
 
 func validAssignment(service, target string) bool {
 	return validHash(target) || service != "claude" && target == directTarget
@@ -172,6 +183,9 @@ func (c *Controller) read() (profile, error) {
 	if _, err = readKillSwitch(p.doc); err != nil {
 		return p, err
 	}
+	if value, found := p.doc[serviceAutoKey]; found && value != true {
+		return p, errors.New("повреждена настройка автовыбора сервисов")
+	}
 	p.autoLimit = normalizeAutoLimit(c.autoPoolLimit)
 	if value, present := p.doc[autoLimitKey]; present {
 		n, ok := value.(int)
@@ -201,6 +215,9 @@ func (c *Controller) read() (profile, error) {
 		}
 		for id, v := range m {
 			val, ok := v.(string)
+			if ok && val == "" && groupNames[id] != "" {
+				continue // Old profiles may store an empty selection explicitly.
+			}
 			if !ok || !validAssignment(id, val) || groupNames[id] == "" && !(id == defaultID && validHash(val)) {
 				return p, errors.New("повреждено назначение карточки")
 			}
@@ -240,7 +257,8 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	result := View{ServiceRoutesView: view, Scope: "mihomo", ActiveConnectionsPending: len(c.pending) > 0}
+	result := View{ServiceRoutesView: view, Scope: "mihomo", ActiveConnectionsPending: len(c.pending) > 0,
+		ServiceAutoDefault: p.doc[serviceAutoKey] == true, DefaultServiceTarget: allPoolID}
 	for _, pool := range scopes(p, c.poolNodes(servers)) {
 		result.Targets = append(result.Targets, xkeen.ServiceTarget{ID: pool.ID, Name: pool.Name, Kind: "pool", Country: pool.Country})
 	}
@@ -392,10 +410,29 @@ func (c *Controller) CheckCoreInterruption() error {
 func (c *Controller) Set(ctx context.Context, id, target string) (View, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if groupNames[id] == "" || target != "" && !validAssignment(id, target) || id == "claude" && target == "" {
+	if target == "" {
+		target = defaultServiceTarget(id)
+	}
+	if groupNames[id] == "" || !validAssignment(id, target) {
 		return View{}, errors.New("недопустимый сервис или сервер")
 	}
-	return c.apply(ctx, id, target, nil)
+	return c.apply(ctx, id, target, func(p *profile) error {
+		if _, managed := p.doc[stateKey]; !managed {
+			p.doc[serviceAutoKey] = true
+		}
+		return nil
+	})
+}
+
+// EnableServiceAutoDefault upgrades all unassigned cards in one validated reload.
+// Already assigned services and the router's default route keep their identity.
+func (c *Controller) EnableServiceAutoDefault(ctx context.Context) (View, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.apply(ctx, "", allPoolID, func(p *profile) error {
+		p.doc[serviceAutoKey] = true
+		return nil
+	})
 }
 func (c *Controller) Reconcile(ctx context.Context) error {
 	c.mu.Lock()
@@ -457,6 +494,13 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 			delete(p.assigned, id)
 		} else {
 			p.assigned[id] = target
+		}
+	}
+	if p.doc[serviceAutoKey] == true {
+		for service := range groupNames {
+			if p.assigned[service] == "" {
+				p.assigned[service] = defaultServiceTarget(service)
+			}
 		}
 	}
 	servers := c.catalog()
@@ -569,6 +613,7 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	if err != nil {
 		return View{}, err
 	}
+	changed := map[string]string{}
 	for _, service := range view.Services {
 		name := cardPrefix + service.ID
 		want := expected[name]
@@ -577,21 +622,25 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 			want = expected[inherited]
 			previous, exists = selections[inherited]
 		}
-		if c.pending[service.ID] || (want != "" || exists) && (previous.Now != want || service.ID == id) {
-			if !c.drain(ctx, p.api, service.ID, want, view.Services) {
-				c.pending[service.ID] = true
-			} else {
-				delete(c.pending, service.ID)
-			}
+		// The new defaults can change which card owns a destination even
+		// when both cards keep their pinned targets. Resume after a restart.
+		recheckAuto := p.doc[serviceAutoKey] == true && !c.autoFlowsChecked
+		if recheckAuto || c.pending[service.ID] || (want != "" || exists) && (previous.Now != want || service.ID == id) {
+			changed[service.ID] = want
 		}
 	}
+	c.autoFlowsChecked = p.doc[serviceAutoKey] == true
 	want := expected[cardPrefix+defaultID]
 	before := selections[cardPrefix+defaultID].Now
 	if c.pending[defaultID] || before != want || id == defaultID {
-		if c.drain(ctx, p.api, defaultID, want, nil) {
-			delete(c.pending, defaultID)
+		changed[defaultID] = want
+	}
+	failed := c.drainChanged(ctx, p, changed, view.Services)
+	for service := range changed {
+		if failed[service] {
+			c.pending[service] = true
 		} else {
-			c.pending[defaultID] = true
+			delete(c.pending, service)
 		}
 	}
 	// The transparent rule may switch back from a native fallback group

@@ -84,6 +84,7 @@ func TestMihomoPanelKeepsSettingsAndNavigation(t *testing.T) {
 		{"POST", "/api/access/face-id/prepare"},
 		{"POST", "/api/devices/rename"},
 		{"POST", "/api/devices/forget"},
+		{"POST", "/api/service-routes/auto-default"},
 	} {
 		if w := ask(check.method, check.path, "", false); w.Code != http.StatusUnauthorized {
 			t.Fatalf("route must require panel authentication: %s %s returned %d", check.method, check.path, w.Code)

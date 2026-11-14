@@ -55,6 +55,9 @@ var serviceNetworks = map[string][]string{
 	"telegram": {"149.154.160.0/20", "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22", "91.108.20.0/22", "91.108.56.0/22"},
 }
 
+// ServiceNetworks returns the address ranges managed by the service card.
+func ServiceNetworks(id string) []string { return slices.Clone(serviceNetworks[id]) }
+
 func servicePolicyReady(rt Runtime, state serviceRoutesState) bool {
 	// A verified native exclusive route need not use synthetic prefixes.
 	// A verifier using FakeDNS must itself verify the prefix packet filter.

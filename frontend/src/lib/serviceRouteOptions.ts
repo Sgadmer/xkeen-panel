@@ -32,7 +32,7 @@ const poolGroups = {
 
 const collator = new Intl.Collator('ru', { numeric: true })
 
-export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[] = [], avoided: string[] = []) {
+export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[] = [], avoided: string[] = [], defaultServiceTarget?: string) {
     const scopeById = new Map(scopes.map(scope => [scope.id, scope]))
     const groups = new Map<string, RouteGroup>()
     for (const target of targets) {
@@ -43,7 +43,7 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
         let detail: string | undefined
         if (target.kind === 'pool') {
             const scope = scopeById.get(target.id)
-            const kind = scope?.kind ?? (target.country ? 'country' : 'pool')
+            const kind = target.id === defaultServiceTarget ? 'all' : scope?.kind ?? (target.country ? 'country' : 'pool')
             key = kind
             title = poolGroups[kind].title
             order = poolGroups[kind].order

@@ -3,11 +3,14 @@ package cardcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 	"xkeen-panel/internal/models"
@@ -68,7 +71,9 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 		t.Fatal("unmanaged profile should allow ordinary core control", err)
 	}
 	id := xkeen.ServiceTargetID(item)
-	view, err := c.Set(ctx, "claude", id)
+	// Seed the format written by an older panel: Claude is pinned, while
+	// unassigned services continue to use the original owner's routing.
+	view, err := c.apply(ctx, "claude", id, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +96,7 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 			t.Fatal(e)
 		}
 		rules := list(state.doc["rules"])
-		if str(rules[len(rules)-1]) != "MATCH,DIRECT" || str(rules[len(rules)-2]) != "DOMAIN-SUFFIX,openai.com,XKP-card-reject" || str(rules[len(rules)-4]) != "DOMAIN-SUFFIX,test.example,DIRECT" {
+		if str(rules[len(rules)-1]) != "MATCH,DIRECT" || !slices.Contains(rules, any("DOMAIN-SUFFIX,test.example,DIRECT")) {
 			t.Fatal("direct rules were modified")
 		}
 	}
@@ -137,16 +142,92 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	explicit, err = c.View(ctx)
-	if err != nil || !explicit.Active {
+	if err != nil || !explicit.Active || explicit.ServiceAutoDefault {
 		t.Fatal("reconciliation lost DIRECT")
 	}
-	inherited, err := c.Set(ctx, "openai", "")
+	// Activation is a single validated reload. A failed pool leaves the
+	// installed legacy profile untouched; a successful retry preserves pins.
+	legacy, _ := os.ReadFile(path)
+	prepare := c.prepare
+	c.prepare = func(rt xkeen.Runtime, hash string, target models.Server) (xkeen.CardProxy, error) {
+		if target.GeneratedPool {
+			return xkeen.CardProxy{}, errors.New("fixture: unavailable pool")
+		}
+		return prepare(rt, hash, target)
+	}
+	if _, err := c.EnableServiceAutoDefault(ctx); err == nil {
+		t.Fatal("failed pool accepted by migration")
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != string(legacy) {
+		t.Fatal("failed migration changed profile")
+	}
+	c.prepare = prepare
+	validations := 0
+	validateCandidate := c.validate
+	c.validate = func(ctx context.Context, path string) error {
+		validations++
+		return validateCandidate(ctx, path)
+	}
+	for twice := 0; twice < 2; twice++ {
+		v, err := c.EnableServiceAutoDefault(ctx)
+		if err != nil || !v.Active || !v.ServiceAutoDefault || v.DefaultServiceTarget != allPoolID || v.ActiveConnectionsPending {
+			t.Fatal("auto default not confirmed", err)
+		}
+		for _, card := range v.Services {
+			want := allPoolID
+			switch card.ID {
+			case "claude":
+				want = id
+			case "openai", "steam":
+				want = directTarget
+			}
+			if card.Target != want || card.Blocked {
+				t.Fatal("wrong migrated route", card.ID, card.Target)
+			}
+		}
+	}
+	if validations != 1 {
+		t.Fatalf("migration/retry validated %d candidate configurations", validations)
+	}
+	// Simulate a catalog upgrade: a new card has no saved assignment. A
+	// restarted panel must give it the same default as the existing cards.
+	restart, err := c.read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range inherited.Services {
-		if s.ID == "openai" && (s.Target != "" || s.RouteName != "REJECT") {
-			t.Fatal("inherit did not restore previous selection")
+	delete(object(restart.doc[stateKey]), "discord")
+	delete(object(restart.doc[stateKey]), "steam")
+	if err = c.savePoolMetadata(restart); err != nil {
+		t.Fatal(err)
+	}
+	fresh := New(path, dir, c.rt, c.catalog)
+	fresh.prepare, fresh.validate = c.prepare, c.validate
+	if err = fresh.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restart, err = fresh.read()
+	if err != nil || restart.assigned["discord"] != allPoolID || restart.assigned["steam"] != directTarget || restart.assigned["openai"] != directTarget {
+		t.Fatal("restart did not persist automatic and explicit assignments", err)
+	}
+	if _, err = c.Set(ctx, "steam", allPoolID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.EnableServiceAutoDefault(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := c.read(); err != nil || saved.assigned["steam"] != allPoolID {
+		t.Fatal("migration changed a manually selected Steam pool", err)
+	}
+	if _, err = c.Set(ctx, "steam", ""); err != nil {
+		t.Fatal(err)
+	}
+	auto, err := c.Set(ctx, "openai", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range auto.Services {
+		if s.ID == "openai" && (s.Target != allPoolID || s.Blocked) {
+			t.Fatal("an empty choice did not restore the automatic VPN pool")
 		}
 	}
 	if err := p.api.request(ctx, "PUT", "/proxies/ChatGPT", map[string]string{"name": "DIRECT"}, nil); err != nil {
@@ -167,8 +248,8 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 	if _, err = c.EnableClaudeProxy(ctx, "0.0.0.0"); err == nil {
 		t.Fatal("allowed wildcard listener")
 	}
-	if _, err := c.EnableServiceProxy(ctx, "127.0.0.1", "discord"); err == nil {
-		t.Fatal("created a client proxy for an inherited route")
+	if _, err := c.EnableServiceProxy(ctx, "127.0.0.1", "discord"); err != nil {
+		t.Fatal("automatic pool must support the app proxy", err)
 	}
 	for _, next := range []string{directTarget, ""} {
 		if _, err := c.Set(ctx, "openai", id); err != nil {
@@ -185,12 +266,20 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 		if _, err = c.Set(ctx, "openai", next); err != nil {
 			t.Fatal(err)
 		}
-		if conn, err := net.DialTimeout("tcp", second.Address, time.Second); err == nil {
-			conn.Close()
-			t.Fatal("old service proxy accepted a connection after unassignment")
-		}
-		if _, err = c.EnableServiceProxy(ctx, "127.0.0.1", "openai"); err == nil {
-			t.Fatal("created proxy for direct or inherited card")
+		if next == directTarget {
+			if conn, err := net.DialTimeout("tcp", second.Address, time.Second); err == nil {
+				conn.Close()
+				t.Fatal("old service proxy accepted a connection after switching to direct")
+			}
+			if _, err = c.EnableServiceProxy(ctx, "127.0.0.1", "openai"); err == nil {
+				t.Fatal("created proxy for direct card")
+			}
+		} else {
+			again, err := c.EnableServiceProxy(ctx, "127.0.0.1", "openai")
+			live, liveErr := p.api.selectors(ctx)
+			if err != nil || again != second || liveErr != nil || !strings.HasPrefix(live[dedicatedGroup("openai")].Now, nodePrefix+allPoolID+"-") {
+				t.Fatal("changing to auto did not preserve dedicated proxy with new target", err, liveErr)
+			}
 		}
 		if _, err = c.EnableClaudeProxy(ctx, "127.0.0.1"); err != nil {
 			t.Fatal("changing another card closed Claude", err)
@@ -233,6 +322,15 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 	view, err = c.View(ctx)
 	if err != nil || !view.Active || !view.Services[0].Blocked || view.Services[0].Target != id {
 		t.Fatal("missing endpoint was not blocked")
+	}
+	for _, card := range view.Services {
+		if card.ID == "steam" {
+			if card.Target != directTarget || card.Blocked || card.RouteName != "DIRECT" {
+				t.Fatal("direct Steam route changed when the VPN pool became empty")
+			}
+		} else if card.ID != "claude" && (card.Target != allPoolID || !card.Blocked) {
+			t.Fatal("empty pool did not block the protected service", card.ID)
+		}
 	}
 	check()
 	// Changing the default must preserve Claude's assignment and original

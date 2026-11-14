@@ -69,6 +69,14 @@ func (h *Handlers) MountMihomoCards(r chi.Router, host string) {
 			}
 			writeJSON(w, 200, data)
 		})
+		r.Post("/service-routes/auto-default", func(w http.ResponseWriter, r *http.Request) {
+			data, err := h.Cards.EnableServiceAutoDefault(r.Context())
+			if err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, data)
+		})
 		r.Put("/service-routes", func(w http.ResponseWriter, r *http.Request) {
 			var choice struct {
 				ServiceID string  `json:"service_id"`
