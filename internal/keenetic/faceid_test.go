@@ -144,3 +144,21 @@ func TestRCIPort(t *testing.T) {
 		}
 	}
 }
+
+func TestCrazeDNSOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		booked any
+		ok     bool
+	}{
+		{"existing", true}, {true, true}, {"some-other-name", false}, {false, false}, {"", false}, {nil, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"name": "existing", "domain": panelDNSZone, "booked": tc.booked})
+		}))
+		domain, err := NewClient(srv.URL, "").panelDomain(context.Background())
+		srv.Close()
+		if tc.ok != (err == nil) || (tc.ok && domain != "existing."+panelDNSZone) {
+			t.Errorf("booked=%v domain=%q err=%v", tc.booked, domain, err)
+		}
+	}
+}

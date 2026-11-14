@@ -80,8 +80,19 @@ func (c *Client) panelDomain(ctx context.Context) (string, error) {
 	if err := c.doContext(ctx, http.MethodGet, "show/ndns", nil, &s); err != nil {
 		return "", err
 	}
-	if s.Name == "" && s.Domain == "" && (len(s.Booked) == 0 || string(s.Booked) == `""` || string(s.Booked) == "false" || string(s.Booked) == "null") {
-		return "", nil
+	switch string(s.Booked) {
+	case "", `""`, "false", "null":
+		if s.Name == "" && s.Domain == "" {
+			return "", nil
+		}
+		return "", errors.New("CrazeDNS ещё не подтвердил регистрацию указанного на роутере имени")
+	case "true":
+		// Some firmware versions report a Boolean ownership flag.
+	default:
+		var booked string
+		if err := json.Unmarshal(s.Booked, &booked); err != nil || booked != s.Name {
+			return "", errors.New("CrazeDNS не подтвердил принадлежность имени роутеру")
+		}
 	}
 	if s.Domain == "" || !dnsLabel.MatchString(s.Name) {
 		return "", errors.New("роутер не подтвердил имя CrazeDNS")
