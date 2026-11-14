@@ -82,9 +82,17 @@ func TestMihomoPanelKeepsSettingsAndNavigation(t *testing.T) {
 	for _, check := range []struct{ method, path string }{
 		{"GET", "/api/access/face-id/plan?label=example"},
 		{"POST", "/api/access/face-id/prepare"},
+		{"POST", "/api/devices/rename"},
+		{"POST", "/api/devices/forget"},
 	} {
 		if w := ask(check.method, check.path, "", false); w.Code != http.StatusUnauthorized {
-			t.Fatalf("HTTPS setup must require panel authentication: %s %s returned %d", check.method, check.path, w.Code)
+			t.Fatalf("route must require panel authentication: %s %s returned %d", check.method, check.path, w.Code)
+		}
+	}
+	for _, path := range []string{"/api/devices/rename", "/api/devices/forget"} {
+		w := ask("POST", path, `{"mac":"invalid"}`, true)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "MAC") {
+			t.Fatalf("authenticated request did not reach device handler: %s returned %d", path, w.Code)
 		}
 	}
 	w = ask("GET", "/api/panel/settings", "", true)

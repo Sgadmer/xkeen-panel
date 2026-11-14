@@ -40,7 +40,7 @@ export function DevicesPage() {
             )}
 
             {data?.policy_found && <NewDevicesGroup data={data} />}
-            {data && <DeviceGroups data={data} columns showConnections={core === 'mihomo'} />}
+            {data && <DeviceGroups data={data} columns manage showConnections={core === 'mihomo'} />}
         </>
     )
 }

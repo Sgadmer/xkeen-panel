@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
@@ -7,9 +8,11 @@ import {
     IconDeviceTv,
     IconDeviceWatch,
     IconHome,
+    IconPencil,
     type Icon,
 } from '@tabler/icons-react'
 import { Group, IconTile, Row, Switch } from '@/components/ios'
+import { DeviceEditor } from '@/components/deviceEditor'
 import { api } from '@/lib/api'
 import type { Device, DevicesResponse } from '@/types'
 
@@ -50,12 +53,18 @@ export function DeviceGroups({
     data,
     columns,
     showConnections = false,
+    manage = false,
 }: {
     data: DevicesResponse
     columns?: boolean
     showConnections?: boolean
+    manage?: boolean
 }) {
     const qc = useQueryClient()
+    const [editing, setEditing] = useState<Device | null>(null)
+    const [notice, setNotice] = useState('')
+    const opener = useRef<HTMLButtonElement>(null)
+    const groups = useRef<HTMLDivElement>(null)
     const toggle = useMutation({
         mutationFn: ({ mac, vpn }: { mac: string; vpn: boolean }) =>
             api.post('/api/devices/vpn', { mac, vpn }),
@@ -89,7 +98,13 @@ export function DeviceGroups({
                         </IconTile>
                     </span>
                 }
-                label={<span className='block break-words'>{d.name}</span>}
+                label={manage ? <button type='button' aria-haspopup='dialog'
+                    aria-label={'Изменить устройство ' + d.name}
+                    className='group inline-flex max-w-full cursor-pointer items-baseline gap-1.5 rounded text-left hover:text-tint focus-visible:outline-2 focus-visible:outline-tint'
+                    onClick={event => { opener.current = event.currentTarget; setNotice(''); setEditing(d) }}>
+                    <span className='min-w-0 [overflow-wrap:anywhere]'>{d.name}</span>
+                    <IconPencil aria-hidden className='size-4 shrink-0 self-center text-muted-foreground group-hover:text-tint' />
+                </button> : <span className='block break-words'>{d.name}</span>}
                 hint={<>
                     {route}
                     {showConnections && d.active && d.ip && <>{' · '}
@@ -115,12 +130,15 @@ export function DeviceGroups({
 
     return (
         <>
+            {notice && <p role='status' className='px-4 text-sm text-muted-foreground'>{notice}</p>}
             {toggle.error && (
                 <p className='px-4 text-[13px] text-destructive'>
                     {toggle.error.message}
                 </p>
             )}
             <div
+                ref={groups}
+                tabIndex={-1}
                 className={
                     columns
                         ? 'grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start'
@@ -134,6 +152,11 @@ export function DeviceGroups({
                     <Group title='Не в сети'>{offline.map(row)}</Group>
                 )}
             </div>
+            {editing && <DeviceEditor key={editing.mac}
+                device={data.devices.find(d => d.mac === editing.mac) ?? editing}
+                returnFocus={() => opener.current?.isConnected ? opener.current : groups.current}
+                onClose={() => setEditing(null)}
+                onSaved={message => { setNotice(message); setEditing(null) }} />}
         </>
     )
 }

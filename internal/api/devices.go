@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"regexp"
+	"sync"
 
 	"xkeen-panel/internal/keenetic"
 	"xkeen-panel/internal/xkeen"
@@ -12,6 +15,7 @@ import (
 type DevicesHandler struct {
 	detector *xkeen.Detector
 	rciAddr  string
+	updateMu sync.Mutex
 }
 
 func NewDevicesHandler(det *xkeen.Detector, rciAddr string) *DevicesHandler {
@@ -83,6 +87,8 @@ func (h *DevicesHandler) HandleSetVPN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	c := h.client()
 	policies, err := c.Policies()
 	if err != nil {
@@ -115,6 +121,8 @@ func (h *DevicesHandler) HandleNewDevicesVPN(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
 	c := h.client()
 	policies, err := c.Policies()
 	if err != nil {
@@ -138,4 +146,51 @@ func (h *DevicesHandler) HandleNewDevicesVPN(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+}
+
+func deviceRequest(w http.ResponseWriter, r *http.Request, req any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(req); err != nil || dec.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат запроса"})
+		return false
+	}
+	return true
+}
+
+func deviceResult(w http.ResponseWriter, err error) {
+	if err == nil {
+		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+		return
+	}
+	status := http.StatusBadGateway
+	switch {
+	case errors.Is(err, keenetic.ErrDeviceMAC), errors.Is(err, keenetic.ErrDeviceName):
+		status = http.StatusBadRequest
+	case errors.Is(err, keenetic.ErrDeviceNameUsed):
+		status = http.StatusConflict
+	case errors.Is(err, keenetic.ErrDeviceMissing):
+		status = http.StatusNotFound
+	}
+	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func (h *DevicesHandler) HandleRename(w http.ResponseWriter, r *http.Request) {
+	var req struct{ MAC, Name string }
+	if !deviceRequest(w, r, &req) {
+		return
+	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
+	deviceResult(w, h.client().RenameHost(r.Context(), req.MAC, req.Name))
+}
+
+func (h *DevicesHandler) HandleForget(w http.ResponseWriter, r *http.Request) {
+	var req struct{ MAC string }
+	if !deviceRequest(w, r, &req) {
+		return
+	}
+	h.updateMu.Lock()
+	defer h.updateMu.Unlock()
+	deviceResult(w, h.client().ForgetHost(r.Context(), req.MAC))
 }

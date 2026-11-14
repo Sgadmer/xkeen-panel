@@ -220,6 +220,8 @@ func (s *Server) Handler() http.Handler {
 			r.Put("/panel/settings", s.settings.HandlePut)
 
 			r.Get("/devices", devicesHandler.HandleList)
+			r.Post("/devices/rename", devicesHandler.HandleRename)
+			r.Post("/devices/forget", devicesHandler.HandleForget)
 			r.Post("/devices/vpn", devicesHandler.HandleSetVPN)
 			r.Post("/devices/new", devicesHandler.HandleNewDevicesVPN)
 
