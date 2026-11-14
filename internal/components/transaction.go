@@ -22,6 +22,7 @@ import (
 )
 
 type Backup struct {
+	Setting     string            `json:"setting,omitempty"`
 	ID          string            `json:"id"`
 	Component   string            `json:"component"`
 	Version     string            `json:"version"`
@@ -39,6 +40,7 @@ type backupEntry struct {
 	Hashes    map[string]string `json:"hashes"`
 }
 type backupDocument struct {
+	Setting     string            `json:"setting,omitempty"`
 	ID          string            `json:"id"`
 	Component   string            `json:"component"`
 	Version     string            `json:"version"`
@@ -82,8 +84,19 @@ func (m *Manager) managedPaths(component string) []string {
 }
 
 func (m *Manager) snapshotBytes(component string) (int64, error) {
+	return m.scopedSnapshotBytes(component, "")
+}
+
+func (m *Manager) backupPaths(component, setting string) []string {
+	if setting != "" {
+		return []string{m.settingPath(setting)}
+	}
+	return m.managedPaths(component)
+}
+
+func (m *Manager) scopedSnapshotBytes(component, setting string) (int64, error) {
 	var size int64
-	for _, root := range m.managedPaths(component) {
+	for _, root := range m.backupPaths(component, setting) {
 		if _, e := os.Lstat(root); os.IsNotExist(e) {
 			continue
 		} else if e != nil {
@@ -190,7 +203,11 @@ func verifyBackupPayload(path string, entry backupEntry) error {
 }
 
 func (m *Manager) captureBackup(component, version string) (Backup, error) {
-	b := Backup{ID: randomID(), Component: component, Version: version, Created: time.Now(), Entries: []backupEntry{}}
+	return m.captureScopedBackup(component, version, "")
+}
+
+func (m *Manager) captureScopedBackup(component, version, setting string) (Backup, error) {
+	b := Backup{ID: randomID(), Component: component, Version: version, Setting: setting, Created: time.Now(), Entries: []backupEntry{}}
 	if b.ID == "" {
 		return b, fmt.Errorf("не удалось создать идентификатор резервной копии")
 	}
@@ -204,11 +221,14 @@ func (m *Manager) captureBackup(component, version string) (Backup, error) {
 			_ = os.RemoveAll(dir)
 		}
 	}()
-	for i, path := range m.managedPaths(component) {
+	for i, path := range m.backupPaths(component, setting) {
 		entry := backupEntry{Path: path, Hashes: map[string]string{}}
 		info, e := os.Lstat(path)
 		if e != nil && !os.IsNotExist(e) {
 			return b, e
+		}
+		if setting != "" && (e != nil || !info.Mode().IsRegular()) {
+			return b, fmt.Errorf("ожидался обычный файл настроек XKeen")
 		}
 		if e == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
@@ -230,8 +250,10 @@ func (m *Manager) captureBackup(component, version string) (Backup, error) {
 		}
 		b.Entries = append(b.Entries, entry)
 	}
-	b.Kernel = m.kernelIPv6()
-	doc := backupDocument{ID: b.ID, Component: b.Component, Version: b.Version, Created: b.Created, Entries: b.Entries, Kernel: b.Kernel}
+	if setting == "" {
+		b.Kernel = m.kernelIPv6()
+	}
+	doc := backupDocument{ID: b.ID, Component: b.Component, Version: b.Version, Setting: b.Setting, Created: b.Created, Entries: b.Entries, Kernel: b.Kernel}
 	raw, e := json.MarshalIndent(doc, "", "  ")
 	if e != nil {
 		return b, e
@@ -257,8 +279,18 @@ func (m *Manager) readBackup(id string) (Backup, error) {
 	if json.Unmarshal(raw, &doc) != nil || doc.ID != id || len(doc.Entries) > 100 {
 		return Backup{}, fmt.Errorf("резервная копия повреждена")
 	}
+	if doc.Setting != "" {
+		path := m.settingPath(doc.Setting)
+		if path == "" || doc.Component != "settings" || len(doc.Kernel) != 0 || len(doc.Entries) != 1 {
+			return Backup{}, fmt.Errorf("повреждена резервная копия настройки XKeen")
+		}
+		entry := doc.Entries[0]
+		if entry.Path != path || !entry.Exists || entry.Link != "" || entry.Directory || len(entry.Hashes) != 1 || len(entry.Hashes["."]) != 64 {
+			return Backup{}, fmt.Errorf("неверный файл в резервной копии настройки XKeen")
+		}
+	}
 	allowed := map[string]bool{}
-	for _, p := range m.managedPaths("rollback") {
+	for _, p := range m.backupPaths("rollback", doc.Setting) {
 		allowed[p] = true
 	}
 	seen := map[string]bool{}
@@ -286,7 +318,7 @@ func (m *Manager) readBackup(id string) (Backup, error) {
 			}
 		}
 	}
-	return Backup{ID: doc.ID, Component: doc.Component, Version: doc.Version, Created: doc.Created, Entries: doc.Entries, Kernel: doc.Kernel, Fingerprint: doc.Fingerprint}, nil
+	return Backup{ID: doc.ID, Component: doc.Component, Version: doc.Version, Setting: doc.Setting, Created: doc.Created, Entries: doc.Entries, Kernel: doc.Kernel, Fingerprint: doc.Fingerprint}, nil
 }
 
 func (m *Manager) markBackupCurrent(id string) error {
@@ -294,11 +326,11 @@ func (m *Manager) markBackupCurrent(id string) error {
 	if e != nil {
 		return e
 	}
-	fingerprint, e := m.fingerprint()
+	fingerprint, e := m.fingerprint(b.Setting)
 	if e != nil {
 		return e
 	}
-	doc := backupDocument{ID: b.ID, Component: b.Component, Version: b.Version, Created: b.Created, Entries: b.Entries, Kernel: b.Kernel, Fingerprint: fingerprint}
+	doc := backupDocument{ID: b.ID, Component: b.Component, Version: b.Version, Setting: b.Setting, Created: b.Created, Entries: b.Entries, Kernel: b.Kernel, Fingerprint: fingerprint}
 	raw, e := json.MarshalIndent(doc, "", "  ")
 	if e != nil {
 		return e
@@ -378,7 +410,7 @@ func (m *Manager) restoreBackup(backup Backup) error {
 			if e != nil {
 				return e
 			}
-			if e = atomicWrite(entry.Path, body, os.FileMode(entry.Mode)); e != nil {
+			if e = writeSettingFile(validated.Setting, entry.Path, body, os.FileMode(entry.Mode)); e != nil {
 				return e
 			}
 		} else {
@@ -419,9 +451,13 @@ func restoreGeoLink(path, link string) error {
 }
 
 func configFingerprint(rt xkeen.Runtime, settings string) (string, error) {
-	h := sha256.New()
 	files := xkeen.ConfigFiles(rt)
 	files = append(files, settings, rt.Dispatcher, rt.CoreBin, rt.InitScript)
+	return fileFingerprint(files)
+}
+
+func fileFingerprint(files []string) (string, error) {
+	h := sha256.New()
 	for _, path := range sortedUnique(files) {
 		if path == "" {
 			continue
@@ -611,7 +647,12 @@ func (m *Manager) installPayload(ctx context.Context, plan Plan, work string) er
 		if setting.ID == "native_geodata_schedule" {
 			args = []string{setting.flag}
 		}
-		_, e := m.run(ctx, rt.Dispatcher, args...)
+		var e error
+		if plan.scopedSetting != "" {
+			e = m.writeStartupSetting(setting, plan.enabled)
+		} else {
+			_, e = m.run(ctx, rt.Dispatcher, args...)
+		}
 		if e != nil {
 			return fmt.Errorf("XKeen не применил параметр")
 		}

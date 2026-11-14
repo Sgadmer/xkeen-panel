@@ -61,8 +61,8 @@ export function SettingChangeDialog({
     const actual = change?.current ?? current
     const next = change?.desired ?? desired
     const settingName = change?.name || name
-    const action = next ? 'Включить' : 'Выключить'
     const actionTarget = actionTargets[change?.setting_id || ''] || 'параметр'
+    const action = change?.setting_id === 'ipv6' ? 'Сохранить настройку IPv6' : `${next ? 'Включить' : 'Выключить'} ${actionTarget}`
 
     return createPortal(
         <dialog
@@ -96,11 +96,11 @@ export function SettingChangeDialog({
                 {loading && <p role='status' className='flex items-start gap-2 text-[14px] text-muted-foreground'><IconLoader2 aria-hidden='true' className='mt-0.5 size-5 shrink-0 animate-spin' />Проверяем параметр, резервную копию и свободное место…</p>}
                 {change && <div><h3 className='mb-2 text-[14px] font-semibold'>Что изменится</h3><ul className='list-disc space-y-2 pl-5 text-[14px] leading-relaxed'>{change.effects.map(effect => <li key={effect}>{effect}</li>)}</ul></div>}
                 {warnings.length > 0 && <div className='space-y-2 rounded-xl bg-amber-500/10 p-3 text-[14px] leading-relaxed text-amber-200'>{warnings.map(warning => <p key={warning}>{warning}</p>)}</div>}
-                <p className='text-[13px] leading-relaxed text-muted-foreground'>Новая версия XKeen не скачивается. Перед изменением панель сохранит резервную копию для отката.{requiredBytes !== undefined && ` Проверено свободное место: для копии и восстановления нужно не менее ${Math.ceil(requiredBytes / 1048576)} МБ.`}</p>
+                <p className='text-[13px] leading-relaxed text-muted-foreground'>Перед изменением панель сохранит резервную копию.{requiredBytes !== undefined && ` Для копии и восстановления потребуется ${Math.max(1, Math.ceil(requiredBytes / 1048576))} МБ свободного места.`}</p>
                 {error && <div role='alert' className='space-y-2 text-[14px] text-destructive'><p>{error}</p>{!applying && <button type='button' onClick={onRetry} className='min-h-11 cursor-pointer text-tint underline underline-offset-4'>Повторить проверку</button>}</div>}
             </div>
             <footer className='flex shrink-0 flex-col gap-2 border-t border-white/10 px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4'>
-                <button type='button' disabled={!ready || loading || applying} onClick={onConfirm} className='min-h-11 cursor-pointer rounded-xl bg-primary px-4 py-3 text-[15px] font-semibold leading-snug text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tint disabled:cursor-default disabled:opacity-50'>{applying ? 'Запускаем изменение…' : `${action} ${actionTarget}`}</button>
+                <button type='button' disabled={!ready || loading || applying} onClick={onConfirm} className='min-h-11 cursor-pointer rounded-xl bg-primary px-4 py-3 text-[15px] font-semibold leading-snug text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tint disabled:cursor-default disabled:opacity-50'>{applying ? 'Применяем…' : action}</button>
                 <button ref={cancelButton} type='button' disabled={applying} onClick={onCancel} className='min-h-11 cursor-pointer rounded-xl px-4 text-[15px] text-tint focus-visible:outline-2 focus-visible:outline-tint disabled:opacity-50'>Отменить</button>
             </footer>
         </dialog>,

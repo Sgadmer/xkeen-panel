@@ -55,12 +55,18 @@ func (m *Manager) Recover(ctx context.Context) {
 	m.setPhase(p.Job.ID, "recovering")
 	backup, e := m.readBackup(p.BackupID)
 	if e == nil {
-		e = m.restoreBackup(backup)
+		if reason := m.support(backup.Setting != ""); reason != "" {
+			m.finish(p.Job.ID, fmt.Errorf("восстановление отложено: %s", reason), p.BackupID, false)
+			return
+		}
 	}
 	if e == nil {
+		e = m.restoreBackup(backup)
+	}
+	if e == nil && backup.Setting == "" {
 		e = m.validateCurrent(ctx)
 	}
-	if e == nil && p.WasRunning {
+	if e == nil && backup.Setting == "" && p.WasRunning {
 		e = m.opts.Restart(ctx)
 	}
 	if e == nil {

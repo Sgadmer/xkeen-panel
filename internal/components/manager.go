@@ -68,6 +68,7 @@ type Plan struct {
 	fingerprint   string
 	setting       string
 	enabled       bool
+	scopedSetting string // a Mihomo setting edits one file without interrupting the core
 }
 
 type Job struct {
@@ -92,20 +93,21 @@ type GeoSettings struct {
 }
 
 type State struct {
-	Supported    bool        `json:"supported"`
-	Reason       string      `json:"reason,omitempty"`
-	Architecture string      `json:"architecture"`
-	XKeenVersion string      `json:"xkeen_version"`
-	XrayVersion  string      `json:"xray_version"`
-	Core         string      `json:"core"`
-	RouterTime   string      `json:"router_time"`
-	Geodata      GeoSettings `json:"geodata"`
-	Sources      []GeoSource `json:"sources"`
-	Job          *Job        `json:"job,omitempty"`
-	Backups      []Backup    `json:"backups"`
-	Notes        []string    `json:"notes"`
-	Settings     []Setting   `json:"settings"`
-	Mode         string      `json:"mode"`
+	Supported         bool        `json:"supported"`
+	SettingsSupported bool        `json:"settings_supported"`
+	Reason            string      `json:"reason,omitempty"`
+	Architecture      string      `json:"architecture"`
+	XKeenVersion      string      `json:"xkeen_version"`
+	XrayVersion       string      `json:"xray_version"`
+	Core              string      `json:"core"`
+	RouterTime        string      `json:"router_time"`
+	Geodata           GeoSettings `json:"geodata"`
+	Sources           []GeoSource `json:"sources"`
+	Job               *Job        `json:"job,omitempty"`
+	Backups           []Backup    `json:"backups"`
+	Notes             []string    `json:"notes"`
+	Settings          []Setting   `json:"settings"`
+	Mode              string      `json:"mode"`
 }
 
 type catalogCache struct {
@@ -194,7 +196,7 @@ func (m *Manager) runtime() xkeen.Runtime {
 	return m.opts.Runtime()
 }
 
-func (m *Manager) support() string {
+func (m *Manager) support(scoped bool) string {
 	rt := m.runtime()
 	if m.opts.GOOS != "linux" && !m.opts.TestHTTP {
 		return "управление компонентами доступно только на Linux-роутере"
@@ -202,13 +204,16 @@ func (m *Manager) support() string {
 	if m.opts.GOARCH != "arm64" && m.opts.GOARCH != "mipsle" {
 		return "для этой архитектуры нет проверенного адаптера"
 	}
-	if !rt.Installed || rt.Core != xkeen.CoreXray {
+	if scoped && (!rt.Installed || rt.Core != xkeen.CoreMihomo) {
+		return "для этой настройки требуется установленный XKeen с Mihomo"
+	}
+	if !scoped && (!rt.Installed || rt.Core != xkeen.CoreXray) {
 		return "нужен установленный XKeen с активным Xray"
 	}
 	if rt.Generation != 2 {
 		return "управление версиями поддерживается для XKeen 2.x"
 	}
-	if m.opts.Restart == nil {
+	if !scoped && m.opts.Restart == nil {
 		return "не настроен безопасный перезапуск и восстановление выбора сервера"
 	}
 	return ""
@@ -216,12 +221,13 @@ func (m *Manager) support() string {
 
 func (m *Manager) State() State {
 	rt := m.runtime()
-	reason := m.support()
+	reason := m.support(false)
 	state := State{Supported: reason == "", Reason: reason, Architecture: m.opts.GOARCH, XKeenVersion: rt.Version, Core: rt.Core, RouterTime: time.Now().Format(time.RFC3339), Sources: GeoSources(), Backups: []Backup{}, Notes: []string{"Версии XKeen/Xray и обновления панели — отдельные операции.", "Перед изменением создаётся локальная резервная копия; конфигурация, подписка и исключения сохраняются.", "GeoIPSET исключает адреса до Xray. Управляйте этими исключениями осознанно в расширенных настройках."}}
 	if rt.Core == xkeen.CoreXray {
 		state.XrayVersion = m.binaryVersion(rt.CoreBin)
 	}
 	state.Settings = m.Settings()
+	state.SettingsSupported = state.Supported || (rt.Core == xkeen.CoreMihomo && m.support(true) == "")
 	state.Mode = rt.Mode
 	m.mu.Lock()
 	state.Geodata = m.geo
@@ -253,7 +259,14 @@ func (m *Manager) binaryVersion(bin string) string {
 	return "не определена"
 }
 
-func (m *Manager) fingerprint() (string, error) {
+func (m *Manager) fingerprint(scope string) (string, error) {
+	if scope != "" {
+		path := m.settingPath(scope)
+		if path == "" {
+			return "", fmt.Errorf("неизвестная настройка XKeen")
+		}
+		return fileFingerprint([]string{m.runtime().Dispatcher, path})
+	}
 	return configFingerprint(m.runtime(), m.settingsPath())
 }
 
@@ -261,7 +274,8 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 	if _, e := os.Stat(m.pendingPath()); e == nil {
 		return Plan{}, fmt.Errorf("сначала дождитесь восстановления прерванной операции или выполните управляемое восстановление из резервной копии")
 	}
-	if reason := m.support(); reason != "" {
+	scoped := req.Component == "settings" && m.runtime().Core == xkeen.CoreMihomo
+	if reason := m.support(scoped); reason != "" {
 		return Plan{}, fmt.Errorf("%s", reason)
 	}
 	m.mu.Lock()
@@ -295,7 +309,19 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 		plan.enabled = *req.Enabled
 		change := DescribeSettingChange(setting, *req.Enabled)
 		plan.Change = &change
-		if req.Setting == "ipv6" {
+		if scoped {
+			plan.scopedSetting = setting.ID
+			plan.Warnings = []string{}
+			if setting.ID == "ipv6" {
+				if *req.Enabled {
+					change.Effects = []string{"После перезагрузки устройства смогут пользоваться IPv6, если он настроен на роутере и доступен у провайдера."}
+				} else {
+					change.Effects = []string{"После следующей перезагрузки роутера XKeen при запуске отключит IPv6 для всей домашней сети. Если автозапуск выключен, это произойдёт, когда вы запустите XKeen вручную."}
+				}
+			} else if setting.ID == "native_geodata_schedule" {
+				change.Effects = []string{"XKeen перестанет скачивать геобазы по этому расписанию. Установленные базы сохранятся. Для Re:filter действует своё расписание."}
+			}
+		} else if req.Setting == "ipv6" {
 			plan.Warnings = append(plan.Warnings, "IPv6 изменится для всего роутера. Это может повлиять на другие устройства домашней сети.")
 		}
 	} else if req.Component == "geodata" {
@@ -369,12 +395,16 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 	for _, a := range plan.Artifacts {
 		plan.RequiredBytes += a.Size * 5
 	}
-	existing, e := m.snapshotBytes(req.Component)
+	existing, e := m.scopedSnapshotBytes(req.Component, plan.scopedSetting)
 	if e != nil {
 		return Plan{}, fmt.Errorf("не удалось оценить размер резервной копии")
 	}
 	plan.RequiredBytes += existing * 2
-	plan.RequiredBytes += 32 << 20
+	if scoped {
+		plan.RequiredBytes += 64 << 10 // atomic replacement, manifest and journal
+	} else {
+		plan.RequiredBytes += 32 << 20
+	}
 	free, e := m.opts.FreeBytes(m.opts.DataDir)
 	if e != nil {
 		return Plan{}, fmt.Errorf("не удалось проверить свободное место")
@@ -382,7 +412,7 @@ func (m *Manager) Preview(ctx context.Context, req PlanRequest) (Plan, error) {
 	if free < uint64(plan.RequiredBytes) {
 		return Plan{}, fmt.Errorf("недостаточно места: нужно не менее %d МБ с учётом загрузки и отката", (plan.RequiredBytes+(1<<20)-1)>>20)
 	}
-	plan.fingerprint, e = m.fingerprint()
+	plan.fingerprint, e = m.fingerprint(plan.scopedSetting)
 	if e != nil {
 		return Plan{}, fmt.Errorf("не удалось сохранить состояние конфигурации")
 	}
@@ -458,7 +488,8 @@ func (m *Manager) apply(plan Plan, id string) {
 	defer cancel()
 	m.opts.Lock()
 	defer m.opts.Unlock()
-	wasRunning := m.opts.Running()
+	scoped := plan.scopedSetting != ""
+	wasRunning := !scoped && m.opts.Running()
 	var err error
 	backupID := ""
 	rolledBack := false
@@ -483,12 +514,12 @@ func (m *Manager) apply(plan Plan, id string) {
 		err = fmt.Errorf("предпросмотр устарел во время ожидания; повторите проверку")
 		return
 	}
-	current, e := m.fingerprint()
+	current, e := m.fingerprint(plan.scopedSetting)
 	if e != nil || current != plan.fingerprint {
 		err = fmt.Errorf("настройки изменились после предпросмотра; повторите проверку")
 		return
 	}
-	if reason := m.support(); reason != "" {
+	if reason := m.support(scoped); reason != "" {
 		err = fmt.Errorf("%s", reason)
 		return
 	}
@@ -510,7 +541,7 @@ func (m *Manager) apply(plan Plan, id string) {
 		err = e
 		return
 	}
-	backup, e := m.captureBackup(plan.Component, plan.Version)
+	backup, e := m.captureScopedBackup(plan.Component, plan.Version, plan.scopedSetting)
 	if e != nil {
 		err = fmt.Errorf("не удалось создать резервную копию")
 		return
@@ -530,7 +561,7 @@ func (m *Manager) apply(plan Plan, id string) {
 			e = m.verifyXkeenPreserved(backup)
 		}
 	}
-	if e == nil {
+	if e == nil && !scoped {
 		e = m.validateCurrent(ctx)
 	}
 	if e == nil && wasRunning {
@@ -567,9 +598,6 @@ func (m *Manager) apply(plan Plan, id string) {
 }
 
 func (m *Manager) Rollback(id string) (Job, error) {
-	if reason := m.support(); reason != "" {
-		return Job{}, fmt.Errorf("%s", reason)
-	}
 	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
 		return Job{}, fmt.Errorf("неверная резервная копия")
 	}
@@ -582,7 +610,11 @@ func (m *Manager) Rollback(id string) (Job, error) {
 	if e != nil {
 		return Job{}, fmt.Errorf("резервная копия не найдена")
 	}
-	current, checkErr := m.fingerprint()
+	scoped := backup.Setting != ""
+	if reason := m.support(scoped); reason != "" {
+		return Job{}, fmt.Errorf("%s", reason)
+	}
+	current, checkErr := m.fingerprint(backup.Setting)
 	if checkErr != nil || backup.Fingerprint == "" || current != backup.Fingerprint {
 		return Job{}, fmt.Errorf("после этой копии настройки изменились; автоматический откат может затереть новые изменения. Используйте свежую резервную копию или управляемое восстановление")
 	}
@@ -591,10 +623,23 @@ func (m *Manager) Rollback(id string) (Job, error) {
 	go func() {
 		m.opts.Lock()
 		defer m.opts.Unlock()
-		wasRunning := m.opts.Running()
+		if reason := m.support(scoped); reason != "" {
+			m.finish(job.ID, fmt.Errorf("%s", reason), "", false)
+			return
+		}
+		check, err := m.fingerprint(backup.Setting)
+		if err != nil || check != backup.Fingerprint {
+			m.finish(job.ID, fmt.Errorf("после проверки данные изменились; откат отменён"), "", false)
+			return
+		}
+		wasRunning := !scoped && m.opts.Running()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		current, e := m.captureBackup("rollback", backup.Version)
+		component := "rollback"
+		if scoped {
+			component = "settings"
+		}
+		current, e := m.captureScopedBackup(component, backup.Version, backup.Setting)
 		if e != nil {
 			m.finish(job.ID, fmt.Errorf("не удалось сохранить текущее состояние перед откатом"), "", false)
 			return
@@ -604,7 +649,7 @@ func (m *Manager) Rollback(id string) (Job, error) {
 			return
 		}
 		e = m.restoreBackup(backup)
-		if e == nil {
+		if e == nil && !scoped {
 			e = m.validateCurrent(ctx)
 		}
 		if e == nil && wasRunning {

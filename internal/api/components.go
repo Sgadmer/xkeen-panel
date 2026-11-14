@@ -53,8 +53,14 @@ func NewComponentsHandler(h *Handlers) *ComponentsHandler {
 		Log:      h.watchdog.Log,
 	})
 	handler := &ComponentsHandler{manager: manager}
-	if runtime.GOOS == "linux" && h.detector.Root == "" && h.Cards == nil {
-		go manager.Start(context.Background())
+	if runtime.GOOS == "linux" && h.detector.Root == "" {
+		if h.Cards == nil {
+			go manager.Start(context.Background())
+		} else {
+			// The Mihomo panel has its own geodata updater. Recover only
+			// an interrupted change to XKeen's local settings here.
+			go manager.Recover(context.Background())
+		}
 	}
 	return handler
 }

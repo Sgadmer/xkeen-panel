@@ -1,10 +1,15 @@
 package components
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
+
+	"xkeen-panel/internal/xkeen"
 )
 
 type Setting struct {
@@ -86,13 +91,36 @@ func (m *Manager) Settings() []Setting {
 	rt := m.runtime()
 	dispatcher, _ := os.ReadFile(rt.Dispatcher)
 	init, _ := os.ReadFile(rt.InitScript)
+	mihomo := rt.Core == xkeen.CoreMihomo
+	if mihomo {
+		shared := result[:0]
+		for _, s := range result {
+			if m.settingPath(s.ID) == "" {
+				continue
+			}
+			switch s.ID {
+			case "ipv6":
+				s.Name = "Разрешать IPv6 после перезагрузки роутера"
+				s.Hint = "Разрешает устройствам дома выходить в интернет по IPv6, если его поддерживает провайдер. Если выключить, после перезагрузки роутера XKeen при запуске отключит IPv6 для всей домашней сети."
+			case "autostart":
+				s.Hint = "При включении роутера XKeen сам запустит VPN. Если выключить, после перезагрузки VPN нужно будет запустить вручную."
+			case "verbose":
+				s.Hint = "При запуске XKeen запишет больше подробностей в журнал. По ним легче понять, почему VPN не запустился."
+			case "backup":
+				s.Hint = "При обновлении XKeen сохранит копию своих файлов. Она пригодится, если потребуется вернуть прежнюю версию."
+			}
+			shared = append(shared, s)
+		}
+		result = shared
+	}
 	for i := range result {
 		s := &result[i]
 		flag := regexp.QuoteMeta(s.flag)
 		s.Supported = regexp.MustCompile(`(?m)^\s*` + flag + `(?:\|[^)]*)?\)`).Match(dispatcher)
-		match := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(s.variable) + `=["']?(on|off|true|false|yes|no)["']?\s*$`).FindSubmatch(init)
-		if len(match) == 2 {
-			s.Enabled = string(match[1]) == "on" || string(match[1]) == "true" || string(match[1]) == "yes"
+		field := settingValue(init, s.variable)
+		if field != nil {
+			v := string(init[field[0]:field[1]])
+			s.Enabled = v == "on" || v == "true" || v == "yes"
 		} else {
 			s.Supported = false
 		}
@@ -101,16 +129,134 @@ func (m *Manager) Settings() []Setting {
 				s.Supported = false
 			}
 		}
+		if mihomo && runtime.GOOS == "linux" && s.ID == "autostart" {
+			if info, err := os.Stat(rt.InitScript); err != nil || info.Mode().Perm()&0100 == 0 {
+				s.Supported = false
+				s.Hint = "Сценарий запуска XKeen нельзя выполнить. Сначала восстановите права на его запуск."
+			}
+		}
 	}
 	if regexp.MustCompile(`(?m)^\s*-dgc\)`).Match(dispatcher) {
 		enabled := m.externalGeoSchedule()
+		if mihomo {
+			content, _ := os.ReadFile(m.settingPath("native_geodata_schedule"))
+			enabled = false
+			for line := range strings.Lines(string(content)) {
+				if nativeGeoJob(line) {
+					enabled = true
+					break
+				}
+			}
+		}
 		hint := "Здесь можно только отключить штатное расписание XKeen. Сделайте это перед включением расписания панели, чтобы два обновления не записывали одни файлы одновременно."
 		if !enabled {
 			hint = "Штатное расписание XKeen уже отключено, поэтому переключатель недоступен. Здесь доступно только отключение; для автообновления используйте расписание геобаз панели."
 		}
+		if mihomo {
+			hint = "XKeen скачивает геобазы по своему расписанию. Его можно отключить. Re:filter обновляет свои списки отдельно."
+			if !enabled {
+				hint = "У XKeen нет запланированных загрузок геобаз. Списки Re:filter обновляются отдельно."
+			}
+		}
 		result = append(result, Setting{ID: "native_geodata_schedule", Name: "Штатное расписание геобаз XKeen", Hint: hint, Enabled: enabled, Supported: enabled, flag: "-dgc"})
 	}
 	return result
+}
+
+// Return the byte range of a single literal assignment. Leave comments,
+// quoting, line endings and every other byte of the installed init intact.
+func settingValue(body []byte, variable string) []int {
+	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(variable) + `=(["']?)(on|off|true|false|yes|no)(["']?)[ \t]*\r?$`)
+	rows := re.FindAllSubmatchIndex(body, 2)
+	if len(rows) != 1 {
+		return nil
+	}
+	row := rows[0]
+	if !bytes.Equal(body[row[2]:row[3]], body[row[6]:row[7]]) {
+		return nil
+	}
+	return row[4:6]
+}
+
+func (m *Manager) settingPath(id string) string {
+	switch id {
+	case "autostart", "verbose", "backup", "ipv6":
+		return m.runtime().InitScript
+	case "native_geodata_schedule":
+		return m.path("/opt/var/spool/cron/crontabs/root")
+	}
+	return ""
+}
+
+// Only an actual, standalone XKeen geodata command is a managed schedule.
+// A shell pipeline, a logger message or another updater must survive editing.
+func nativeGeoJob(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return false
+	}
+	f := strings.Fields(line)
+	return len(f) == 7 && (f[5] == "xkeen" || f[5] == "/opt/sbin/xkeen") && (f[6] == "-ug" || f[6] == "-gips")
+}
+
+func (m *Manager) writeStartupSetting(setting Setting, enabled bool) error {
+	path := m.settingPath(setting.ID)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("файл параметра XKeen недоступен")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var next []byte
+	if setting.ID == "native_geodata_schedule" {
+		if enabled {
+			return fmt.Errorf("доступно только отключение расписания")
+		}
+		for line := range strings.SplitAfterSeq(string(body), "\n") {
+			if !nativeGeoJob(line) {
+				next = append(next, line...)
+			}
+		}
+	} else {
+		field := settingValue(body, setting.variable)
+		if field == nil {
+			return fmt.Errorf("не удалось определить параметр XKeen")
+		}
+		value := "off"
+		if enabled {
+			value = "on"
+		}
+		next = append(next, body[:field[0]]...)
+		next = append(next, value...)
+		next = append(next, body[field[1]:]...)
+	}
+	if bytes.Equal(body, next) {
+		return nil
+	}
+	return writeSettingFile(setting.ID, path, next, info.Mode().Perm())
+}
+
+func writeSettingFile(id, path string, body []byte, mode os.FileMode) error {
+	if err := atomicWrite(path, body, mode); err != nil {
+		return err
+	}
+	if id != "native_geodata_schedule" {
+		return nil
+	}
+	// BusyBox crond consumes this queue when individual crontabs change.
+	// Append to preserve other users' queued notifications.
+	f, err := os.OpenFile(filepath.Join(filepath.Dir(path), "cron.update"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("root\n")
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 func (m *Manager) externalGeoSchedule() bool {

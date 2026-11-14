@@ -10,10 +10,10 @@ interface Release { tag_name: string; name: string; prerelease: boolean; publish
 interface GeoSource { id: string; name: string; kind: string; repository: string; filename: string }
 interface GeoSettings { sources: string[]; auto: boolean; day: number; hour: number; minute: number; last_attempt?: string }
 interface Setting { id: string; name: string; hint: string; enabled: boolean; supported: boolean }
-interface Job { id: string; component: string; version: string; phase: string; finished?: string; error?: string; backup_id?: string; rolled_back: boolean }
-interface Backup { id: string; component: string; version: string; created: string }
+interface Job { id: string; component: string; version: string; phase: string; started: string; finished?: string; error?: string; backup_id?: string; rolled_back: boolean }
+interface Backup { id: string; component: string; version: string; created: string; setting?: string }
 interface ComponentsState {
-    supported: boolean; reason?: string; architecture: string; xkeen_version: string; xray_version: string
+    supported: boolean; settings_supported?: boolean; reason?: string; architecture: string; xkeen_version: string; xray_version: string
     mode: string; core: string; router_time: string; geodata: GeoSettings; sources: GeoSource[]
     job?: Job; backups: Backup[]; notes: string[]; settings: Setting[]
 }
@@ -23,7 +23,7 @@ interface Preview {
     change?: SettingChange
 }
 interface SettingIntent { setting: Setting; desired: boolean; sequence: number }
-interface PendingSetting { setting: Setting; current: boolean; jobId: string }
+interface PendingSetting { setting: Setting; current: boolean; desired: boolean; job: Job }
 
 const field = 'min-h-11 w-full rounded-xl border border-white/10 bg-fill px-3 py-2 text-[16px] outline-none focus:border-tint disabled:opacity-50'
 const button = 'min-h-11 cursor-pointer rounded-xl bg-primary px-4 text-[15px] font-semibold text-primary-foreground disabled:cursor-default disabled:opacity-50'
@@ -62,11 +62,12 @@ export function ComponentsPage() {
         gcTime: 0,
     })
     const settingApply = useMutation({
-        mutationFn: ({ id }: { id: string; setting: Setting; current: boolean }) => api.post<Job>('/api/components/apply', { plan_id: id }),
+        mutationFn: ({ id }: { id: string; setting: Setting; current: boolean; desired: boolean }) => api.post<Job>('/api/components/apply', { plan_id: id }),
         onSuccess: (job, request) => {
-            setPendingSetting({ setting: request.setting, current: request.current, jobId: job.id })
+            setPendingSetting({ setting: request.setting, current: request.current, desired: request.desired, job })
             setSettingIntent(null)
-            setNotice('Изменение запущено. Переключатель обновится после успешного завершения операции.')
+            setNotice('')
+            qc.setQueryData<ComponentsState>(['components'], old => old && { ...old, job })
             qc.invalidateQueries({ queryKey: ['components'] })
         },
     })
@@ -80,19 +81,31 @@ export function ComponentsPage() {
     })
     const state = query.data
     const busy = !!state?.job && !state.job.finished
-    const disabled = !state?.supported || busy || check.isPending || apply.isPending || rollback.isPending || saveGeo.isPending || settingApply.isPending || pendingSetting !== null
+    const working = busy || check.isPending || apply.isPending || rollback.isPending || saveGeo.isPending || settingApply.isPending || pendingSetting !== null
+    const disabled = !state?.supported || working
+    const canEditSettings = state?.settings_supported ?? state?.supported
+    const visibleSettings = state?.settings.filter(setting => state.core !== 'mihomo' || (setting.id !== 'dns' && setting.id !== 'router_proxy')) ?? []
     const error = check.error ?? apply.error ?? saveGeo.error ?? rollback.error
     const settingPreview = settingCheck.data
     const settingReady = !!settingIntent && !!settingPreview?.id && settingPreview.component === 'settings' && settingPreview.change?.setting_id === settingIntent.setting.id && settingPreview.change.desired === settingIntent.desired && Date.parse(settingPreview.expires) > Date.now()
     const settingError = settingApply.error?.message ?? settingCheck.error?.message ?? (settingPreview && !settingReady ? 'Не удалось подтвердить подробности изменения. Повторите проверку.' : undefined)
     useEffect(() => {
-        if (!pendingSetting || state?.job?.id !== pendingSetting.jobId || !state.job.finished) return
+        if (!pendingSetting || !state?.job) return
+        if (state.job.id !== pendingSetting.job.id) {
+            if (Date.parse(state.job.started) > Date.parse(pendingSetting.job.started)) {
+                setPendingSetting(null)
+                setNotice('На роутере началась следующая операция. Текущие значения показаны в списке настроек.')
+            }
+            return
+        }
+        if (!state.job.finished) return
         setPendingSetting(null)
         qc.invalidateQueries({ queryKey: ['components'] })
         const actual = state.settings.find(setting => setting.id === pendingSetting.setting.id)
-        setNotice(state.job.error || state.job.rolled_back
-            ? `Изменение параметра «${pendingSetting.setting.name}» не выполнено. Проверьте результат последней операции.`
-            : `Параметр «${pendingSetting.setting.name}»: ${actual?.enabled ? 'включено' : 'выключено'}.`)
+        const confirmed = !state.job.error && !state.job.rolled_back && actual?.enabled === pendingSetting.desired
+        setNotice(confirmed
+            ? `«${pendingSetting.setting.name}» — ${actual.enabled ? 'включено' : 'выключено'}.`
+            : `Роутер не подтвердил изменение «${pendingSetting.setting.name}». Подробности — в разделе «Последняя операция».`)
     }, [state, pendingSetting, qc])
     function inspect(request: object) { apply.reset(); rollback.reset(); check.reset(); setPreview(null); check.mutate(request) }
     function changeGeo(next: GeoSettings) { setGeoDraft(next); setPreview(null); setNotice('') }
@@ -129,7 +142,7 @@ export function ComponentsPage() {
                 </div>
             </Group>}
             {state.core === 'mihomo' && <Group title='Геобазы Mihomo'>
-                <Row label='Re:filter' hint='Доменные правила и IP-префиксы' to='/settings/routing' />
+                <Row label='Re:filter' hint='Список сайтов и IP-адресов для режима «VPN по списку блокировок».' to='/settings/routing' />
             </Group>}
             {state.supported && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
                 <VersionChoice component='xkeen' title='Версия XKeen' disabled={disabled} onPreview={inspect} />
@@ -154,15 +167,24 @@ export function ComponentsPage() {
                 </div>
             </Group>}
             <Group title='Параметры XKeen'>
-                {state.settings.map(setting => {
+                {visibleSettings.map(setting => {
                     const checked = pendingSetting?.setting.id === setting.id ? pendingSetting.current : setting.enabled
-                    const nativeOff = setting.id === 'native_geodata_schedule' && !setting.enabled
-                    if (!state.supported || !setting.supported || nativeOff) {
-                        return <Row key={setting.id} label={setting.name} detail={setting.supported || nativeOff ? (checked ? 'Включено' : 'Выключено') : 'Недоступно'} />
+                    const isSchedule = setting.id === 'native_geodata_schedule'
+                    const nativeOff = isSchedule && !checked
+                    const hint = pendingSetting?.setting.id === setting.id ? 'Применяем изменение…' : setting.hint
+                    if (!canEditSettings || !setting.supported || nativeOff) {
+                        return <Row key={setting.id} label={setting.name} hint={hint} detail={setting.supported || nativeOff ? (checked ? 'Включено' : 'Выключено') : 'Недоступно'} />
                     }
-                    return <Row key={setting.id} label={setting.name} hint={pendingSetting?.setting.id === setting.id ? 'Ожидаем завершения…' : setting.hint} trailing={<span className='rounded-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-tint'><Switch checked={checked} label={setting.name} onChange={desired => inspectSetting(setting, desired)} disabled={disabled} /></span>} />
+                    if (isSchedule) return <div key={setting.id} className='flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between'>
+                        <div><p className='text-[17px]'>{setting.name}</p><p className='mt-0.5 text-[13px] leading-snug text-muted-foreground'>{hint}</p></div>
+                        <button type='button' onClick={() => inspectSetting(setting, false)} disabled={working}
+                            className='min-h-11 shrink-0 self-start rounded-xl bg-fill px-3 text-[15px] font-medium text-tint disabled:opacity-50 sm:self-center'>Отключить расписание</button>
+                    </div>
+                    return <Row key={setting.id} label={setting.name} hint={hint} trailing={<span className='rounded-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-tint'><Switch checked={checked} label={setting.name} onChange={desired => inspectSetting(setting, desired)} disabled={working} /></span>} />
                 })}
-                <Row label='Порты и IP-исключения XKeen' to='/settings/xkeen' />
+            </Group>
+            <Group title='Дополнительно'>
+                <Row label='Порты и IP-исключения XKeen' hint='Выберите, какие порты обрабатывать и какие IP-адреса пропускать напрямую.' to='/settings/xkeen' />
             </Group>
             {state.supported && preview && <Group title='Проверка перед применением'>
                 <div className='space-y-3 py-4'>
@@ -177,13 +199,13 @@ export function ComponentsPage() {
             {check.isPending && <p role='status' className='px-4 text-muted-foreground'>Получаем релиз, проверяем контрольные суммы и место…</p>}
             {error && <p role='alert' className='px-4 text-destructive'>{error.message}</p>}
             {notice && <p role='status' className='px-4 text-tint'>{notice}</p>}
-            {state.backups.length > 0 && <Group title='Резервные копии компонентов' footer='Откат восстанавливает компонент и сохранённое состояние его установки. Перед применением ещё раз подтвердите действие.'>
-                {state.backups.map(backup => state.supported ? <BackupRow key={backup.id} backup={backup} disabled={disabled} onRollback={id => rollback.mutate(id)} />
+            {state.backups.length > 0 && <Group title='Резервные копии компонентов'>
+                {state.backups.map(backup => (backup.setting ? state.core === 'mihomo' && canEditSettings : state.supported) ? <BackupRow key={backup.id} backup={backup} disabled={working} onRollback={id => rollback.mutate(id)} />
                     : <Row key={backup.id} label={`${componentName(backup.component)} · ${backup.version}`} detail={new Date(backup.created).toLocaleDateString('ru-RU')} />)}
             </Group>}
             <p className='px-4 text-[13px] text-muted-foreground'>Обновления кода панели находятся в разделе <Link className='text-tint' to='/settings/update'>«Обновление панели»</Link>. Подписка обновляется независимо от компонентов.</p>
         </>}
-        {state?.supported && settingIntent && <SettingChangeDialog
+        {canEditSettings && settingIntent && <SettingChangeDialog
             name={settingIntent.setting.name}
             current={settingIntent.setting.enabled}
             desired={settingIntent.desired}
@@ -197,7 +219,7 @@ export function ComponentsPage() {
             onRetry={retrySetting}
             onCancel={closeSetting}
             onConfirm={() => {
-                if (settingReady && settingPreview?.change && !busy) settingApply.mutate({ id: settingPreview.id, setting: settingIntent.setting, current: settingPreview.change.current })
+                if (settingReady && settingPreview?.change && !busy) settingApply.mutate({ id: settingPreview.id, setting: settingIntent.setting, current: settingPreview.change.current, desired: settingPreview.change.desired })
             }}
         />}
     </>
@@ -223,5 +245,5 @@ function VersionChoice({ component, title, disabled, onPreview }: { component: s
 
 function BackupRow({ backup, disabled, onRollback }: { backup: Backup; disabled: boolean; onRollback: (id: string) => void }) {
     const [confirm, setConfirm] = useState(false)
-    return <div className='space-y-2 py-3'><Row label={`${componentName(backup.component)} · ${backup.version}`} hint={new Date(backup.created).toLocaleString('ru-RU')} detail='Восстановить' onClick={() => setConfirm(v => !v)} disabled={disabled} />{confirm && <><p className='text-[13px] text-muted-foreground'>Восстановить состояние установки из этой копии? VPN кратко перезапустится.</p><button className={`${button} w-full`} disabled={disabled} onClick={() => { onRollback(backup.id); setConfirm(false) }}>Подтвердить восстановление</button></>}</div>
+    return <div className='space-y-2 py-3'><Row label={`${componentName(backup.component)} · ${backup.version}`} hint={new Date(backup.created).toLocaleString('ru-RU')} detail='Восстановить' onClick={() => setConfirm(v => !v)} disabled={disabled} />{confirm && <><p className='text-[13px] text-muted-foreground'>{backup.setting ? 'Вернуть значение этого параметра из копии?' : 'Восстановить состояние установки из этой копии? VPN кратко перезапустится.'}</p><button className={`${button} w-full`} disabled={disabled} onClick={() => { onRollback(backup.id); setConfirm(false) }}>Подтвердить восстановление</button></>}</div>
 }
