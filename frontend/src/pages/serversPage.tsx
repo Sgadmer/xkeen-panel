@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
     IconActivityHeartbeat,
     IconCheck,
+    IconChevronLeft,
     IconChevronRight,
     IconLink,
     IconLoader2,
@@ -213,8 +214,10 @@ export function ServersPage() {
         server: s,
         countryExcluded: avoidCountries.includes(serverCountry(s)),
         busy: routeBusy,
+        probeBusy: checking || routeBusy,
         measuring: isPendingServer(s.id),
         liveLatency: latencyFor(s.id),
+        onCheck: () => check([s.id]),
         onSelect: () => select.mutate(s.id),
         onSetCountry: (c: string) =>
             setCountry.mutate({ id: s.id, country: c }),
@@ -272,7 +275,7 @@ export function ServersPage() {
                                     : `Проверка ${progress.total} серверов может занять минуту`
                                 : 'Реальное соединение через каждый сервер'
                         }
-                        onClick={check}
+                        onClick={() => check()}
                         disabled={checking}
                     />
                 </div>
@@ -282,14 +285,23 @@ export function ServersPage() {
 
     const profiles = providerModes.filter(s => matches(query, s.name, serverCountry(s), s.source_name))
     const providerCard = profiles.length > 0 && (
-        <Group title='Режимы провайдера' footer='Это готовые варианты из вашей подписки. Какие серверы входят в каждый вариант и как они выбираются, решает поставщик VPN.'>
+        <Group title={<span className='flex min-w-0 items-center justify-between gap-2'>
+            <span>Режимы провайдера</span>
+            <ProbeButton label='Обновить пинг режимов провайдера' disabled={checking || routeBusy}
+                measuring={providerModes.some(server => isPendingServer(server.id))}
+                onClick={() => check(providerModes.map(server => server.id))} />
+        </span>} footer='Это готовые варианты из вашей подписки. Какие серверы входят в каждый вариант и как они выбираются, решает поставщик VPN.'>
             {profiles.map(server => {
                 const ms = latencyFor(server.id) ?? server.latency_ms
                 const measured = server.probe_kind === 'https' || latencyFor(server.id) !== undefined
-                return <Row key={server.id} label={server.name}
+                return <div key={server.id} className='flex min-w-0 items-center gap-1'>
+                    <div className='min-w-0 flex-1'><Row label={server.name}
                     hint={[server.source_name, `${server.profile_nodes ?? 0} серверов`, server.active && 'Выбран'].filter(Boolean).join(' · ')}
                     onClick={() => select.mutate(server.id)} disabled={routeBusy || server.active}
-                    trailing={<Latency measuring={isPendingServer(server.id)} ms={measured ? ms : 0} />} />
+                    trailing={<Latency measuring={isPendingServer(server.id)} ms={measured ? ms : 0} />} /></div>
+                    <ProbeButton label={`Обновить пинг сервера ${server.name}`} disabled={checking || routeBusy}
+                        measuring={isPendingServer(server.id)} onClick={() => check([server.id])} />
+                </div>
             })}
         </Group>
     )
@@ -369,7 +381,13 @@ export function ServersPage() {
                 <div className='flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start'>
                     <div className='flex min-w-0 flex-col gap-4'>
                         <Group
-                            title='Автовыбор'
+                            title={<span className='flex min-w-0 items-center justify-between gap-2'>
+                                <span>Автовыбор</span>
+                                <ProbeButton label='Обновить пинг серверов автопула'
+                                    disabled={checking || routeBusy || !(pool?.nodes ?? []).some(node => node.server_id >= 0)}
+                                    measuring={(pool?.nodes ?? []).some(node => isPendingServer(node.server_id))}
+                                    onClick={() => check((pool?.nodes ?? []).map(node => node.server_id).filter(id => id >= 0))} />
+                            </span>}
                             footer={
                                 isAuto
                                     ? 'Пул — это список серверов для выбора. Роутер проверяет, какой из них быстрее отвечает, и переключается сам, если сервер перестал работать.'
@@ -443,6 +461,8 @@ export function ServersPage() {
                                     excludedUntil={r.node.excluded_until}
                                     countryExcluded={avoidCountries.includes(r.country ?? '')}
                                     busy={routeBusy}
+                                    probeBusy={checking || routeBusy || r.node.server_id < 0}
+                                    onCheck={() => check([r.node.server_id])}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
                                     }
@@ -515,7 +535,7 @@ export function ServersPage() {
                     {providerCard}
 
                     {servers.length > 0 && (
-                        <div className='flex flex-col gap-3'>
+                        <div className='flex min-w-0 max-w-full flex-col gap-3'>
                             <SearchField
                                 value={query}
                                 onChange={setQuery}
@@ -535,34 +555,14 @@ export function ServersPage() {
                                     <option value='latency'>По наименьшему пингу</option>
                                 </select>
                             </label>
-                            <div
-                                role='group'
-                                aria-label='Страна'
-                                className='-mx-4 flex gap-2 overflow-x-auto px-4 [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-40px),transparent)] [-webkit-mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-40px),transparent)] [scrollbar-width:none]'
-                            >
-                                {['all', ...catalogGroups.map(g => g.code)].map(c => (
-                                    <button
-                                        key={c}
-                                        type='button'
-                                        aria-pressed={c === country}
-                                        onClick={() => setCountryFilter(c)}
-                                        className={cn(
-                                            'min-h-9 shrink-0 cursor-pointer select-none rounded-full px-4 text-[15px] tracking-[-0.24px] transition-colors',
-                                            c === country
-                                                ? 'bg-white font-semibold text-black'
-                                                : 'border border-white/12 bg-white/6 font-medium hover:bg-white/10',
-                                        )}
-                                    >
-                                        {c === 'all'
-                                            ? 'Все'
-                                            : countryLabel(c) || 'Без страны'}
-                                    </button>
-                                ))}
-                            </div>
+                            <CountryFilter groups={catalogGroups} value={country} onChange={setCountryFilter} />
                         </div>
                     )}
 
-                    <CountryCatalog groups={groups} rowProps={rowProps} />
+                    <CountryCatalog groups={groups} rowProps={rowProps}
+                        probeBusy={checking || routeBusy}
+                        isPendingGroup={code => catalogGroups.find(group => group.code === code)?.list.some(server => isPendingServer(server.id)) ?? false}
+                        onCheckGroup={code => check(catalogGroups.find(group => group.code === code)?.list.map(server => server.id) ?? [])} />
 
                     {mihomo && multipools.some(item => matches(query, item.name)) && (
                         <Group title='Мультипулы'>
@@ -676,6 +676,8 @@ function PoolRow({
     excludedUntil,
     countryExcluded,
     busy,
+    probeBusy,
+    onCheck,
     onSelect,
 }: {
     name: string
@@ -688,6 +690,8 @@ function PoolRow({
     excludedUntil?: string
     countryExcluded: boolean
     busy: boolean
+    probeBusy: boolean
+    onCheck: () => void
     onSelect: () => void
 }) {
     const notes = [
@@ -699,39 +703,43 @@ function PoolRow({
     ].filter(Boolean)
 
     return (
-        <button
-            type='button'
-            onClick={onSelect}
-            disabled={busy || current}
-            className='flex min-h-[52px] w-full cursor-pointer items-center gap-3 py-2 text-left disabled:cursor-default'
-        >
-            <span className='min-w-0 flex-1'>
-                <span
-                    className={cn(
-                        'block break-words text-[17px] tracking-[-0.43px]',
-                        excludedUntil && 'text-muted-foreground',
-                    )}
-                >
-                    {withCountryFlag(name, country)}
-                    {protocol && <ProtocolBadge protocol={protocol} />}
-                </span>
-                {notes.length > 0 && (
-                    <span className='mt-0.5 block text-[13px] text-muted-foreground'>
-                        {notes.join(' · ')}
+        <div className='flex min-w-0 items-center gap-1'>
+            <button
+                type='button'
+                onClick={onSelect}
+                disabled={busy || current}
+                className='flex min-h-[52px] min-w-0 flex-1 cursor-pointer items-center gap-3 py-2 text-left disabled:cursor-default'
+            >
+                <span className='min-w-0 flex-1'>
+                    <span
+                        className={cn(
+                            'block break-words text-[17px] tracking-[-0.43px]',
+                            excludedUntil && 'text-muted-foreground',
+                        )}
+                    >
+                        {withCountryFlag(name, country)}
+                        {protocol && <ProtocolBadge protocol={protocol} />}
                     </span>
-                )}
-            </span>
-            <Latency measuring={measuring} ms={latency} />
-            <span className='flex w-6 justify-center'>
-                {current && (
-                    <IconCheck
-                        className='size-[18px] text-tint'
-                        stroke={2.8}
-                        aria-label='Сейчас используется'
-                    />
-                )}
-            </span>
-        </button>
+                    {notes.length > 0 && (
+                        <span className='mt-0.5 block text-[13px] text-muted-foreground'>
+                            {notes.join(' · ')}
+                        </span>
+                    )}
+                </span>
+                <Latency measuring={measuring} ms={latency} />
+                <span className='flex w-6 justify-center'>
+                    {current && (
+                        <IconCheck
+                            className='size-[18px] text-tint'
+                            stroke={2.8}
+                            aria-label='Сейчас используется'
+                        />
+                    )}
+                </span>
+            </button>
+            <ProbeButton label={`Обновить пинг сервера ${name}`} disabled={probeBusy}
+                measuring={measuring} onClick={onCheck} />
+        </div>
     )
 }
 
@@ -744,9 +752,77 @@ function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
     </span>
 }
 
-function CountryCatalog({ groups, rowProps }: {
+function ProbeButton({ label, disabled, measuring, onClick }: {
+    label: string
+    disabled: boolean
+    measuring: boolean
+    onClick: () => void
+}) {
+    return <button type='button' aria-label={label} title={label} aria-busy={measuring}
+        disabled={disabled} onClick={onClick}
+        className='flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-tint hover:bg-white/8 focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default disabled:opacity-45'>
+        <IconRefresh aria-hidden className={cn('size-4', measuring && 'motion-safe:animate-spin')} />
+    </button>
+}
+
+function CountryFilter({ groups, value, onChange }: {
+    groups: CountryGroup[]
+    value: string
+    onChange: (value: string) => void
+}) {
+    const scroll = useRef<HTMLDivElement>(null)
+    const [edges, setEdges] = useState({ left: false, right: false })
+    useLayoutEffect(() => {
+        const element = scroll.current
+        if (!element) return
+        const update = () => setEdges({
+            left: element.scrollLeft > 1,
+            right: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
+        })
+        update()
+        element.addEventListener('scroll', update, { passive: true })
+        const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null
+        observer?.observe(element)
+        return () => {
+            element.removeEventListener('scroll', update)
+            observer?.disconnect()
+        }
+    }, [groups])
+
+    const move = (direction: number) => {
+        const element = scroll.current
+        if (element) element.scrollBy({ left: direction * Math.max(180, element.clientWidth * 0.75), behavior: 'smooth' })
+    }
+
+    return <div className='flex min-w-0 max-w-full items-center gap-1'>
+        <button type='button' aria-label='Страны левее' title='Страны левее'
+            disabled={!edges.left} onClick={() => move(-1)}
+            className='mb-2 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-fill text-tint disabled:cursor-default disabled:opacity-30'>
+            <IconChevronLeft aria-hidden className='size-5' />
+        </button>
+        <div ref={scroll} role='group' aria-label='Страна' tabIndex={0}
+            className='country-filter-scroll flex min-w-0 flex-1 gap-2 overflow-x-auto overscroll-x-contain pb-2 focus-visible:outline-2 focus-visible:outline-tint'>
+            {['all', ...groups.map(group => group.code)].map(code => <button key={code} type='button'
+                aria-pressed={code === value} onClick={() => onChange(code)}
+                className={cn('min-h-9 shrink-0 cursor-pointer select-none rounded-full px-4 text-[15px] tracking-[-0.24px] transition-colors',
+                    code === value ? 'bg-white font-semibold text-black' : 'border border-white/12 bg-white/6 font-medium hover:bg-white/10')}>
+                {code === 'all' ? 'Все' : countryLabel(code) || 'Без страны'}
+            </button>)}
+        </div>
+        <button type='button' aria-label='Страны правее' title='Страны правее'
+            disabled={!edges.right} onClick={() => move(1)}
+            className='mb-2 flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-fill text-tint disabled:cursor-default disabled:opacity-30'>
+            <IconChevronRight aria-hidden className='size-5' />
+        </button>
+    </div>
+}
+
+function CountryCatalog({ groups, rowProps, probeBusy, isPendingGroup, onCheckGroup }: {
     groups: CountryGroup[]
     rowProps: (server: Server) => React.ComponentProps<typeof ServerRow>
+    probeBusy: boolean
+    isPendingGroup: (code: string) => boolean
+    onCheckGroup: (code: string) => void
 }) {
     const grid = useRef<HTMLDivElement>(null)
     useLayoutEffect(() => {
@@ -778,7 +854,11 @@ function CountryCatalog({ groups, rowProps }: {
     return <div ref={grid} className='country-catalog grid min-w-0 items-start gap-3 lg:grid-cols-2 lg:gap-x-4'>
         {groups.map(group => <Group key={group.code}
             className='[&>h2]:text-[15px] [&>h2]:font-semibold [&>h2]:normal-case [&>h2]:text-foreground'
-            title={`${countryLabel(group.code) || 'Страна не определена'} · ${group.list.length}`}>
+            title={<span className='flex min-w-0 items-center justify-between gap-2'>
+                <span>{countryLabel(group.code) || 'Страна не определена'} · {group.list.length}</span>
+                <ProbeButton label={`Обновить пинг группы ${countryLabel(group.code) || 'Без страны'}`}
+                    disabled={probeBusy} measuring={isPendingGroup(group.code)} onClick={() => onCheckGroup(group.code)} />
+            </span>}>
             {group.list.map(server => <ServerRow key={server.id} {...rowProps(server)} />)}
         </Group>)}
     </div>
@@ -882,6 +962,8 @@ function ServerRow({
     measuring,
     countryExcluded,
     busy,
+    probeBusy,
+    onCheck,
     onSelect,
     onSetCountry,
 }: {
@@ -890,6 +972,8 @@ function ServerRow({
     liveLatency?: number
     countryExcluded: boolean
     busy: boolean
+    probeBusy: boolean
+    onCheck: () => void
     onSelect: () => void
     onSetCountry: (country: string) => void
 }) {
@@ -979,6 +1063,8 @@ function ServerRow({
                     )}
                 </span>
             </button>
+            <ProbeButton label={`Обновить пинг сервера ${server.name}`} disabled={probeBusy}
+                measuring={measuring} onClick={onCheck} />
             <button
                 type='button'
                 aria-label={`Изменить страну для ${server.name}`}

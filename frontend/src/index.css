@@ -161,6 +161,20 @@
     }
 }
 
+.country-filter-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted-foreground) transparent;
+}
+
+.country-filter-scroll::-webkit-scrollbar {
+    height: 7px;
+}
+
+.country-filter-scroll::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--muted-foreground);
+}
+
 /* Native pickers can render outside the page, where a translucent fill loses its backdrop. */
 .dark select {
     color-scheme: dark;

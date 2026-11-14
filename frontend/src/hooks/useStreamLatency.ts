@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 
 type ProbeJob = {
@@ -12,6 +12,7 @@ type ProbeJob = {
 
 const path = '/api/servers/check/job'
 const key = ['server-check-job']
+const startKey = ['server-check-start']
 
 export function useStreamLatency() {
     const qc = useQueryClient()
@@ -24,9 +25,16 @@ export function useStreamLatency() {
         refetchIntervalInBackground: false,
     })
     const start = useMutation({
-        mutationFn: () => api.post<ProbeJob>(path),
+        mutationKey: startKey,
+        mutationFn: (ids?: number[]) =>
+            api.post<ProbeJob>(path, ids === undefined ? undefined : { server_ids: ids }),
+        onMutate: () => qc.cancelQueries({ queryKey: key }),
         onSuccess: job => qc.setQueryData(key, job),
-        onSettled: () => qc.invalidateQueries({ queryKey: key }),
+        onSettled: () => { void qc.invalidateQueries({ queryKey: key }) },
+    })
+    const starts = useMutationState({
+        filters: { mutationKey: startKey, status: 'pending' },
+        select: mutation => mutation.state.variables as number[] | undefined,
     })
     const job = status.data
     const run = job?.run
@@ -37,19 +45,23 @@ export function useStreamLatency() {
             void qc.invalidateQueries({ queryKey: [name] })
         }
     }, [qc, run, running])
-    const measured = new Map(job?.results.map(m => [m.id, m.latency_ms]))
+    const starting = starts.length > 0 && !running
+    const startingIds = starting
+        ? starts[0] ?? qc.getQueryData<{ id: number }[]>(['servers'])?.map(s => s.id) ?? []
+        : []
+    const measured = new Map(starting ? [] : job?.results.map(m => [m.id, m.latency_ms]))
     const pending = new Set(
-        job?.running ? job.ids.filter(id => !measured.has(id)) : [],
+        job?.running ? job.ids.filter(id => !measured.has(id)) : startingIds,
     )
     return {
-        check: () => {
-            if (!start.isPending && !running) start.mutate()
+        check: (ids?: number[]) => {
+            if (!running && !qc.isMutating({ mutationKey: startKey })) start.mutate(ids)
         },
-        checking: start.isPending || !!running || status.isLoading,
+        checking: starting || !!running || status.isLoading,
         error:
             start.error?.message || status.error?.message || job?.error || '',
-        progress: { completed: measured.size, total: job?.ids.length ?? 0 },
-        isPendingServer: (id: number) => pending.has(id),
+        progress: { completed: measured.size, total: starting ? pending.size : job?.ids.length ?? 0 },
+        isPendingServer: (id: number) => (starting && starts[0] === undefined) || pending.has(id),
         latencyFor: (id: number) => (running ? measured.get(id) : undefined),
     }
 }

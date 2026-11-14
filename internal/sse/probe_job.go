@@ -32,6 +32,8 @@ type probeRun struct {
 }
 
 var ErrPoolUpdate = errors.New("замеры сохранены, состав пула ещё не обновлён")
+var ErrProbeBusy = errors.New("HTTPS-проверка уже выполняется")
+var ErrProbeIDs = errors.New("выберите существующие серверы для проверки")
 
 type ProbeJobs struct {
 	mu      sync.Mutex
@@ -50,12 +52,37 @@ func NewProbeJobs(sub *xkeen.SubscriptionManager, options xkeen.ProbeOptions, pr
 }
 
 func (j *ProbeJobs) start() *probeRun {
+	r, _ := j.startFor(nil)
+	return r
+}
+
+func (j *ProbeJobs) startFor(ids []int) (*probeRun, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.run != nil && j.run.progress.Running {
-		return j.run
+		if ids != nil {
+			return nil, ErrProbeBusy
+		}
+		return j.run, nil
 	}
 	servers := j.sub.GetServers()
+	if ids != nil {
+		wanted := make(map[int]bool, len(ids))
+		for _, id := range ids {
+			wanted[id] = true
+		}
+		selected := make([]models.Server, 0, len(wanted))
+		for _, server := range servers {
+			if wanted[server.ID] {
+				selected = append(selected, server)
+				delete(wanted, server.ID)
+			}
+		}
+		if len(selected) == 0 || len(wanted) > 0 {
+			return nil, ErrProbeIDs
+		}
+		servers = selected
+	}
 	next := uint64(1)
 	if j.run != nil {
 		next = j.run.progress.Run + 1
@@ -66,10 +93,21 @@ func (j *ProbeJobs) start() *probeRun {
 	}
 	j.run = r
 	go j.execute(r, servers)
-	return r
+	return r, nil
 }
 
 func (j *ProbeJobs) Start() ProbeProgress { return j.snapshot(j.start()) }
+
+func (j *ProbeJobs) StartSelected(ids []int) (ProbeProgress, error) {
+	if len(ids) == 0 {
+		return ProbeProgress{}, ErrProbeIDs
+	}
+	r, err := j.startFor(ids)
+	if err != nil {
+		return ProbeProgress{}, err
+	}
+	return j.snapshot(r), nil
+}
 
 func (j *ProbeJobs) Snapshot() ProbeProgress { return j.snapshot(nil) }
 

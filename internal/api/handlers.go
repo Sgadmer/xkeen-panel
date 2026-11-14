@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -536,10 +538,58 @@ func (h *Handlers) HandleCheckServers(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) HandleProbeJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
-		writeJSON(w, http.StatusAccepted, h.Checks.Start())
+		ids, err := probeRequestIDs(w, r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if ids == nil {
+			writeJSON(w, http.StatusAccepted, h.Checks.Start())
+			return
+		}
+		job, err := h.Checks.StartSelected(ids)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, sse.ErrProbeBusy) {
+				status = http.StatusConflict
+			}
+			writeJSON(w, status, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusAccepted, job)
 		return
 	}
 	writeJSON(w, http.StatusOK, h.Checks.Snapshot())
+}
+
+func probeRequestIDs(w http.ResponseWriter, r *http.Request) ([]int, error) {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
+	dec.DisallowUnknownFields()
+	var req *struct {
+		ServerIDs json.RawMessage `json:"server_ids"`
+	}
+	err := dec.Decode(&req)
+	if err == io.EOF {
+		return nil, nil
+	}
+	if err != nil || req == nil || dec.Decode(new(json.RawMessage)) != io.EOF {
+		return nil, errors.New("неверный формат запроса проверки")
+	}
+	if req.ServerIDs == nil {
+		return nil, nil
+	}
+	var values []*int
+	if json.Unmarshal(req.ServerIDs, &values) != nil || len(values) == 0 {
+		return nil, sse.ErrProbeIDs
+	}
+	ids := make([]int, len(values))
+	for i, value := range values {
+		if value == nil || *value < 0 {
+			return nil, sse.ErrProbeIDs
+		}
+		ids[i] = *value
+	}
+	return ids, nil
 }
 
 // HandleSetCountry — POST /api/servers/country (manual country override)
