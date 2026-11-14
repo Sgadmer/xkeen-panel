@@ -9,7 +9,7 @@ import { ServiceKillSwitch, serviceKillSwitch, useKillSwitch } from '@/component
 import { ServiceRoutePicker } from '@/components/serviceRoutePicker'
 import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
-import { countryLabel } from '@/lib/format'
+import { countryLabel, serverDisplayName } from '@/lib/format'
 import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
 import { serviceRouteOptions, type ServiceTarget } from '@/lib/serviceRouteOptions'
 
@@ -161,7 +161,7 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
                 <IconChevronDown aria-hidden className='size-4 shrink-0 transition-transform group-open/details:rotate-180' />
             </summary>
             <div className='space-y-4 pb-2'>
-                {live?.kind === 'server' && live.name && <p className='break-words'>{inherited?.kind === 'conditional' ? 'Для адресов из списка блокировок' : 'Сейчас'} · {[countryLabel(live.pool_country) || live.pool, live.name, serverPathDetail(live, fullPath)].filter(Boolean).join(' → ')}</p>}
+                {live?.kind === 'server' && live.name && <p className='break-words'>{inherited?.kind === 'conditional' ? 'Для адресов из списка блокировок' : 'Сейчас'} · {[countryLabel(live.pool_country) || live.pool, serverDisplayName(live.name, live.exit_country), serverPathDetail(live, fullPath)].filter(Boolean).join(' → ')}</p>}
                 {(live?.source || providers) && <p className='break-words'>Провайдер{!live?.source && (selected?.sources?.length ?? 0) > 1 ? 'ы' : ''} · {live?.source || providers}</p>}
                 {claude && !needsAttention && <div>
                     <h3 className='font-medium'>Фильтр API на роутере</h3>

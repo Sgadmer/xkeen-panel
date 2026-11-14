@@ -7,7 +7,7 @@ import { Sheet } from '@/components/sheet'
 import { useMultiPools, usePanelSettings, usePool, useServers, useServerSources } from '@/hooks/usePanelData'
 import { invalidateServerData } from '@/hooks/useServerActions'
 import { api } from '@/lib/api'
-import { countryExcluded, countryLabel, poolCountry, timeAgo } from '@/lib/format'
+import { countryExcluded, countryLabel, poolCountry, serverDisplayName, timeAgo } from '@/lib/format'
 import { serverPathDetail } from '@/lib/serverPath'
 import { importWarnings, safeNotice } from '@/lib/subscription'
 import type { MultiPool, PoolMember, Server, ServerSource, SubscriptionUpdateResponse } from '@/types'
@@ -255,7 +255,7 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
                     const unavailable = countryExcluded(server, excluded)
                     const selected = selectedKeys.has(key)
                     return <Choice key={key} checked={selected} disabled={action.isPending || unavailable && !selected}
-                        label={server.name} hint={[server.source_name, serverPathDetail(server, settings.data?.show_full_path !== false), server.protocol, unavailable && 'Исключённая страна'].filter(Boolean).join(' · ')}
+                        label={serverDisplayName(server.name, server.exit_country)} hint={[server.source_name, serverPathDetail(server, settings.data?.show_full_path !== false), server.protocol, unavailable && 'Исключённая страна'].filter(Boolean).join(' · ')}
                         onChange={() => setMembers(prev => selected ? prev.filter(item => memberKey(item) !== key) :
                             [...prev, { source_id: server.source_id || 'legacy', target_id: server.target_id! }])} />
                 })}

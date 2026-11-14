@@ -26,6 +26,7 @@ import {
     countryFlag,
     panelEvents,
     scopeLabel,
+    serverDisplayName,
     statusInfo,
     timeAgo,
     toneDot,
@@ -64,7 +65,7 @@ export function HomePage() {
     const source = pool?.source_name || ((!pool?.selection_kind || !['native', 'auto'].includes(pool.selection_kind)) ? current?.source_name : undefined)
     const awaitingMember = pool?.selection_kind === 'auto' && !pool.current_tag
     const path = !direct && !blocked && !awaitingMember && serverPathDetail(current, fullPath)
-    const endpoint = direct ? 'Прямое подключение' : blocked ? 'Маршрут заблокирован' : awaitingMember ? 'Пул проверяет доступные узлы' : current?.name || node?.name || actualName
+    const endpoint = direct ? 'Прямое подключение' : blocked ? 'Маршрут заблокирован' : awaitingMember ? 'Пул проверяет доступные узлы' : current?.name ? serverDisplayName(current.name, current.exit_country) : node?.name || actualName
     const mode = pool?.selection_kind ?? (isAuto ? 'auto' : 'manual')
     const route = mode === 'auto'
         ? 'Автовыбор · ' + (scope ? scopeLabel(scope) : pool?.selection_name || 'Общий пул')
@@ -133,7 +134,7 @@ export function HomePage() {
                             <p className='break-words'><span className='text-muted-foreground'>{selective ? 'Маршрут для Re:filter' : 'Основной маршрут'} · </span>{route}</p>
                             {selective && <p className='text-muted-foreground'>После правил сервисов и исключений адреса из списка идут по выбранному маршруту. Остальные адреса открываются напрямую.</p>}
                             {source && <p className='break-words'><span className='text-muted-foreground'>Подписка · </span>{source}</p>}
-                            {path && <p className='break-words'><span className='text-muted-foreground'>Путь · </span>{path}</p>}
+                            {path && <p className='break-words'>{path}</p>}
                         </div>}
                         {isPool && (
                             <div className='flex min-h-11 items-center gap-3 border-t border-white/10 pt-2.5'>

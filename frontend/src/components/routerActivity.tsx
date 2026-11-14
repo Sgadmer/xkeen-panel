@@ -7,6 +7,7 @@ import { api } from '@/lib/api'
 import { RouterMetrics, type RouterSample } from '@/components/routerMetrics'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
+import { serverDisplayName } from '@/lib/format'
 
 type ServerLocation = ServerCountries & { name?: string; country?: string; source?: string }
 type Flow = {
@@ -28,7 +29,8 @@ const clock = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit'
 function FlowRoute({ flow, service, full }: { flow: Flow; service?: string; full: boolean }) {
     const location = flow.exit?.kind === 'server' ? flow.exit : flow.pool_current
     const path = serverPathDetail(location, full)
-    const node = path || location?.name
+    const name = location?.name && serverDisplayName(location.name, location.exit_country)
+    const node = path || name
     const hops = [...flow.route]
     if (node && flow.exit?.kind === 'server' && (hops.at(-1) === location?.name || hops.at(-1) === node)) hops.pop()
     if (service && (hops.length || node)) {
@@ -38,7 +40,7 @@ function FlowRoute({ flow, service, full }: { flow: Flow; service?: string; full
     }
     const outcome = flow.exit?.kind === 'direct' ? 'Напрямую' : flow.exit?.kind === 'reject' ? 'Блокировка' : ''
     if (outcome && hops.at(-1) !== outcome) hops.push(outcome)
-    const hint = [flow.pool_current && 'Текущий выбор пула', location?.name].filter(Boolean).join(' · ')
+    const hint = [flow.pool_current && 'Текущий выбор пула', name].filter(Boolean).join(' · ')
     return <>
         <p className='mt-1 whitespace-pre-wrap break-words text-sm' title={flow.route.join(' → ')}>
             {hops.join(' → ')}{node && <>{hops.length > 0 && ' → '}<span title={hint || undefined}

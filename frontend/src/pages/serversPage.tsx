@@ -48,7 +48,7 @@ import {
     timeAgo,
     toneText,
     unavailableCountryReason,
-    withCountryFlag,
+    serverDisplayName,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { serverPathDetail } from '@/lib/serverPath'
@@ -434,7 +434,7 @@ export function ServersPage() {
                             {poolRows.map(r => (
                                 <PoolRow
                                     key={r.node.tag}
-                                    name={r.node.name}
+                                    name={serverDisplayName(r.node.name, r.server?.exit_country, r.country)}
                                     country={r.country}
                                     protocol={r.protocol}
                                     source={r.source}
@@ -716,7 +716,7 @@ function PoolRow({
                         excludedUntil && 'text-muted-foreground',
                     )}
                 >
-                    {withCountryFlag(name, country)}
+                    {name}
                     {protocol && <ProtocolBadge protocol={protocol} />}
                 </span>
                 {notes.length > 0 && (
@@ -724,7 +724,7 @@ function PoolRow({
                         {notes.join(' · ')}
                     </span>
                 )}
-                {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>Путь · {path}</span>}
+                {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{path}</span>}
             </span>
             <Latency measuring={measuring} ms={latency} />
             <span className='flex w-6 justify-center'>
@@ -955,11 +955,11 @@ function ServerRow({
             >
                 <span className='min-w-0 flex-1'>
                     <span className='block break-words text-[17px] tracking-[-0.43px]'>
-                        {withCountryFlag(server.name, serverCountry(server))}
+                        {serverDisplayName(server.name, server.exit_country, serverCountry(server))}
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
                     {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
-                    {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>Путь · {path}</span>}
+                    {path && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{path}</span>}
                     {!measuring && status && (
                         <span
                             className={cn(
@@ -989,7 +989,7 @@ function ServerRow({
             </button>
             <button
                 type='button'
-                aria-label={`Изменить страну для ${server.name}`}
+                aria-label={`Изменить страну для ${serverDisplayName(server.name, server.exit_country, serverCountry(server))}`}
                 onClick={() => {
                     setValue(serverCountry(server))
                     setEditing(true)

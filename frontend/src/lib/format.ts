@@ -21,9 +21,13 @@ export function countryLabel(code?: string) {
     return [countryFlag(code), countryName(code)].filter(Boolean).join(' ')
 }
 
-export function withCountryFlag(name: string, code?: string) {
-    const flag = countryFlag(code)
-    return flag && !/\p{Regional_Indicator}{2}/u.test(name) ? flag + ' ' + name : name
+const nameFlag = /\p{Regional_Indicator}{2}\uFE0F?/u
+
+export function serverDisplayName(name: string, exitCountry?: string, fallbackCountry?: string) {
+    const exitFlag = countryFlag(exitCountry)
+    if (nameFlag.test(name)) return exitFlag ? name.replace(nameFlag, exitFlag) : name
+    const flag = exitFlag || countryFlag(fallbackCountry)
+    return flag ? flag + ' ' + name : name
 }
 
 export function scopeLabel(scope: { kind: string; country?: string; name: string }) {
