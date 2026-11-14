@@ -73,7 +73,7 @@ function routeSummary(service: Service, selected?: ServiceTarget) {
         const location = pool && (current.pool_country || selected?.country) === current.country && current.country
             ? current.name : countryLabel(current.country) || current.name
         const path = [pool, location].filter(Boolean).join(' → ')
-        if (path) return branch + [path, current.source].filter(Boolean).join(' · ')
+        if (path) return current.source ? current.source + ' · ' + path : branch + path
     }
     if (pool) return branch + pool
     if (conditional) return 'По списку блокировок'
