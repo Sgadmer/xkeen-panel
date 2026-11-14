@@ -21,10 +21,7 @@ export type Server = {
     latency_ms: number
     country?: string
     country_override?: string
-    exit_country?: string
-    entry_country?: string
-    country_path?: string[]
-    exit_checked_at?: string
+    declared_country_path?: string[]
     last_checked?: string
     probe_kind?: string
     check_error?: string

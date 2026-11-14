@@ -125,18 +125,8 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 	type providerNode struct{ source, name string }
 	unavailable := map[providerNode]bool{}
 	if enabled {
-		// Native provider selectors expose display names, not the source
-		// outbound fingerprint. An observed exit may restrict a matching name,
-		// but cannot release the existing country veto for a different proxy.
 		eligible := xkeen.AutoCountryEligibility(servers, func(s models.Server) bool {
-			if len(s.RawProfile) != 0 || !c.autoAllowed(s) {
-				return false
-			}
-			if xkeen.MeasuredExitCountry(s) != "" {
-				s.ExitCountry = ""
-				return c.autoAllowed(s)
-			}
-			return true
+			return len(s.RawProfile) == 0 && c.autoAllowed(s)
 		})
 		for i, s := range servers {
 			if !eligible[i] {

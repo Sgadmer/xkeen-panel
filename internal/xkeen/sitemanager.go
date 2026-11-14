@@ -303,7 +303,7 @@ func (m *SiteManager) Views() []SiteView {
 		for _, node := range nodes {
 			nv := SiteNodeView{Tag: node.Tag, ServerID: -1, Name: node.Address, State: "unknown"}
 			if s := node.Server; s != nil {
-				nv.ServerID, nv.Name, nv.Country = s.ID, s.Name, AutoPoolCountry(*s)
+				nv.ServerID, nv.Name, nv.Country = s.ID, s.Name, ServerCountry(*s)
 			}
 			if r, ok := byNode[endpoint{Address: node.Address, Port: node.Port, UUID: node.UUID}.Key()]; ok {
 				nv.State, nv.Status, nv.Error, nv.Ms = "fail", r.Status, r.Error, r.Ms

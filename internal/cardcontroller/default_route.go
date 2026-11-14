@@ -407,7 +407,7 @@ func (c *Controller) RecoverDefault(ctx context.Context) (string, error) {
 			if len(s.RawProfile) > 0 {
 				return "", nil
 			}
-			country = xkeen.AutoPoolCountry(s)
+			country = xkeen.ServerCountry(s)
 			break
 		}
 	}
@@ -416,7 +416,7 @@ func (c *Controller) RecoverDefault(ctx context.Context) (string, error) {
 	}
 	var candidates []models.Server
 	for _, n := range c.poolNodes(servers) {
-		if !n.allowed || n.id == state.Pinned || !strings.EqualFold(xkeen.AutoPoolCountry(n.server), country) {
+		if !n.allowed || n.id == state.Pinned || !strings.EqualFold(xkeen.ServerCountry(n.server), country) {
 			continue
 		}
 		candidates = append(candidates, n.server)
@@ -430,7 +430,7 @@ func (c *Controller) RecoverDefault(ctx context.Context) (string, error) {
 	}
 	for _, n := range c.poolNodes(checked) {
 		s := n.server
-		if n.allowed && strings.EqualFold(xkeen.AutoPoolCountry(s), country) && s.ProbeKind == "https" && s.Latency >= 0 {
+		if n.allowed && strings.EqualFold(xkeen.ServerCountry(s), country) && s.ProbeKind == "https" && s.Latency >= 0 {
 			if err := c.setDefault(ctx, n.id, s.SourceID, true); err != nil {
 				return "", err
 			}

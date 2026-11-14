@@ -23,10 +23,9 @@ export function countryLabel(code?: string) {
 
 const nameFlag = /\p{Regional_Indicator}{2}\uFE0F?/u
 
-export function serverDisplayName(name: string, exitCountry?: string, fallbackCountry?: string) {
-    const exitFlag = countryFlag(exitCountry)
-    if (nameFlag.test(name)) return exitFlag ? name.replace(nameFlag, exitFlag) : name
-    const flag = exitFlag || countryFlag(fallbackCountry)
+export function serverDisplayName(name: string, country?: string) {
+    if (nameFlag.test(name)) return name
+    const flag = countryFlag(country)
     return flag ? flag + ' ' + name : name
 }
 
@@ -46,17 +45,12 @@ export function unavailableCountryReason(scope: AutoScope, avoided: string[]) {
     }
 }
 
-export function serverCountry(server?: Server) {
+export function serverCountry(server?: Pick<Server, 'country_override' | 'country'>) {
     return (server?.country_override || server?.country || '').toUpperCase()
 }
 
-// The API publishes exit_country only while the router's measurement is fresh.
-export function poolCountry(server?: Server) {
-    return server?.exit_country || serverCountry(server)
-}
-
 export function countryExcluded(server: Server, avoided: string[]) {
-    return avoided.includes(poolCountry(server)) || avoided.includes(server.country_override || '')
+    return avoided.includes(serverCountry(server))
 }
 
 // Go marshals an unset time as year 1

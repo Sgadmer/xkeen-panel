@@ -26,7 +26,7 @@ import {
     countryFlag,
     panelEvents,
     scopeLabel,
-    serverDisplayName,
+    serverCountry,
     statusInfo,
     timeAgo,
     toneDot,
@@ -61,11 +61,11 @@ export function HomePage() {
     const actualName = pool?.current_name ?? status?.current_server
     const direct = actualName === 'DIRECT'
     const blocked = actualName === 'REJECT'
-    const code = direct || blocked ? '' : current?.exit_country
+    const code = direct || blocked ? '' : serverCountry(current ?? node)
     const source = pool?.source_name || ((!pool?.selection_kind || !['native', 'auto'].includes(pool.selection_kind)) ? current?.source_name : undefined)
     const awaitingMember = pool?.selection_kind === 'auto' && !pool.current_tag
-    const path = !direct && !blocked && !awaitingMember && serverPathDetail(current, fullPath)
-    const endpoint = direct ? 'Прямое подключение' : blocked ? 'Маршрут заблокирован' : awaitingMember ? 'Пул проверяет доступные узлы' : current?.name ? serverDisplayName(current.name, current.exit_country) : node?.name || actualName
+    const path = !direct && !blocked && !awaitingMember && serverPathDetail(current, fullPath, countryName(code))
+    const endpoint = direct ? 'Прямое подключение' : blocked ? 'Маршрут заблокирован' : awaitingMember ? 'Пул проверяет доступные узлы' : current?.name || node?.name || actualName
     const mode = pool?.selection_kind ?? (isAuto ? 'auto' : 'manual')
     const route = mode === 'auto'
         ? 'Автовыбор · ' + (scope ? scopeLabel(scope) : pool?.selection_name || 'Общий пул')

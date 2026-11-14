@@ -113,3 +113,24 @@ func TestPublicServersHideWholeProviderProfiles(t *testing.T) {
 		t.Fatal("public server display fields were removed")
 	}
 }
+
+func TestPublicServersIgnoreCachedCountryChecksAfterUpgrade(t *testing.T) {
+	var legacy []models.Server
+	err := json.Unmarshal([]byte(`[
+		{"name":"🇫🇷 Франция","country":"FR","entry_country":"US","exit_country":"CZ","exit_checked_at":"2026-11-14T12:00:00Z"},
+		{"name":"🇷🇺 → 🇫🇷","country":"RU","entry_country":"BE","exit_country":"CZ"}
+	]`), &legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	views := publicServers(legacy)
+	if views[0].Country != "FR" || len(views[0].DeclaredCountryPath) > 0 ||
+		views[1].Country != "FR" || !reflect.DeepEqual(views[1].DeclaredCountryPath, []string{"RU", "FR"}) {
+		t.Fatal(views)
+	}
+	body, err := json.Marshal(views)
+	if err != nil || strings.Contains(string(body), `"entry_country"`) || strings.Contains(string(body), `"exit_country"`) ||
+		strings.Contains(string(body), `"exit_checked_at"`) || strings.Contains(string(body), `"country_path"`) {
+		t.Fatalf("public catalog returned obsolete observations: %s, %v", body, err)
+	}
+}

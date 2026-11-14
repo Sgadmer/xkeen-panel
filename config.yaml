@@ -55,7 +55,7 @@ health_quorum: 2                # How many services must fail before the node is
 # The check replaces the node at most once every 30 minutes: a service that
 # blocks every datacenter IP would otherwise cycle the pool forever.
 # health_check_urls:            # default: cloudflare, telegram, youtube, soundcloud
-#   - https://www.cloudflare.com/cdn-cgi/trace
+#   - https://www.cloudflare.com/robots.txt
 #   - https://web.telegram.org/
 
 # === Geo-avoidance for automatic switching ===

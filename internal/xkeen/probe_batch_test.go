@@ -1,8 +1,11 @@
 package xkeen
 
 import (
+	"context"
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"xkeen-panel/internal/models"
 )
@@ -35,5 +38,37 @@ func TestProbeIndependentNodesIsolatesInvalidOutbound(t *testing.T) {
 	_, err = probeIndependentNodes(Runtime{}, nodes, options, func(Runtime, []models.Server, ProbeOptions) ([]models.Server, error) { calls++; return nil, broken })
 	if !errors.Is(err, broken) || calls != 1 {
 		t.Fatal("infrastructure failure was treated as an invalid outbound")
+	}
+}
+
+type connectivityTransport func(*http.Request) (*http.Response, error)
+
+func (fn connectivityTransport) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
+
+func TestHTTPSLatencyUsesOnlyConnectivityEndpoints(t *testing.T) {
+	endpoints := []string{"https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"}
+	for _, tc := range []struct {
+		name     string
+		statuses []int
+		works    bool
+	}{
+		{"first endpoint available", []int{204}, true},
+		{"fallback available", []int{403, 204}, true},
+		{"both unavailable", []int{403, 500}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Timeout: time.Second, Transport: connectivityTransport(func(req *http.Request) (*http.Response, error) {
+				if calls >= len(tc.statuses) || req.URL.String() != endpoints[calls] || req.Method != http.MethodGet {
+					t.Fatalf("unexpected request %s %s", req.Method, req.URL)
+				}
+				status := tc.statuses[calls]
+				calls++
+				return &http.Response{StatusCode: status, Body: http.NoBody}, nil
+			})}
+			if got := measureHTTPSLatency(context.Background(), client); (got > 0) != tc.works || calls != len(tc.statuses) {
+				t.Fatalf("latency=%d, requests=%d", got, calls)
+			}
+		})
 	}
 }

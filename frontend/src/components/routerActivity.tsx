@@ -7,9 +7,8 @@ import { api } from '@/lib/api'
 import { RouterMetrics, type RouterSample } from '@/components/routerMetrics'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
-import { serverDisplayName } from '@/lib/format'
 
-type ServerLocation = ServerCountries & { name?: string; country?: string; source?: string }
+type ServerLocation = ServerCountries & { name?: string; source?: string }
 type Flow = {
     id: string; device: string; host: string; port?: string; network?: string; rule?: string
     service_id?: string; route: string[]; start: string
@@ -29,7 +28,7 @@ const clock = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit'
 function FlowRoute({ flow, service, full }: { flow: Flow; service?: string; full: boolean }) {
     const location = flow.exit?.kind === 'server' ? flow.exit : flow.pool_current
     const path = serverPathDetail(location, full)
-    const name = location?.name && serverDisplayName(location.name, location.exit_country)
+    const name = location?.name
     const node = path || name
     const hops = [...flow.route]
     if (node && flow.exit?.kind === 'server' && (hops.at(-1) === location?.name || hops.at(-1) === node)) hops.pop()
@@ -83,7 +82,7 @@ export function RouterActivity() {
         if ((device && f.device !== device) || (service && f.service_id !== service)) return false
         if (!input) return true
         const location = f.exit?.kind === 'server' ? f.exit : f.pool_current
-        return [f.host, f.rule, f.service_id && services.get(f.service_id), ...f.route, location?.name, location?.source, location?.exit_country, fullPath ? location?.entry_country : '', serverPathDetail(location, fullPath)]
+        return [f.host, f.rule, f.service_id && services.get(f.service_id), ...f.route, location?.name, location?.source, location?.country, serverPathDetail(location, fullPath)]
             .some(s => s?.toLowerCase().includes(input))
     })
     const pageSize = 25

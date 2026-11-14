@@ -61,7 +61,7 @@ type AutoScope struct {
 func scopes(p profile, nodes []poolNode) []AutoScope {
 	byCountry := make(map[string][]poolNode)
 	for _, node := range nodes {
-		code := strings.ToUpper(xkeen.AutoPoolCountry(node.server))
+		code := strings.ToUpper(xkeen.ServerCountry(node.server))
 		if len(code) == 2 {
 			byCountry[code] = append(byCountry[code], node)
 		}
@@ -235,7 +235,10 @@ func (c *Controller) setScope(ctx context.Context, id string) error {
 func poolViews(servers []models.Server) []xkeen.PoolNodeView {
 	result := make([]xkeen.PoolNodeView, 0, len(servers))
 	for _, s := range servers {
-		result = append(result, xkeen.PoolNodeView{Tag: xkeen.ServiceTargetID(s), ServerID: s.ID, Name: s.Name, Address: s.Address, Port: s.Port, Country: xkeen.AutoPoolCountry(s), Latency: s.Latency})
+		result = append(result, xkeen.PoolNodeView{
+			Tag: xkeen.ServiceTargetID(s), ServerID: s.ID, Name: s.Name, Address: s.Address, Port: s.Port,
+			Country: xkeen.ServerCountry(s), DeclaredCountryPath: xkeen.ServerCountryPath(s), Latency: s.Latency,
+		})
 	}
 	return result
 }

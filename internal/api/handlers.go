@@ -246,16 +246,16 @@ func (h *Handlers) refreshPool(servers []models.Server) (xkeen.SyncResult, error
 // HandleGetServers — GET /api/servers
 type serverView struct {
 	models.Server
-	PoolTag     string   `json:"pool_tag,omitempty"`
-	TargetID    string   `json:"target_id,omitempty"`
-	CountryPath []string `json:"country_path,omitempty"`
+	PoolTag             string   `json:"pool_tag,omitempty"`
+	TargetID            string   `json:"target_id,omitempty"`
+	DeclaredCountryPath []string `json:"declared_country_path,omitempty"`
 }
 
 func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
 	servers := h.subscription.GetServers()
 	views := make([]serverView, len(servers))
 	for i, server := range servers {
-		views[i] = serverView{Server: publicServer(server), CountryPath: xkeen.ServerCountryPath(server)}
+		views[i] = publicServer(server)
 	}
 
 	// In pool mode the active entry is the pinned node, not the server the pool was built from

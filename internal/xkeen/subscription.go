@@ -141,10 +141,6 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 				continue
 			}
 			s.Latency, s.ProbeKind, s.CheckError, s.LastChecked = result.Latency, result.ProbeKind, result.CheckError, at
-			if result.ProbeKind == "https" && !result.ExitCheckedAt.IsZero() && !result.ExitCheckedAt.Before(s.ExitCheckedAt) {
-				s.EntryCountry = MeasuredEntryCountry(result)
-				s.ExitCountry, s.ExitCheckedAt = MeasuredExitCountry(result), result.ExitCheckedAt
-			}
 		}
 	}
 

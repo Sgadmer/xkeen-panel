@@ -28,7 +28,6 @@ type ProbeOptions struct {
 	Timeout     time.Duration
 	Concurrency int
 	StateDir    string
-	GeoIPPath   string
 	// OnResult receives each finished measurement. Workers may call it concurrently.
 	OnResult    func(models.Server)
 }
@@ -55,10 +54,6 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 		}
 	}
 	if len(ordinary) > 0 {
-		entries := entryCountries(options.Context, ordinary, options.GeoIPPath)
-		for i := range ordinary {
-			ordinary[i].EntryCountry = entries[ordinary[i].Address]
-		}
 		result, err := probeIndependentNodes(rt, ordinary, options, checkServersHTTPSBatch)
 		if err != nil {
 			return nil, err
@@ -102,7 +97,6 @@ func probeIndependentNodes(rt Runtime, nodes []models.Server, options ProbeOptio
 	if len(nodes) == 1 {
 		node := nodes[0]
 		node.Latency, node.ProbeKind, node.LastChecked = -1, "https", time.Now()
-		node.ExitCountry, node.ExitCheckedAt = "", node.LastChecked
 		node.CheckError = errProbeConfig.Error()
 		options.report(node)
 		return []models.Server{node}, nil
@@ -180,10 +174,6 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		checked[i].ProbeKind = "https"
 		checked[i].CheckError = ""
 		checked[i].LastChecked = time.Now()
-		checked[i].ExitCountry = ""
-		if len(server.RawProfile) == 0 {
-			checked[i].ExitCheckedAt = checked[i].LastChecked
-		}
 		out, buildErr := BuildServerOutbound(server, "probe-node-"+strconv.Itoa(i), map[string]interface{}{
 			"streamSettings": map[string]interface{}{"sockopt": map[string]interface{}{"mark": 255}},
 		})
@@ -361,37 +351,7 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 			transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport, Timeout: options.Timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-			for targetIndex, target := range []string{"https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"} {
-				attemptCtx := nodeCtx
-				attemptCancel := func() {}
-				if targetIndex == 0 {
-					attemptCtx, attemptCancel = context.WithTimeout(nodeCtx, options.Timeout/2)
-				}
-				request, e := http.NewRequestWithContext(attemptCtx, http.MethodGet, target, nil)
-				if e != nil {
-					attemptCancel()
-					continue
-				}
-				start := time.Now()
-				response, e := client.Do(request)
-				if e != nil {
-					attemptCancel()
-					continue
-				}
-				response.Body.Close()
-				attemptCancel()
-				if response.StatusCode == http.StatusNoContent {
-					checked[index].Latency = int(time.Since(start) / time.Millisecond)
-					if checked[index].Latency < 1 {
-						checked[index].Latency = 1
-					}
-					break
-				}
-			}
-			if len(checked[index].RawProfile) == 0 && nodeCtx.Err() == nil {
-				checked[index].ExitCountry = probeExitCountry(nodeCtx, client)
-				checked[index].ExitCheckedAt = time.Now()
-			}
+			checked[index].Latency = measureHTTPSLatency(nodeCtx, client)
 		}(i, port)
 	}
 	wg.Wait()
@@ -404,4 +364,33 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		return nil, fmt.Errorf("проверка отменена; рабочие настройки сохранены")
 	}
 	return checked, nil
+}
+
+// Use the second connectivity endpoint only when the first did not answer 204.
+func measureHTTPSLatency(ctx context.Context, client *http.Client) int {
+	for i, target := range []string{"https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"} {
+		if ctx.Err() != nil {
+			break
+		}
+		budget := client.Timeout
+		if i == 0 {
+			budget /= 2
+		}
+		attempt, cancel := context.WithTimeout(ctx, budget)
+		request, err := http.NewRequestWithContext(attempt, http.MethodGet, target, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		start := time.Now()
+		response, err := client.Do(request)
+		if err == nil {
+			response.Body.Close()
+		}
+		cancel()
+		if err == nil && response.StatusCode == http.StatusNoContent {
+			return max(1, int(time.Since(start).Milliseconds()))
+		}
+	}
+	return -1
 }

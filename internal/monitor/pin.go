@@ -139,7 +139,7 @@ func (w *Watchdog) pinServerLocked(server models.Server, manual bool, note strin
 		}
 	}
 	// must not be retried automatically later as if the owner had selected it.
-	if err := w.poolStore.SetPinnedServer(tag, node, manual, xkeen.AutoPoolCountry(server), note); err != nil {
+	if err := w.poolStore.SetPinnedServer(tag, node, manual, xkeen.ServerCountry(server), note); err != nil {
 		return rollback(fmt.Errorf("не удалось сохранить выбранный сервер"))
 	}
 	if _, err := w.subscription.SetActiveByRawURI(server.RawURI); err != nil {
@@ -299,7 +299,7 @@ func (w *Watchdog) sameCountryReplacement(country, failedURI string) (*models.Se
 		if !xkeen.CanBuildServer(s) {
 			continue
 		}
-		if !eligible[i] || xkeen.AutoPoolCountry(s) != country {
+		if !eligible[i] || xkeen.ServerCountry(s) != country {
 			continue
 		}
 		candidates = append(candidates, s)
@@ -317,7 +317,7 @@ func (w *Watchdog) sameCountryReplacement(country, failedURI string) (*models.Se
 	var live []models.Server
 	eligible = xkeen.AutoCountryEligibility(checked, w.AutomaticServerAllowed)
 	for i, s := range checked {
-		if eligible[i] && xkeen.AutoPoolCountry(s) == country && s.Latency >= 0 {
+		if eligible[i] && xkeen.ServerCountry(s) == country && s.Latency >= 0 {
 			live = append(live, s)
 		}
 	}

@@ -42,7 +42,6 @@ import {
     countryLabel,
     countryExcluded,
     latencyTone,
-    poolCountry,
     scopeLabel,
     serverCountry,
     timeAgo,
@@ -186,7 +185,7 @@ export function ServersPage() {
                 return {
                     node: n,
                     server,
-                    country: server ? poolCountry(server) : n.country,
+                    country: server ? serverCountry(server) : n.country,
                     protocol: server?.protocol,
                     source: server?.source_name,
                     latency: server
@@ -210,7 +209,7 @@ export function ServersPage() {
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
-        path: serverPathDetail(s, fullPath),
+        path: serverPathDetail(s, fullPath, s.name),
         countryExcluded: countryExcluded(s, avoidCountries),
         busy: routeBusy,
         measuring: isPendingServer(s.id),
@@ -271,7 +270,7 @@ export function ServersPage() {
                                 ? progress.completed > 0
                                     ? `Проверено ${progress.completed} из ${progress.total} серверов`
                                     : `Проверка ${progress.total} серверов может занять минуту`
-                                : 'Задержка и страна выхода каждого сервера'
+                                : 'Проверить доступность и задержку серверов'
                         }
                         onClick={check}
                         disabled={checking}
@@ -434,11 +433,10 @@ export function ServersPage() {
                             {poolRows.map(r => (
                                 <PoolRow
                                     key={r.node.tag}
-                                    name={serverDisplayName(r.node.name, r.server?.exit_country, r.country)}
-                                    country={r.country}
+                                    name={serverDisplayName(r.node.name, r.country)}
                                     protocol={r.protocol}
                                     source={r.source}
-                                    path={serverPathDetail(r.server, fullPath)}
+                                    path={serverPathDetail(r.server ?? r.node, fullPath, r.node.name)}
                                     latency={latencyFor(r.node.server_id) ?? r.latency}
                                     measuring={isPendingServer(r.node.server_id)}
                                     current={r.current}
@@ -669,7 +667,6 @@ function siteLabel(domains: string[]) {
 
 function PoolRow({
     name,
-    country,
     protocol,
     source,
     path,
@@ -682,7 +679,6 @@ function PoolRow({
     onSelect,
 }: {
     name: string
-    country?: string
     protocol?: string
     source?: string
     path: string
@@ -695,7 +691,6 @@ function PoolRow({
     onSelect: () => void
 }) {
     const notes = [
-        countryName(country),
         source,
         countryExcluded && 'Страна исключена в разделе «Автоматика»',
         excludedUntil &&
@@ -793,7 +788,7 @@ function groupServers(servers: Server[], order: CountryOrder) {
     const groups = new Map<string, CountryGroup>()
     for (const server of servers) {
         if (server.protocol === 'xray-profile') continue
-        const code = poolCountry(server) || OTHER
+        const code = serverCountry(server) || OTHER
         let group = groups.get(code)
         if (!group) {
             group = { code, list: [], bestLatency: Infinity }
@@ -955,7 +950,7 @@ function ServerRow({
             >
                 <span className='min-w-0 flex-1'>
                     <span className='block break-words text-[17px] tracking-[-0.43px]'>
-                        {serverDisplayName(server.name, server.exit_country, serverCountry(server))}
+                        {serverDisplayName(server.name, serverCountry(server))}
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
                     {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
@@ -989,7 +984,7 @@ function ServerRow({
             </button>
             <button
                 type='button'
-                aria-label={`Изменить страну для ${serverDisplayName(server.name, server.exit_country, serverCountry(server))}`}
+                aria-label={`Изменить страну для ${server.name}`}
                 onClick={() => {
                     setValue(serverCountry(server))
                     setEditing(true)

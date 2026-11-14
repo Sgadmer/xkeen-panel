@@ -1,4 +1,4 @@
-import { countryLabel, scopeLabel, serverDisplayName, unavailableCountryReason } from '@/lib/format'
+import { countryLabel, scopeLabel, unavailableCountryReason } from '@/lib/format'
 import { serverPathDetail, type ServerCountries } from '@/lib/serverPath'
 import type { AutoScope } from '@/types'
 
@@ -6,7 +6,6 @@ export interface ServiceTarget extends ServerCountries {
     id: string
     name: string
     kind: 'server' | 'profile' | 'pool'
-    country?: string
     sources?: string[]
 }
 
@@ -64,8 +63,7 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             order = sources.length > 1 ? 5 : sources.length ? 4 : 6
             if (target.kind === 'profile') detail = 'Режим провайдера'
             if (target.kind === 'server') {
-                label = serverDisplayName(target.name, target.exit_country)
-                detail = [serverPathDetail(target, fullPath), target.country && avoided.includes(target.country) && 'Только вручную'].filter(Boolean).join(' · ') || undefined
+                detail = [serverPathDetail(target, fullPath, label), target.country && avoided.includes(target.country) && 'Только вручную'].filter(Boolean).join(' · ') || undefined
             }
         }
         let group = groups.get(key)

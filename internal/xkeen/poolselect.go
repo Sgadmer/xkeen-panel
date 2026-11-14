@@ -2,6 +2,7 @@ package xkeen
 
 import (
 	"log"
+	"net"
 	"sort"
 	"strings"
 	"time"
@@ -228,31 +229,23 @@ func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurre
 	return checked
 }
 
-// CountryAllowed uses the observed exit of this configuration when available.
-// An explicitly excluded manual country remains a veto. Without an observation,
-// preserve the existing checks against the label and the connection address.
-// The watchdog additionally requires a known label when the address cannot be checked.
+// Only unlabelled nodes need the conservative local IP exclusion check. It
+// neither resolves provider names nor determines the displayed destination.
 func (sel PoolSelection) CountryAllowed(server models.Server, requireKnown bool) bool {
-	if server.CountryOverride != "" && sel.isAvoidedCode(server.CountryOverride) {
-		return false
-	}
-	if exit := MeasuredExitCountry(server); exit != "" {
-		return !sel.isAvoidedCode(exit)
-	}
-	country := ServerCountry(server)
-	if country != "" && sel.isAvoidedCode(country) {
-		return false
+	if country := ServerCountry(server); country != "" {
+		return !sel.isAvoidedCode(country)
 	}
 	if sel.GeoIP != nil {
-		if code, resolved := sel.GeoIP.Inspect(server.Address); resolved {
-			return code == ""
+		if ip := net.ParseIP(server.Address); ip != nil {
+			_, denied := sel.GeoIP.Match(ip)
+			return !denied
 		}
 	}
-	return !requireKnown || country != ""
+	return !requireKnown
 }
 
 // AutoCountryEligibility denies every alias of a disallowed outbound, including
-// a second subscription with another label or a conflicting exit measurement.
+// a second subscription with a conflicting location label.
 func AutoCountryEligibility(servers []models.Server, allowed func(models.Server) bool) []bool {
 	result := make([]bool, len(servers))
 	denied := make(map[string]bool)

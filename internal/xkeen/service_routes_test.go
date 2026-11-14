@@ -6,14 +6,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 	"xkeen-panel/internal/models"
 )
 
 func TestServiceTargetPathClearsConflictingAliasExit(t *testing.T) {
 	rt := Runtime{XrayConfDir: t.TempDir()}
 	server := poolServers()[0]
-	server.SourceName, server.EntryCountry, server.ExitCountry, server.ExitCheckedAt = "A", "RU", "SE", time.Now()
+	server.SourceName, server.Name = "A", "🇷🇺 → 🇸🇪"
 	alias := server
 	alias.SourceName = "B"
 	view := func() ServiceTarget {
@@ -25,12 +24,12 @@ func TestServiceTargetPathClearsConflictingAliasExit(t *testing.T) {
 		return result.Targets[0]
 	}
 	got := view()
-	if !slices.Equal(got.CountryPath, []string{"RU", "SE"}) || len(got.Sources) != 2 {
+	if !slices.Equal(got.DeclaredCountryPath, []string{"RU", "SE"}) || got.Country != "SE" || len(got.Sources) != 2 {
 		t.Fatal(got)
 	}
-	alias.ExitCountry = "NL"
+	alias.Name = "🇷🇺 → 🇳🇱"
 	got = view()
-	if got.EntryCountry != "RU" || got.ExitCountry != "" || len(got.CountryPath) != 0 {
+	if got.Country != "" || len(got.DeclaredCountryPath) != 0 {
 		t.Fatal(got)
 	}
 }

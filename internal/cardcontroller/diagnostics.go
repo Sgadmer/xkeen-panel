@@ -3,6 +3,7 @@ package cardcontroller
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -12,13 +13,11 @@ import (
 )
 
 type ConnectionExit struct {
-	Kind         string   `json:"kind,omitempty"`
-	Name         string   `json:"name,omitempty"`
-	Country      string   `json:"country,omitempty"`
-	Source       string   `json:"source,omitempty"`
-	EntryCountry string   `json:"entry_country,omitempty"`
-	ExitCountry  string   `json:"exit_country,omitempty"`
-	CountryPath  []string `json:"country_path,omitempty"`
+	Kind                string   `json:"kind,omitempty"`
+	Name                string   `json:"name,omitempty"`
+	Country             string   `json:"country,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	DeclaredCountryPath []string `json:"declared_country_path,omitempty"`
 }
 
 // Connection contains only the metadata needed by the local diagnostics view.
@@ -202,7 +201,8 @@ func nativeConnectionExit(tag, typ string) ConnectionExit {
 		return ConnectionExit{Kind: "reject"}
 	case "http", "socks5", "ss", "shadowsocks", "ssr", "shadowsocksr", "snell", "vmess", "vless", "trojan", "hysteria", "hysteria2",
 		"wireguard", "tuic", "ssh", "anytls", "mieru", "sudoku", "trusttunnel", "masque", "openvpn":
-		return ConnectionExit{Kind: "server", Name: tag}
+		native := models.Server{Name: tag}
+		return ConnectionExit{Kind: "server", Name: tag, Country: xkeen.ServerCountry(native), DeclaredCountryPath: xkeen.ServerCountryPath(native)}
 	}
 	return ConnectionExit{Kind: "unresolved"}
 }
@@ -216,8 +216,8 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 		if id == "" {
 			continue
 		}
-		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.AutoPoolCountry(s), Source: publicRouteName(s.SourceName, nil),
-			EntryCountry: xkeen.MeasuredEntryCountry(s), ExitCountry: xkeen.MeasuredExitCountry(s)}
+		exit := ConnectionExit{Kind: "server", Name: publicRouteName(s.Name, nil), Country: xkeen.ServerCountry(s), Source: publicRouteName(s.SourceName, nil),
+			DeclaredCountryPath: xkeen.ServerCountryPath(s)}
 		if len(s.RawProfile) > 0 {
 			exit.Kind = "unresolved"
 		}
@@ -228,11 +228,8 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 			if prior.Country != exit.Country {
 				exit.Country = ""
 			}
-			if prior.EntryCountry != exit.EntryCountry {
-				exit.EntryCountry = ""
-			}
-			if prior.ExitCountry != exit.ExitCountry {
-				exit.ExitCountry = ""
+			if !slices.Equal(prior.DeclaredCountryPath, exit.DeclaredCountryPath) {
+				exit.DeclaredCountryPath = nil
 			}
 			if prior.Name != exit.Name {
 				exit.Name = "Сервер с несколькими названиями"
@@ -241,7 +238,6 @@ func diagnosticCatalog(servers []models.Server) map[string]ConnectionExit {
 		if exit.Name == "" {
 			exit.Name = "Выход панели"
 		}
-		exit.CountryPath = xkeen.CountryPath(exit.EntryCountry, exit.ExitCountry)
 		index[id] = exit
 	}
 	return index

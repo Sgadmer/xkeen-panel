@@ -2,7 +2,6 @@ package xkeen
 
 import (
 	"testing"
-	"time"
 
 	"xkeen-panel/internal/models"
 )
@@ -111,14 +110,14 @@ func TestPinBestNodeEmptyPool(t *testing.T) {
 	}
 }
 
-func TestPinBestNodeObservesNewlyDeniedExit(t *testing.T) {
+func TestPinBestNodeObservesNewlyDeniedCountry(t *testing.T) {
 	rt, path := liveConfDir(t)
 	servers := poolServers()
 	if _, err := EnablePool(rt, path, servers, PoolOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	for i := range servers {
-		servers[i].ExitCountry, servers[i].ExitCheckedAt = "RU", time.Now()
+		servers[i].Country = "RU"
 	}
 	_, err := PinBestNode(rt, "", path, Topology{BalancerTag: "balancer"}, servers, nil, PoolSelection{AvoidCountries: []string{"RU"}})
 	if err == nil || !contains(err.Error(), "из разрешённых стран") {

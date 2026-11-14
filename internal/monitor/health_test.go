@@ -3,9 +3,22 @@ package monitor
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 )
+
+func TestHealthCheckerMigratesLegacyDefaultURL(t *testing.T) {
+	const legacyURL = "https://www.cloudflare.com/cdn-cgi/trace"
+	urls := []string{"https://custom.invalid/check", legacyURL, "https://another.invalid/cdn-cgi/trace"}
+	checker := NewHealthChecker(urls, 1, 1)
+	if !slices.Equal(checker.urls, []string{urls[0], cloudflareHealthURL, urls[2]}) || urls[1] != legacyURL {
+		t.Fatalf("wrong effective health URLs or modified caller configuration: %v", checker.urls)
+	}
+	if slices.Contains(NewHealthChecker(nil, 1, 1).urls, legacyURL) {
+		t.Fatal("the old geolocation endpoint remains in the defaults")
+	}
+}
 
 func serverWith(t *testing.T, status int, headers map[string]string) string {
 	t.Helper()

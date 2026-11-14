@@ -92,7 +92,7 @@ export function SettingsPage() {
                 <div className='flex min-w-0 flex-col gap-5'>
                     <Group title='Вид панели' footer={appearance.error && <span role='alert' className='text-destructive'>{appearance.error.message}</span>}>
                         <Row label='Показывать полный путь VPN'
-                            hint='Показывать страны входа и выхода. Если выключить, останется только выход.'
+                            hint='Если в подписке указан путь через несколько стран, показывать их по порядку. При выключении видна только конечная страна.'
                             trailing={<Switch label='Показывать полный путь VPN' checked={settings.data?.show_full_path !== false}
                                 disabled={!settings.data || appearance.isPending} onChange={value => appearance.mutate(value)} />} />
                     </Group>

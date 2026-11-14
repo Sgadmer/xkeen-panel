@@ -756,7 +756,6 @@ func (w *Watchdog) checkCandidates(servers []models.Server) ([]models.Server, er
 		Timeout:     time.Duration(w.config.ProbeTimeoutMs) * time.Millisecond,
 		Concurrency: w.config.ProbeConcurrency,
 		StateDir:    w.config.DataDir,
-		GeoIPPath:   w.config.GeoIPPath,
 	})
 }
 
@@ -788,7 +787,7 @@ func (w *Watchdog) AllowedActiveOrBest() *models.Server {
 	return best
 }
 
-// AutomaticServerAllowed checks the measured exit or the legacy address and label.
+// AutomaticServerAllowed applies the country exclusions for replacements.
 func (w *Watchdog) AutomaticServerAllowed(s models.Server) bool {
 	policy := xkeen.PoolSelection{AvoidCountries: w.config.AvoidCountries(), GeoIP: w.geoip}
 	return policy.CountryAllowed(s, true)

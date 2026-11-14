@@ -4,7 +4,7 @@ import { IconArrowsExchange, IconBan, IconChevronRight, IconRefresh } from '@tab
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { CountriesSheet, RefreshSheet, intervalLabel } from '@/components/settingsSheets'
 import { usePanelSettings, useServers, useStatus } from '@/hooks/usePanelData'
-import { countryName, poolCountry, serverCountry } from '@/lib/format'
+import { countryName, serverCountry } from '@/lib/format'
 import { api } from '@/lib/api'
 import type { PanelSettings, Status } from '@/types'
 
@@ -31,9 +31,8 @@ export function ServerAutomation() {
         const codes = new Set<string>()
         for (const server of servers.data ?? []) {
             if (server.protocol === 'xray-profile') continue
-            for (const code of [poolCountry(server), serverCountry(server)]) {
-                if (/^[A-Z]{2}$/.test(code)) codes.add(code)
-            }
+            const code = serverCountry(server)
+            if (/^[A-Z]{2}$/.test(code)) codes.add(code)
         }
         return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
     }, [servers.data])

@@ -127,9 +127,6 @@ type Server struct {
 	ProbeKind       string          `json:"probe_kind,omitempty"`
 	CheckError      string          `json:"check_error,omitempty"`
 	LastChecked     time.Time       `json:"last_checked,omitempty"`
-	EntryCountry    string          `json:"entry_country,omitempty"`
-	ExitCountry     string          `json:"exit_country,omitempty"`
-	ExitCheckedAt   time.Time       `json:"exit_checked_at,omitzero"`
 	Country         string          `json:"country,omitempty"`
 	CountryOverride string          `json:"country_override,omitempty"`
 }

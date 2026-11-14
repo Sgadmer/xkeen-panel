@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
@@ -124,28 +123,27 @@ func TestDiagnosticCatalogProtectsConflictingAliases(t *testing.T) {
 
 func TestDiagnosticCountriesBelongToEachResolvedEndpoint(t *testing.T) {
 	a := poolServer("A", "SO", "10001")
-	a.EntryCountry, a.ExitCountry, a.ExitCheckedAt = "RU", "SE", time.Now()
+	a.Name = "🇷🇺 → 🇸🇪"
 	other := poolServer("A", "SO", "10002")
-	other.EntryCountry, other.ExitCountry, other.ExitCheckedAt = "RU", "NL", time.Now()
-	stale := poolServer("A", "SO", "10003")
-	stale.EntryCountry, stale.ExitCountry, stale.ExitCheckedAt = "RU", "SE", time.Now().Add(-2*xkeen.ExitCountryTTL)
-	forward := diagnosticCatalog([]models.Server{a, other, stale})
-	if got := forward[xkeen.ServiceTargetID(a)]; got.Country != "SE" || !reflect.DeepEqual(got.CountryPath, []string{"RU", "SE"}) {
+	other.Name = "🇷🇺 → 🇳🇱"
+	ordinary := poolServer("A", "FR", "10003")
+	forward := diagnosticCatalog([]models.Server{a, other, ordinary})
+	if got := forward[xkeen.ServiceTargetID(a)]; got.Country != "SE" || !reflect.DeepEqual(got.DeclaredCountryPath, []string{"RU", "SE"}) {
 		t.Fatal(got)
 	}
-	if got := forward[xkeen.ServiceTargetID(other)]; !reflect.DeepEqual(got.CountryPath, []string{"RU", "NL"}) {
+	if got := forward[xkeen.ServiceTargetID(other)]; !reflect.DeepEqual(got.DeclaredCountryPath, []string{"RU", "NL"}) {
 		t.Fatal(got)
 	}
-	if got := forward[xkeen.ServiceTargetID(stale)]; got.EntryCountry != "" || got.ExitCountry != "" || len(got.CountryPath) > 0 {
+	if got := forward[xkeen.ServiceTargetID(ordinary)]; got.Country != "FR" || len(got.DeclaredCountryPath) > 0 {
 		t.Fatal(got)
 	}
 	alias := a
-	alias.ExitCountry = "DE"
+	alias.Name = "🇩🇪 → 🇸🇪"
 	ambiguous := diagnosticCatalog([]models.Server{a, alias})[xkeen.ServiceTargetID(a)]
-	if ambiguous.EntryCountry != "RU" || ambiguous.ExitCountry != "" || len(ambiguous.CountryPath) > 0 {
+	if ambiguous.Country != "SE" || len(ambiguous.DeclaredCountryPath) > 0 {
 		t.Fatal(ambiguous)
 	}
-	if result := nativeConnectionExit("x", "direct"); len(result.CountryPath) > 0 || result.EntryCountry != "" || result.ExitCountry != "" {
+	if result := nativeConnectionExit("x", "direct"); len(result.DeclaredCountryPath) > 0 || result.Country != "" {
 		t.Fatal(result)
 	}
 }

@@ -122,12 +122,10 @@ func TestIsServerAllowedWithGeoIP(t *testing.T) {
 	}{
 		{"ip in RU range", models.Server{Address: "1.2.3.5"}, false},
 		{"ip resolved not avoided", models.Server{Address: "8.8.8.8"}, true},
-		{"geoip authoritative over name", models.Server{Address: "1.2.3.5", Country: "NL"}, false},
-		{"foreign exit through RU entry", models.Server{Address: "1.2.3.5", Country: "RU", ExitCountry: "SO", ExitCheckedAt: time.Now()}, true},
-		{"RU exit through foreign entry", models.Server{Address: "8.8.8.8", Country: "NL", ExitCountry: "RU", ExitCheckedAt: time.Now()}, false},
-		{"manual exclusion vetoes foreign exit", models.Server{Address: "8.8.8.8", CountryOverride: "BY", ExitCountry: "SO", ExitCheckedAt: time.Now()}, false},
-		{"expired evidence uses entry policy", models.Server{Address: "1.2.3.5", Country: "SO", ExitCountry: "SO", ExitCheckedAt: time.Now().Add(-25 * time.Hour)}, false},
-		{"unknown exit uses entry policy", models.Server{Address: "1.2.3.5", Country: "SO", ExitCheckedAt: time.Now()}, false},
+		{"foreign label through RU entry", models.Server{Address: "1.2.3.5", Country: "NL"}, true},
+		{"RU label through foreign entry", models.Server{Address: "8.8.8.8", Country: "RU"}, false},
+		{"manual exclusion vetoes allowed label", models.Server{Address: "8.8.8.8", Country: "SO", CountryOverride: "BY"}, false},
+		{"unlabelled host stays unknown", models.Server{Address: "relay.invalid"}, false},
 	}
 	for _, c := range cases {
 		if got := w.AutomaticServerAllowed(c.s); got != c.want {
