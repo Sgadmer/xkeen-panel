@@ -61,6 +61,18 @@ func ServerCountry(server models.Server) string {
 	if server.CountryOverride != "" {
 		return server.CountryOverride
 	}
+	return SubscriptionCountry(server)
+}
+
+// SubscriptionCountry also reads labels missing from older cached catalogues.
+func SubscriptionCountry(server models.Server) string {
+	// Imports without a display name fall back to the connection address.
+	if server.Name != "" && server.Name == server.Address {
+		return ""
+	}
+	if server.Country == "" {
+		return detectCountry(server.Name)
+	}
 	return server.Country
 }
 

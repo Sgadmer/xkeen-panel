@@ -297,7 +297,7 @@ func (w *Watchdog) sameCountryReplacement(country, failedURI string) (*models.Se
 		if !xkeen.CanBuildServer(s) {
 			continue
 		}
-		if xkeen.ServerCountry(s) != country {
+		if xkeen.ServerCountry(s) != country || !w.AutomaticServerAllowed(s) {
 			continue
 		}
 		candidates = append(candidates, s)

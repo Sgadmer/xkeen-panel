@@ -68,6 +68,9 @@ const countryCollator = new Intl.Collator('ru', { sensitivity: 'base' })
 
 function countryPoolOption(scope: AutoScope, avoided: string[]) {
     const name = scopeLabel(scope)
+    if (scope.country && avoided.includes(scope.country)) {
+        return <option key={scope.id} value={scope.id} disabled>{name} · страна исключена</option>
+    }
     const total = scope.catalog_count ?? scope.member_count
     if (scope.member_count > 0) {
         const count = scope.member_count === total ? total : `${scope.member_count} из ${total}`
@@ -105,16 +108,21 @@ export function ServersPage() {
     const poolCatalog = useMultiPools(mihomo)
     const multipools = poolCatalog.data?.pools ?? []
     const scopes = poolCatalog.data?.scopes ?? []
+    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
+    const isPool = pool?.mode === 'pool'
+    const isAuto = pool?.selection_kind ? pool.selection_kind === 'auto' : isPool && !pool?.pin_manual
     const selectedScope = scopes.find(item => item.id === pool?.auto_scope_id)
     const allLocations = scopes.find(item => item.kind === 'all')
-    const countries = scopes.filter(scope => scope.kind === 'country')
+    const countries = scopes.filter(scope => scope.kind === 'country' && !avoidCountries.includes(scope.country ?? ''))
         .sort((a, b) => countryCollator.compare(countryName(a.country), countryName(b.country)))
     const availableCountries = countries.filter(scope => scope.member_count > 0)
     const unavailableCountries = countries.filter(scope => !scope.member_count
         && (scope.unavailable_reason !== 'no_servers' || scope.id === selectedScope?.id))
+    if (isAuto && selectedScope?.kind === 'country' && avoidCountries.includes(selectedScope.country ?? '')) {
+        unavailableCountries.push(selectedScope)
+    }
     const customScopes = scopes.filter(scope => scope.kind === 'custom')
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
-    const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
     const subscription = useSubscription().data
     const {
@@ -157,7 +165,6 @@ export function ServersPage() {
           )
         : ''
 
-    const isPool = pool?.mode === 'pool'
     const canChoosePool = isPool || (mihomo && scopes.length > 0)
     const view: Tab = canChoosePool ? tab : 'all'
     const setTab = (next: Tab) => {
@@ -213,7 +220,6 @@ export function ServersPage() {
             setCountry.mutate({ id: s.id, country: c }),
     })
 
-    const isAuto = pool?.selection_kind ? pool.selection_kind === 'auto' : isPool && !pool?.pin_manual
     const pickNode = (tag: string, serverId: number) =>
         serverId >= 0 ? select.mutate(serverId) : pin.mutate(tag)
 
@@ -413,7 +419,7 @@ export function ServersPage() {
                                 </select>
                               </div>
                               <p id='auto-pool-scope-hint' className='mt-1 text-[13px] text-muted-foreground'>
-                                  Выберите страну, и роутер будет искать быстрый сервер в ней среди всех ваших подписок.
+                                  Роутер выбирает быстрый сервер среди тех, которые в подписках помечены этой страной.
                               </p>
                             </div>}
                             {mihomo && allLocations?.limit != null && allLocations.eligible_count != null

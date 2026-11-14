@@ -15,6 +15,9 @@ func TestDetectCountry(t *testing.T) {
 		{"Нидерланды-02", "NL"},
 		{"Belarus Minsk", "BY"},
 		{"node-x7zق", ""},
+		{"Сомали", "SO"},
+		{"Somalia", "SO"},
+		{"SO-1", "SO"},
 		{"", ""},
 	}
 	for _, c := range cases {

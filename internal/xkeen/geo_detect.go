@@ -6,8 +6,7 @@ import (
 )
 
 // detectCountry derives an ISO country code from a server name: flag emoji
-// first, then a keyword table. Returns "" when nothing matches. This is a
-// cosmetic fallback — GeoIP is the authoritative source.
+// first, then a keyword table. Returns "" when nothing matches.
 func detectCountry(name string) string {
 	if c := countryFromFlag(name); c != "" {
 		return c
@@ -46,6 +45,7 @@ func countryFromFlag(s string) string {
 
 // countryTokens matches whole tokens — safe for short codes like "ru".
 var countryTokens = map[string]string{
+	"so": "SO", "somalia": "SO", "сомали": "SO",
 	"ru": "RU", "rus": "RU", "russia": "RU", "россия": "RU", "ру": "RU", "рф": "RU",
 	"moscow": "RU", "москва": "RU", "msk": "RU", "spb": "RU", "питер": "RU",
 	"by": "BY", "blr": "BY", "belarus": "BY", "беларусь": "BY", "minsk": "BY", "минск": "BY",

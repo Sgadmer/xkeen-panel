@@ -46,8 +46,8 @@ func TestMultiPoolSourceCountryComposition(t *testing.T) {
 	blockedAlias := duplicate
 	blockedAlias.Country = "RU"
 	members = pool.members(c.poolNodes(append(servers, blockedAlias)))
-	if len(members) != 2 {
-		t.Fatal("blocked endpoint alias was reintroduced")
+	if len(members) != 3 {
+		t.Fatal("excluded alias hid the subscription's allowed location")
 	}
 	pool.SourceIDs = []string{"missing"}
 	if len(pool.members(c.poolNodes(servers))) != 0 {
@@ -143,29 +143,30 @@ func TestCountryCatalogueIndependentOfCurrentScopeAndLimit(t *testing.T) {
 	fast := poolServer("A", "DE", "10001")
 	fast.Latency = 5
 	first, second := poolServer("B", "SE", "10002"), poolServer("C", "SE", "10003")
-	blocked := poolServer("A", "SO", "10004")
-	blocked.Address = "192.0.2.2"
-	alias := blocked
+	somalia := poolServer("A", "SO", "10004")
+	somalia.Address = "ru.relay.example"
+	alias := somalia
 	alias.SourceID = "C"
+	alias.Name, alias.Country = "🇷🇺 Россия", "RU"
 	unsupported := models.Server{SourceID: "C", Country: "NO", RawURI: "unsupported://sample"}
 	composite := models.Server{SourceID: "A", Country: "CN", RawProfile: json.RawMessage(`{"outbounds":[]}`)}
 	c := &Controller{}
-	c.SetCountryPolicy(func() []string { return []string{"RU"} }, func(s models.Server) bool { return s.Address != blocked.Address })
-	nodes := c.poolNodes([]models.Server{fast, first, second, blocked, alias, unsupported, composite})
+	c.SetCountryPolicy(func() []string { return []string{"RU"} }, func(s models.Server) bool { return !xkeen.CountryExcluded(s, []string{"RU"}) })
+	nodes := c.poolNodes([]models.Server{fast, first, second, somalia, alias, unsupported, composite})
 	p := profile{
 		autoLimit: 1,
 		doc:       map[string]interface{}{autoScopeKey: scopeHash("country:DE")},
 		assigned:  map[string]string{"claude": scopeHash("country:FR")},
 	}
 	got := scopes(p, nodes)
-	if all := got[0]; all.MemberCount != 1 || all.EligibleCount != 3 || all.CatalogCount != nil {
+	if all := got[0]; all.MemberCount != 1 || all.EligibleCount != 4 || all.CatalogCount != nil {
 		t.Fatalf("unexpected global pool %+v", all)
 	}
 	type counts struct {
 		catalog, eligible int
 		reason            string
 	}
-	want := map[string]counts{"DE": {1, 1, ""}, "SE": {2, 2, ""}, "SO": {1, 0, "country_filter"},
+	want := map[string]counts{"DE": {1, 1, ""}, "SE": {2, 2, ""}, "SO": {1, 1, ""}, "RU": {1, 0, "country_filter"},
 		"NO": {1, 0, "unsupported"}, "FR": {0, 0, "no_servers"}}
 	for _, scope := range got[1:] {
 		expected, ok := want[scope.Country]

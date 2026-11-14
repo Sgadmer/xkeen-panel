@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/models"
 )
 
@@ -21,7 +20,6 @@ const DefaultPoolMaxNodes = 10
 type PoolSelection struct {
 	MaxNodes         int
 	AvoidCountries   []string
-	GeoIP            *geoip.Matcher
 	ProbeTimeout     time.Duration
 	ProbeConcurrency int
 
@@ -72,7 +70,7 @@ func SelectPoolServers(servers []models.Server, sel PoolSelection) []models.Serv
 		if server.ProbeKind == "https" && server.Latency < 0 {
 			continue
 		}
-		if sel.avoided(server) {
+		if CountryExcluded(server, sel.AvoidCountries) {
 			continue
 		}
 		allowed = append(allowed, server)
@@ -227,25 +225,14 @@ func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurre
 	return checked
 }
 
-func (sel PoolSelection) avoided(server models.Server) bool {
-	if country := ServerCountry(server); country != "" && sel.isAvoidedCode(country) {
-		return true
+// CountryExcluded compares only the subscription label (or the user's correction).
+func CountryExcluded(server models.Server, excluded []string) bool {
+	country := ServerCountry(server)
+	if country == "" {
+		return false
 	}
-
-	// GeoIP is authoritative when the name says nothing useful
-	if sel.GeoIP != nil {
-		if code, resolved := sel.GeoIP.Inspect(server.Address); resolved && code != "" {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (sel PoolSelection) isAvoidedCode(code string) bool {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	for _, avoided := range sel.AvoidCountries {
-		if strings.ToUpper(strings.TrimSpace(avoided)) == code {
+	for _, code := range excluded {
+		if strings.EqualFold(country, strings.TrimSpace(code)) {
 			return true
 		}
 	}
@@ -253,11 +240,10 @@ func (sel PoolSelection) isAvoidedCode(code string) bool {
 }
 
 // PoolSelectionFromConfig builds the selection rules out of the panel config.
-func PoolSelectionFromConfig(cfg *models.Config, matcher *geoip.Matcher) PoolSelection {
+func PoolSelectionFromConfig(cfg *models.Config) PoolSelection {
 	return PoolSelection{
 		MaxNodes:         cfg.PoolMaxNodes,
 		AvoidCountries:   cfg.AvoidCountries(),
-		GeoIP:            matcher,
 		ProbeTimeout:     time.Duration(cfg.ProbeTimeoutMs) * time.Millisecond,
 		ProbeConcurrency: cfg.ProbeConcurrency,
 	}

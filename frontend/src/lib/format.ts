@@ -35,7 +35,7 @@ export function scopeLabel(scope: { kind: string; country?: string; name: string
 export function unavailableCountryReason(scope: AutoScope, avoided: string[]) {
     switch (scope.unavailable_reason) {
         case 'country_filter': return scope.country && avoided.includes(scope.country)
-            ? 'страна исключена в настройках' : 'адреса исключены фильтром стран'
+            ? 'страна исключена в настройках' : 'нет подходящих серверов'
         case 'unsupported': return 'нет совместимых серверов'
         case 'no_servers': return 'больше нет в подписках'
         default: return 'нет подходящих серверов'

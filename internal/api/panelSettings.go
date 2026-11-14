@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/models"
 )
 
@@ -46,8 +45,6 @@ func LoadPanelSettings(cfg *models.Config) error {
 
 type PanelSettingsHandler struct {
 	config          *models.Config
-	geoip           *geoip.Matcher
-	geoPath         string
 	reset           chan<- struct{}
 	mu              sync.Mutex
 	lockCountries   func()
@@ -55,8 +52,8 @@ type PanelSettingsHandler struct {
 	applyCountries  func(context.Context) error
 }
 
-func NewPanelSettingsHandler(cfg *models.Config, matcher *geoip.Matcher, geoPath string, reset chan<- struct{}) *PanelSettingsHandler {
-	return &PanelSettingsHandler{config: cfg, geoip: matcher, geoPath: geoPath, reset: reset}
+func NewPanelSettingsHandler(cfg *models.Config, reset chan<- struct{}) *PanelSettingsHandler {
+	return &PanelSettingsHandler{config: cfg, reset: reset}
 }
 
 // The live group and the saved preference share the same mutation lock as
@@ -87,14 +84,8 @@ func (h *PanelSettingsHandler) stageSettings(next PanelSettings) (string, error)
 	return f.Name(), nil
 }
 
-func (h *PanelSettingsHandler) loadRuntime(s PanelSettings, updateGeo bool) error {
-	if updateGeo && h.geoip != nil && h.geoPath != "" {
-		if err := h.geoip.Reload(h.geoPath, s.AvoidCountries); err != nil {
-			return err
-		}
-	}
+func (h *PanelSettingsHandler) loadRuntime(s PanelSettings) {
 	h.config.SetRuntime(s.AvoidCountries, s.RefreshMinutes*60)
-	return nil
 }
 
 func (h *PanelSettingsHandler) current() PanelSettings {
@@ -155,10 +146,7 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 	defer os.Remove(staged)
 	previous := h.current()
 	changed := !slices.Equal(previous.AvoidCountries, next.AvoidCountries)
-	if err := h.loadRuntime(next, changed); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось прочитать GeoIP для выбранных стран"})
-		return
-	}
+	h.loadRuntime(next)
 	if changed && h.applyCountries != nil {
 		err = h.applyCountries(r.Context())
 	}
@@ -166,8 +154,9 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 		err = os.Rename(staged, panelSettingsPath(h.config.DataDir))
 	}
 	if err != nil {
-		restoreErr := h.loadRuntime(previous, changed)
-		if restoreErr == nil && changed && h.applyCountries != nil {
+		h.loadRuntime(previous)
+		var restoreErr error
+		if changed && h.applyCountries != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			restoreErr = h.applyCountries(ctx)
 			cancel()

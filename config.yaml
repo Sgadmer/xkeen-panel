@@ -59,8 +59,7 @@ health_quorum: 2                # How many services must fail before the node is
 #   - https://web.telegram.org/
 
 # === Geo-avoidance for automatic switching ===
-# Reuses the geoip.dat already installed for Xray
-geoip_path: /opt/etc/xray/dat/geoip_v2fly.dat
+# Uses the country label from the subscription or the manual correction
 auto_switch_avoid_countries:    # Never switch automatically to servers in these countries
   - RU
   - BY

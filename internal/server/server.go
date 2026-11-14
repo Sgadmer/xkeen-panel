@@ -11,7 +11,6 @@ import (
 	"xkeen-panel/internal/api"
 	"xkeen-panel/internal/auth"
 	"xkeen-panel/internal/cardcontroller"
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/keenetic"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
@@ -37,14 +36,13 @@ type Server struct {
 	detector      *xkeen.Detector
 	pool          *xkeen.PoolStore
 	sites         *xkeen.SiteManager
-	geoip         *geoip.Matcher
 	eventBus      *sse.EventBus
 	updater       *updater.Updater
 	settings      *api.PanelSettingsHandler
 	frontendFS    fs.FS
 }
 
-func New(cfg *models.Config, um *auth.UserManager, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, sites *xkeen.SiteManager, matcher *geoip.Matcher, bus *sse.EventBus, upd *updater.Updater, settings *api.PanelSettingsHandler, frontendFS fs.FS) *Server {
+func New(cfg *models.Config, um *auth.UserManager, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, sites *xkeen.SiteManager, bus *sse.EventBus, upd *updater.Updater, settings *api.PanelSettingsHandler, frontendFS fs.FS) *Server {
 	return &Server{
 		config:       cfg,
 		userManager:  um,
@@ -53,7 +51,6 @@ func New(cfg *models.Config, um *auth.UserManager, sub *xkeen.SubscriptionManage
 		detector:     det,
 		pool:         pool,
 		sites:        sites,
-		geoip:        matcher,
 		eventBus:     bus,
 		updater:      upd,
 		settings:     settings,
@@ -92,7 +89,7 @@ func (s *Server) Handler() http.Handler {
 	devicesHandler := api.NewDevicesHandler(s.detector, keenetic.DefaultAddr)
 	setupHandler := api.NewSetupHandler(s.detector, s.subscription, s.watchdog, devicesHandler)
 	sitesHandler := api.NewSitesHandler(s.sites)
-	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool, s.geoip)
+	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool)
 	handlers.Cards = s.Cards
 	handlers.Checks = sse.NewProbeJobs(s.subscription, xkeen.ProbeOptions{Context: lifetime, StateDir: s.config.DataDir, Concurrency: s.config.ProbeConcurrency, Timeout: time.Duration(s.config.ProbeTimeoutMs) * time.Millisecond}, func(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
 		if s.Cards != nil {

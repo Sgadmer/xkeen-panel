@@ -64,7 +64,7 @@ func TestSubscriptionNewSourceSuccessReplacesMissingOldManualNode(t *testing.T) 
 	detector := xkeen.NewDetector(root, "", "", h.config.XrayConfigDir, h.config.RoutingFile, "", "")
 	watchdog := monitor.NewWatchdog(h.config, h.subscription, detector)
 	watchdog.SetPoolStore(h.pool)
-	h = NewHandlers(h.config, h.subscription, watchdog, detector, h.pool, nil)
+	h = NewHandlers(h.config, h.subscription, watchdog, detector, h.pool)
 	state, err := xkeen.EnablePool(detector.Runtime(), h.config.OutboundsFile, previous.Servers, xkeen.PoolOptions{APIAddr: h.config.XrayAPIAddr})
 	if err != nil {
 		t.Fatal(err)

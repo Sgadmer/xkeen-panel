@@ -40,7 +40,7 @@ func TestSourceHTTPFailedRefreshDoesNotBlockOtherSource(t *testing.T) {
 	detector := xkeen.NewDetector(root, "", initPath, "", "", path, "")
 	cfg := &models.Config{DataDir: root}
 	wd := monitor.NewWatchdog(cfg, manager, detector)
-	h := NewHandlers(cfg, manager, wd, detector, xkeen.NewPoolStore(root), nil)
+	h := NewHandlers(cfg, manager, wd, detector, xkeen.NewPoolStore(root))
 	h.Cards = cardcontroller.New(path, root, xkeen.Runtime{Core: xkeen.CoreMihomo}, manager.GetServers)
 	// Only native provider refresh uses Mihomo HTTP in this unmanaged profile.
 	// Its URL map is empty, and no card routes have been activated.

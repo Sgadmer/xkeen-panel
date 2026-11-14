@@ -55,7 +55,6 @@ type Config struct {
 	HealthQuorum        int      `yaml:"health_quorum"`         // how many services must fail
 
 	// Countries to avoid when switching automatically
-	GeoIPPath                string   `yaml:"geoip_path"`
 	AutoSwitchAvoidCountries []string `yaml:"auto_switch_avoid_countries"`
 
 	// Trust proxy headers (X-Forwarded-For/Host/Proto). Enable ONLY behind a

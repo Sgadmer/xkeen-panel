@@ -44,9 +44,6 @@ func NewComponentsHandler(h *Handlers) *ComponentsHandler {
 			if e := componentsHTTPSCheck(ctx, h.watchdog.ProbeAddress(), h.config.CheckURL); e != nil {
 				return e
 			}
-			if h.geoip != nil {
-				_ = h.geoip.Reload(h.config.GeoIPPath, h.config.AvoidCountries())
-			}
 			return nil
 		},
 		Firmware: func() string { return componentsFirmware(h.detector.Runtime().XkeenJSON) },

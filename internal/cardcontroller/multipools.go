@@ -75,21 +75,16 @@ type poolNode struct {
 
 func (c *Controller) poolNodes(servers []models.Server) []poolNode {
 	filter := c.avoidCountries != nil && len(c.avoidCountries()) > 0
-	denied := map[string]bool{}
 	nodes := make([]poolNode, 0, len(servers))
 	for _, s := range servers {
 		if len(s.RawProfile) != 0 {
 			continue
 		}
 		id := xkeen.ServiceTargetID(s)
-		if id != "" && filter && (c.autoAllowed == nil || !c.autoAllowed(s)) {
-			denied[id] = true
-		}
-		// Keep unsupported subscription entries for the country catalogue only.
-		nodes = append(nodes, poolNode{id: id, server: s})
-	}
-	for i := range nodes {
-		nodes[i].allowed = nodes[i].id != "" && !denied[nodes[i].id]
+		// Each subscription labels its own locations. Deduplicate only after
+		// applying this entry's country and the requested pool's scope.
+		allowed := id != "" && (!filter || c.autoAllowed != nil && c.autoAllowed(s))
+		nodes = append(nodes, poolNode{id: id, server: s, allowed: allowed})
 	}
 	sort.SliceStable(nodes, func(i, j int) bool {
 		a, b := nodes[i], nodes[j]

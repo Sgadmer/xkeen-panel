@@ -18,7 +18,6 @@ import (
 	"xkeen-panel/internal/auth"
 	"xkeen-panel/internal/cardcontroller"
 	"xkeen-panel/internal/demo"
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/localtz"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
@@ -178,7 +177,7 @@ func main() {
 		return nil
 	}
 	if rt.Core == xkeen.CoreXray {
-		if err := api.NewHandlers(cfg, subManager, watchdog, detector, poolStore, nil).InitializeServiceRoutes(); err != nil {
+		if err := api.NewHandlers(cfg, subManager, watchdog, detector, poolStore).InitializeServiceRoutes(); err != nil {
 			log.Printf("Восстановление маршрутов сервисов не подтверждено: %v", err)
 		}
 
@@ -202,21 +201,8 @@ func main() {
 		}
 	}
 
-	// GeoIP reuses the geoip.dat already installed for Xray
-	var geoMatcher *geoip.Matcher
-	geoPath := geoip.FindDat(cfg.GeoIPPath)
-	if geoPath == "" {
-		log.Printf("GeoIP: geoip.dat не найден (%s) — гео-фильтр по IP отключён, используется определение по имени", cfg.GeoIPPath)
-	} else if matcher, err := geoip.Load(geoPath, cfg.AvoidCountries()); err != nil {
-		log.Printf("GeoIP: ошибка загрузки %s: %v — гео-фильтр по IP отключён", geoPath, err)
-	} else {
-		geoMatcher = matcher
-		watchdog.SetGeoIP(matcher)
-		log.Printf("GeoIP: загружен %s (избегаемые страны: %v)", geoPath, cfg.AvoidCountries())
-	}
-
 	refreshReset := make(chan struct{}, 1)
-	panelSettings := api.NewPanelSettingsHandler(cfg, geoMatcher, geoPath, refreshReset)
+	panelSettings := api.NewPanelSettingsHandler(cfg, refreshReset)
 	if cards != nil {
 		cards.SetCountryPolicy(cfg.AvoidCountries, watchdog.AutomaticServerAllowed)
 		cards.SetAutoPoolLimit(cfg.PoolMaxNodes)
@@ -264,7 +250,7 @@ func main() {
 	go func() { defer workers.Done(); sites.Run(ctx) }()
 	go func() {
 		defer workers.Done()
-		runSubscriptionRefresh(ctx, cfg, subManager, watchdog, detector, poolStore, geoMatcher, eventBus, refreshReset, cards)
+		runSubscriptionRefresh(ctx, cfg, subManager, watchdog, detector, poolStore, eventBus, refreshReset, cards)
 	}()
 	if cards != nil {
 		workers.Add(1)
@@ -313,7 +299,7 @@ func main() {
 	}
 
 	// HTTP server
-	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, geoMatcher, eventBus, upd, panelSettings, frontendFS)
+	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, eventBus, upd, panelSettings, frontendFS)
 	if push, err := notifications.New(cfg.DataDir); err == nil {
 		srv.Notifications = push
 		go push.Run(ctx, func(ctx context.Context) notifications.Snapshot {
@@ -414,8 +400,8 @@ func panelResponds(address string) bool {
 // runSubscriptionRefresh refreshes the subscription on a timer. The core is
 // restarted only when the active server was actually replaced (it vanished from
 // the subscription) — a refresh must not drop a working connection.
-func runSubscriptionRefresh(ctx context.Context, cfg *models.Config, sm *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, matcher *geoip.Matcher, bus *sse.EventBus, reset <-chan struct{}, cards *cardcontroller.Controller) {
-	handler := api.NewHandlers(cfg, sm, wd, det, pool, matcher)
+func runSubscriptionRefresh(ctx context.Context, cfg *models.Config, sm *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, bus *sse.EventBus, reset <-chan struct{}, cards *cardcontroller.Controller) {
+	handler := api.NewHandlers(cfg, sm, wd, det, pool)
 	handler.Cards = cards
 	for {
 		var tick <-chan time.Time
@@ -486,7 +472,6 @@ func loadConfig(path string) (*models.Config, error) {
 		HealthCheckEvery:         5,
 		HealthFailThreshold:      2,
 		HealthQuorum:             2,
-		GeoIPPath:                "/opt/etc/xray/dat/geoip_v2fly.dat",
 		AutoSwitchAvoidCountries: []string{"RU", "BY"},
 	}
 

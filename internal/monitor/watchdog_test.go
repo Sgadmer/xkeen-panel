@@ -2,14 +2,12 @@ package monitor
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
 )
@@ -18,26 +16,6 @@ func newWatchdog(t *testing.T, cfg *models.Config) *Watchdog {
 	t.Helper()
 	sub := xkeen.NewSubscriptionManager(t.TempDir())
 	return NewWatchdog(cfg, sub, xkeen.NewDetector(t.TempDir(), "", "", "", "", "", ""))
-}
-
-func TestIsAvoidedCountry(t *testing.T) {
-	w := newWatchdog(t, &models.Config{AutoSwitchAvoidCountries: []string{"RU", "BY"}})
-
-	cases := []struct {
-		cc   string
-		want bool
-	}{
-		{"RU", true},
-		{"ru", true},
-		{"BY", true},
-		{"NL", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		if got := w.isAvoidedCountry(c.cc); got != c.want {
-			t.Errorf("isAvoidedCountry(%q) = %v, want %v", c.cc, got, c.want)
-		}
-	}
 }
 
 func TestBlacklist(t *testing.T) {
@@ -84,7 +62,7 @@ func TestBlacklistTTLZero(t *testing.T) {
 	}
 }
 
-func TestIsServerAllowedNilGeoIP(t *testing.T) {
+func TestAutomaticServerUsesSubscriptionCountry(t *testing.T) {
 	w := newWatchdog(t, &models.Config{AutoSwitchAvoidCountries: []string{"RU", "BY"}})
 
 	cases := []struct {
@@ -94,35 +72,13 @@ func TestIsServerAllowedNilGeoIP(t *testing.T) {
 	}{
 		{"allowed country", models.Server{Country: "NL"}, true},
 		{"avoided country", models.Server{Country: "RU"}, false},
-		{"unknown country strict", models.Server{Country: ""}, false},
+		{"unknown country", models.Server{Address: "ru.relay.example"}, true},
+		{"Somalia with a Russian relay", models.Server{Name: "🇸🇴 Обход", Address: "ru.relay.example", Country: "SO"}, true},
+		{"excluded label with a foreign relay", models.Server{Address: "se.relay.example", Country: "RU"}, false},
+		{"unlabelled hostname from a previous import", models.Server{Address: "ru.relay.example", Name: "ru.relay.example", Country: "RU"}, true},
+		{"old text-only subscription label", models.Server{Name: "Сомали", Address: "ru.relay.example"}, true},
 		{"override wins", models.Server{Country: "RU", CountryOverride: "NL"}, true},
 		{"override avoided", models.Server{Country: "NL", CountryOverride: "RU"}, false},
-	}
-	for _, c := range cases {
-		if got := w.AutomaticServerAllowed(c.s); got != c.want {
-			t.Errorf("%s: isServerAllowed = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-func TestIsServerAllowedWithGeoIP(t *testing.T) {
-	path := buildGeoIP(t)
-	matcher, err := geoip.Load(path, []string{"RU"})
-	if err != nil {
-		t.Fatalf("geoip.Load: %v", err)
-	}
-
-	w := newWatchdog(t, &models.Config{AutoSwitchAvoidCountries: []string{"RU", "BY"}})
-	w.SetGeoIP(matcher)
-
-	cases := []struct {
-		name string
-		s    models.Server
-		want bool
-	}{
-		{"ip in RU range", models.Server{Address: "1.2.3.5"}, false},
-		{"ip resolved not avoided", models.Server{Address: "8.8.8.8"}, true},
-		{"geoip authoritative over name", models.Server{Address: "1.2.3.5", Country: "NL"}, false},
 	}
 	for _, c := range cases {
 		if got := w.AutomaticServerAllowed(c.s); got != c.want {
@@ -176,56 +132,4 @@ func TestRotateLog(t *testing.T) {
 	if !bytes.Equal(got, small) {
 		t.Fatal("a small file must not change")
 	}
-}
-
-// --- protobuf encoder for building an Xray-format geoip.dat ---
-
-func uvarint(v uint64) []byte {
-	b := make([]byte, binary.MaxVarintLen64)
-	n := binary.PutUvarint(b, v)
-	return b[:n]
-}
-
-func pbTag(field, wire int) []byte { return uvarint(uint64(field<<3 | wire)) }
-
-func pbLen(field int, p []byte) []byte {
-	var b bytes.Buffer
-	b.Write(pbTag(field, 2))
-	b.Write(uvarint(uint64(len(p))))
-	b.Write(p)
-	return b.Bytes()
-}
-
-func pbVarint(field int, v uint64) []byte {
-	var b bytes.Buffer
-	b.Write(pbTag(field, 0))
-	b.Write(uvarint(v))
-	return b.Bytes()
-}
-
-func pbCIDR(ip []byte, prefix uint64) []byte {
-	var b bytes.Buffer
-	b.Write(pbLen(1, ip))
-	b.Write(pbVarint(2, prefix))
-	return b.Bytes()
-}
-
-func pbGeo(code string, cidrs ...[]byte) []byte {
-	var b bytes.Buffer
-	b.Write(pbLen(1, []byte(code)))
-	for _, c := range cidrs {
-		b.Write(pbLen(2, c))
-	}
-	return b.Bytes()
-}
-
-func buildGeoIP(t *testing.T) string {
-	t.Helper()
-	entry := pbGeo("RU", pbCIDR([]byte{1, 2, 3, 0}, 24))
-	data := pbLen(1, entry)
-	path := filepath.Join(t.TempDir(), "geoip.dat")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }

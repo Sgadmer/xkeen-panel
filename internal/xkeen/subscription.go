@@ -148,8 +148,7 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	return nil
 }
 
-// SetCountryOverride sets a server's country by hand — needed in strict mode when
-// detection could not resolve it.
+// SetCountryOverride saves a manual correction to the subscription's country.
 func (sm *SubscriptionManager) SetCountryOverride(id int, country string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

@@ -11,6 +11,7 @@ import (
 )
 
 func publicServer(server models.Server) models.Server {
+	server.Country = xkeen.SubscriptionCountry(server)
 	server.RawURI = ""
 	server.RawOutbound = nil
 	server.RawProfile = nil

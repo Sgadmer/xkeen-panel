@@ -167,6 +167,10 @@ func TestSameCountryReplacement(t *testing.T) {
 	if _, err := w.sameCountryReplacement("DE", ""); err == nil {
 		t.Error("a country absent from the subscription has no replacement")
 	}
+	w.config.SetRuntime([]string{"FI"}, 0)
+	if _, err := w.sameCountryReplacement("FI", fiURI); err == nil {
+		t.Error("automatic replacement selected an excluded country")
+	}
 }
 
 // A hand-picked country stays picked: the failed server is swapped for another

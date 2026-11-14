@@ -40,12 +40,12 @@ func TestMihomoPanelKeepsSettingsAndNavigation(t *testing.T) {
 	detector := xkeen.NewDetector(dir, "", "", "", "", "", "")
 	wd := monitor.NewWatchdog(cfg, sub, detector)
 	reset := make(chan struct{}, 1)
-	settings := api.NewPanelSettingsHandler(cfg, nil, "", reset)
+	settings := api.NewPanelSettingsHandler(cfg, reset)
 	frontend := fstest.MapFS{
 		"index.html":    {Data: []byte("dashboard")},
 		"manifest.json": {Data: []byte("manifest")},
 	}
-	s := New(cfg, user, sub, wd, detector, xkeen.NewPoolStore(dir), nil, nil,
+	s := New(cfg, user, sub, wd, detector, xkeen.NewPoolStore(dir), nil,
 		sse.NewEventBus(), updater.New(updater.Options{DataDir: dir}), settings, frontend)
 	s.Cards = cardcontroller.New(dir+"/missing.yaml", dir, xkeen.Runtime{}, sub.GetServers)
 	s.CardsHost = "127.0.0.1"

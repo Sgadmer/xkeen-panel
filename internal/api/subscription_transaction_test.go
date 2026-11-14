@@ -47,7 +47,7 @@ func transactionHandlers(t *testing.T) (*Handlers, models.SubscriptionData, []mo
 	detector := xkeen.NewDetector(root, "", "", dir, routingPath, "", "")
 	watchdog := monitor.NewWatchdog(cfg, sub, detector)
 	watchdog.SetPoolStore(pool)
-	h := NewHandlers(cfg, sub, watchdog, detector, pool, nil)
+	h := NewHandlers(cfg, sub, watchdog, detector, pool)
 	fresh := []models.Server{{ID: 0, Name: "FI", Country: "FI", Protocol: "vless", RawURI: transactionNewURI, Latency: 25, ProbeKind: "https", LastChecked: time.Now()}}
 	return h, previous, fresh
 }

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/sse"
 	"xkeen-panel/internal/version"
@@ -47,7 +46,6 @@ type Watchdog struct {
 	logs         []string
 	logFile      *os.File
 	eventBus     *sse.EventBus
-	geoip        *geoip.Matcher
 	blacklist    map[string]time.Time // keyed by RawURI, which survives reindexing
 
 	health          *HealthChecker
@@ -101,11 +99,6 @@ func (w *Watchdog) SetMihomoRecovery(recover func(context.Context) (string, erro
 // SetEventBus wires the SSE event bus.
 func (w *Watchdog) SetEventBus(bus *sse.EventBus) {
 	w.eventBus = bus
-}
-
-// SetGeoIP wires the matcher used to geo-filter automatic switching.
-func (w *Watchdog) SetGeoIP(m *geoip.Matcher) {
-	w.geoip = m
 }
 
 // publishStatus pushes the current status over SSE.
@@ -484,7 +477,7 @@ func (w *Watchdog) rotateExit(rt xkeen.Runtime, top xkeen.Topology) {
 // pinBest picks the fastest node that is not currently condemned and pins it.
 func (w *Watchdog) pinBest(rt xkeen.Runtime, top xkeen.Topology) (string, error) {
 	if xkeen.HasActiveProfile(w.config.OutboundsFile) {
-		eligible := xkeen.SelectPoolServers(w.subscription.GetServers(), xkeen.PoolSelectionFromConfig(w.config, w.geoip))
+		eligible := xkeen.SelectPoolServers(w.subscription.GetServers(), xkeen.PoolSelectionFromConfig(w.config))
 		if len(eligible) == 0 {
 			return "", fmt.Errorf("нет самостоятельных серверов для автовыбора; профиль сохранён")
 		}
@@ -664,7 +657,7 @@ func (w *Watchdog) handlePoolFailover(reason string, top xkeen.Topology, dead bo
 	state.Selector = top.Selector()
 
 	result, err := xkeen.RefreshPool(w.detector.Runtime(), w.config.OutboundsFile, w.config.XrayAPIAddr, servers, state,
-		xkeen.PoolSelectionFromConfig(w.config, w.geoip))
+		xkeen.PoolSelectionFromConfig(w.config))
 	switch {
 	case err != nil:
 		w.writeLog("[ERROR] Пул не синхронизирован: %v", err)
@@ -717,7 +710,7 @@ func (w *Watchdog) selectBest() (*models.Server, error) {
 	}
 
 	if skippedGeo > 0 {
-		w.writeLog("[GEO] Пропущено %d сервер(ов) из заблокированных стран / нераспознанных", skippedGeo)
+		w.writeLog("[GEO] Пропущено серверов из исключённых стран: %d", skippedGeo)
 	}
 
 	if len(candidates) == 0 {
@@ -786,38 +779,9 @@ func (w *Watchdog) AllowedActiveOrBest() *models.Server {
 	return best
 }
 
-// AutomaticServerAllowed decides whether automatic switching may use a server. GeoIP is
-// the primary signal (it proves the server is not in a blocked country); the
-// name is the fallback.
+// AutomaticServerAllowed applies the same country policy as the automatic pool.
 func (w *Watchdog) AutomaticServerAllowed(s models.Server) bool {
-	// Manual override or name-derived country: an avoided one is an immediate no
-	effCountry := xkeen.ServerCountry(s)
-	if effCountry != "" && w.isAvoidedCountry(effCountry) {
-		return false
-	}
-
-	// GeoIP is the authoritative check, against the real IP
-	if w.geoip != nil {
-		avoidCC, resolved := w.geoip.Inspect(s.Address)
-		if resolved {
-			return avoidCC == "" // resolves and is not in an avoided country
-		}
-		// does not resolve, fall through to the name check
-	}
-
-	// Fallback (no GeoIP, or it did not resolve): strict mode — allow only when
-	// the name yields a known, permitted country
-	return effCountry != ""
-}
-
-func (w *Watchdog) isAvoidedCountry(cc string) bool {
-	cc = strings.ToUpper(cc)
-	for _, a := range w.config.AvoidCountries() {
-		if strings.ToUpper(strings.TrimSpace(a)) == cc {
-			return true
-		}
-	}
-	return false
+	return !xkeen.CountryExcluded(s, w.config.AvoidCountries())
 }
 
 func (w *Watchdog) blacklistServer(uri string) {

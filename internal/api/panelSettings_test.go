@@ -15,7 +15,7 @@ import (
 
 func TestRejectedMihomoCountryPolicyPreservesStoredPreference(t *testing.T) {
 	cfg := &models.Config{DataDir: t.TempDir(), AutoSwitchAvoidCountries: []string{"RU"}, SubscriptionRefreshInterval: 1800}
-	h := NewPanelSettingsHandler(cfg, nil, "", nil)
+	h := NewPanelSettingsHandler(cfg, nil)
 	var calls []string
 	h.BindCountryPolicy(func() {}, func() {}, func(context.Context) error {
 		countries := strings.Join(cfg.AvoidCountries(), ",")
@@ -46,7 +46,7 @@ func putSettings(h *PanelSettingsHandler, body string) *httptest.ResponseRecorde
 func TestPanelSettingsApplyAndPersist(t *testing.T) {
 	cfg := &models.Config{DataDir: t.TempDir(), AutoSwitchAvoidCountries: []string{"RU"}, SubscriptionRefreshInterval: 1800}
 	reset := make(chan struct{}, 1)
-	h := NewPanelSettingsHandler(cfg, nil, "", reset)
+	h := NewPanelSettingsHandler(cfg, reset)
 
 	rec := putSettings(h, `{"avoid_countries":["ru","by","RU"],"subscription_refresh_minutes":60}`)
 	if rec.Code != http.StatusOK {
@@ -76,7 +76,7 @@ func TestPanelSettingsApplyAndPersist(t *testing.T) {
 
 func TestPanelSettingsRejectsBadInput(t *testing.T) {
 	cfg := &models.Config{DataDir: t.TempDir(), SubscriptionRefreshInterval: 1800}
-	h := NewPanelSettingsHandler(cfg, nil, "", make(chan struct{}, 1))
+	h := NewPanelSettingsHandler(cfg, make(chan struct{}, 1))
 
 	for _, body := range []string{
 		`{"avoid_countries":["RUS"],"subscription_refresh_minutes":30}`,
@@ -95,7 +95,7 @@ func TestPanelSettingsRejectsBadInput(t *testing.T) {
 
 func TestPanelSettingsZeroTurnsRefreshOff(t *testing.T) {
 	cfg := &models.Config{DataDir: t.TempDir(), SubscriptionRefreshInterval: 1800}
-	h := NewPanelSettingsHandler(cfg, nil, "", make(chan struct{}, 1))
+	h := NewPanelSettingsHandler(cfg, make(chan struct{}, 1))
 
 	if rec := putSettings(h, `{"avoid_countries":[],"subscription_refresh_minutes":0}`); rec.Code != http.StatusOK {
 		t.Fatalf("PUT = %d", rec.Code)

@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 	"xkeen-panel/internal/cardcontroller"
-	"xkeen-panel/internal/geoip"
 	"xkeen-panel/internal/mihomo"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
@@ -28,12 +27,11 @@ type Handlers struct {
 	watchdog     *monitor.Watchdog
 	detector     *xkeen.Detector
 	pool         *xkeen.PoolStore
-	geoip        *geoip.Matcher
 	restartCore  func(string) (string, error) // optional deterministic test runner
 }
 
-func NewHandlers(cfg *models.Config, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, matcher *geoip.Matcher) *Handlers {
-	return &Handlers{config: cfg, subscription: sub, watchdog: wd, detector: det, pool: pool, geoip: matcher}
+func NewHandlers(cfg *models.Config, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore) *Handlers {
+	return &Handlers{config: cfg, subscription: sub, watchdog: wd, detector: det, pool: pool}
 }
 
 // HandleStatus — GET /api/status
@@ -134,7 +132,7 @@ func (h *Handlers) applySubscription(servers []models.Server, resp map[string]in
 			resp["pool"] = sync
 		}
 	} else if !bootstrapped && rt.Core == xkeen.CoreXray {
-		state, err := xkeen.EnablePool(rt, h.config.OutboundsFile, servers, xkeen.PoolOptions{APIAddr: h.config.XrayAPIAddr, Selection: xkeen.PoolSelectionFromConfig(h.config, h.geoip)})
+		state, err := xkeen.EnablePool(rt, h.config.OutboundsFile, servers, xkeen.PoolOptions{APIAddr: h.config.XrayAPIAddr, Selection: xkeen.PoolSelectionFromConfig(h.config)})
 		if err != nil {
 			return err
 		}
@@ -162,7 +160,7 @@ func (h *Handlers) applySubscription(servers []models.Server, resp map[string]in
 		if err := h.waitForBalancer(rt); err != nil {
 			return err
 		}
-		if preferred == nil && len(xkeen.SelectPoolServers(servers, xkeen.PoolSelectionFromConfig(h.config, h.geoip))) == 0 {
+		if preferred == nil && len(xkeen.SelectPoolServers(servers, xkeen.PoolSelectionFromConfig(h.config))) == 0 {
 			for i := range servers {
 				if servers[i].ProbeKind == "https" && servers[i].Latency >= 0 && xkeen.CanBuildServer(servers[i]) {
 					selected := servers[i]
@@ -191,7 +189,7 @@ func (h *Handlers) bootstrapIfEmpty(servers []models.Server) (bool, error) {
 
 	state, err := xkeen.Bootstrap(rt, h.config.OutboundsFile, servers, xkeen.PoolOptions{
 		APIAddr:   h.config.XrayAPIAddr,
-		Selection: xkeen.PoolSelectionFromConfig(h.config, h.geoip),
+		Selection: xkeen.PoolSelectionFromConfig(h.config),
 	})
 	if err != nil {
 		log.Printf("[BOOTSTRAP] Не удалось собрать конфиг: %v", err)
@@ -228,7 +226,7 @@ func (h *Handlers) refreshPool(servers []models.Server) (xkeen.SyncResult, error
 	}
 
 	result, err := xkeen.RefreshPool(h.detector.Runtime(), h.config.OutboundsFile, h.config.XrayAPIAddr, servers, state,
-		xkeen.PoolSelectionFromConfig(h.config, h.geoip))
+		xkeen.PoolSelectionFromConfig(h.config))
 	if err != nil {
 		log.Printf("[POOL] Синхронизация с подпиской не выполнена: %v", err)
 		return result, err
@@ -731,7 +729,7 @@ func (h *Handlers) HandlePoolEnable(w http.ResponseWriter, r *http.Request) {
 	rt := h.detector.Runtime()
 	state, err := xkeen.EnablePool(rt, h.config.OutboundsFile, servers, xkeen.PoolOptions{
 		APIAddr:   h.config.XrayAPIAddr,
-		Selection: xkeen.PoolSelectionFromConfig(h.config, h.geoip),
+		Selection: xkeen.PoolSelectionFromConfig(h.config),
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -889,7 +887,7 @@ func (h *Handlers) HandlePoolSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := xkeen.RefreshPool(rt, h.config.OutboundsFile, h.config.XrayAPIAddr, h.subscription.GetServers(), state,
-		xkeen.PoolSelectionFromConfig(h.config, h.geoip))
+		xkeen.PoolSelectionFromConfig(h.config))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
