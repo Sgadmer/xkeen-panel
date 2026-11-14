@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { IconArrowsExchange, IconBan, IconChevronRight, IconRefresh } from '@tabler/icons-react'
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { CountriesSheet, RefreshSheet, intervalLabel } from '@/components/settingsSheets'
 import { usePanelSettings, useServers, useStatus } from '@/hooks/usePanelData'
-import { serverCountry } from '@/lib/format'
+import { countryName, serverCountry } from '@/lib/format'
 import { api } from '@/lib/api'
 import type { PanelSettings, Status } from '@/types'
 
@@ -26,7 +26,15 @@ export function ServerAutomation() {
         onSettled: () => qc.invalidateQueries({ queryKey: ['status'] }),
     })
 
-    const servers = useServers().data ?? []
+    const servers = useServers()
+    const countries = useMemo(() => {
+        const codes = new Set<string>()
+        for (const server of servers.data ?? []) {
+            const code = serverCountry(server).trim()
+            if (server.protocol !== 'xray-profile' && /^[A-Z]{2}$/.test(code)) codes.add(code)
+        }
+        return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
+    }, [servers.data])
     const [sheet, setSheet] = useState<'countries' | 'refresh' | null>(null)
     const settings = usePanelSettings()
     const saveSettings = useMutation({
@@ -39,7 +47,9 @@ export function ServerAutomation() {
             }
         },
     })
-    const avoid = settings.data?.avoid_countries ?? []
+    const avoid = [...new Set((settings.data?.avoid_countries ?? []).map(code => code.trim().toUpperCase()))]
+    const visibleAvoid = countries.filter(code => avoid.includes(code))
+    const countryStatus = !servers.data && (servers.isError ? 'Каталог недоступен' : 'Загрузка…')
     const refresh = settings.data?.subscription_refresh_minutes ?? 0
 
     return (
@@ -66,7 +76,7 @@ export function ServerAutomation() {
                     icon={icon('#ff453a', IconBan)}
                     label='Не выбирать страны'
                     hint='Исключить из автовыбора и автоматической замены'
-                    detail={avoid.length ? avoid.join(', ') : 'Нет'}
+                    detail={countryStatus || (settings.data ? visibleAvoid.join(', ') || 'Нет' : '—')}
                     onClick={() => setSheet('countries')}
                     disabled={!settings.data}
                     trailing={chevron}
@@ -85,7 +95,9 @@ export function ServerAutomation() {
                 open={sheet === 'countries'}
                 onClose={() => setSheet(null)}
                 value={avoid}
-                candidates={servers.map(serverCountry).filter(Boolean)}
+                candidates={countries}
+                catalogStatus={countryStatus || undefined}
+                onRetry={servers.isError ? () => { void servers.refetch() } : undefined}
                 onSave={avoid_countries =>
                     saveSettings.mutateAsync({
                         avoid_countries,

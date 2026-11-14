@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
     IconActivityHeartbeat,
     IconCheck,
@@ -535,15 +535,7 @@ export function ServersPage() {
                         </div>
                     )}
 
-                    <div className='grid min-w-0 items-start gap-4 lg:grid-cols-2'>
-                        {groups.map(g => (
-                            <Group key={g.code} title={groupTitle(g)}>
-                                {g.list.map(s => (
-                                    <ServerRow key={s.id} {...rowProps(s)} />
-                                ))}
-                            </Group>
-                        ))}
-                    </div>
+                    <CountryCatalog groups={groups} rowProps={rowProps} />
 
                     {mihomo && multipools.some(item => matches(query, item.name)) && (
                         <Group title='Мультипулы'>
@@ -725,8 +717,44 @@ function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
     </span>
 }
 
-function groupTitle(g: CountryGroup) {
-    return `${countryLabel(g.code) || 'Страна не определена'} · ${g.list.length}`
+function CountryCatalog({ groups, rowProps }: {
+    groups: CountryGroup[]
+    rowProps: (server: Server) => React.ComponentProps<typeof ServerRow>
+}) {
+    const grid = useRef<HTMLDivElement>(null)
+    useLayoutEffect(() => {
+        const catalog = grid.current
+        if (!catalog || typeof ResizeObserver === 'undefined') return
+        // Size each span to its card so the next country fits below the shorter column.
+        const sizeCard = (card: HTMLElement, height: number) => {
+            const rows = Math.ceil((height + 12) / 8)
+            card.style.setProperty('--country-span', String(rows))
+        }
+        const observer = new ResizeObserver(entries => {
+            for (const entry of entries) {
+                sizeCard(entry.target as HTMLElement, entry.borderBoxSize?.[0]?.blockSize ?? entry.target.getBoundingClientRect().height)
+            }
+        })
+        const cards = Array.from(catalog.querySelectorAll<HTMLElement>(':scope > section'))
+        const heights = cards.map(card => card.getBoundingClientRect().height)
+        cards.forEach((card, index) => {
+            sizeCard(card, heights[index])
+            observer.observe(card)
+        })
+        catalog.dataset.packed = 'true'
+        return () => {
+            observer.disconnect()
+            delete catalog.dataset.packed
+        }
+    }, [groups])
+
+    return <div ref={grid} className='country-catalog grid min-w-0 items-start gap-3 lg:grid-cols-2 lg:gap-x-4'>
+        {groups.map(group => <Group key={group.code}
+            className='[&>h2]:text-[15px] [&>h2]:font-semibold [&>h2]:normal-case [&>h2]:text-foreground'
+            title={`${countryLabel(group.code) || 'Страна не определена'} · ${group.list.length}`}>
+            {group.list.map(server => <ServerRow key={server.id} {...rowProps(server)} />)}
+        </Group>)}
+    </div>
 }
 
 function groupServers(servers: Server[], order: CountryOrder) {

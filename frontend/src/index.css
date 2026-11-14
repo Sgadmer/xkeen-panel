@@ -150,6 +150,17 @@
     }
 }
 
+@media (min-width: 64rem) {
+    .country-catalog[data-packed] {
+        grid-auto-rows: 8px;
+        row-gap: 0;
+    }
+
+    .country-catalog[data-packed] > section {
+        grid-row-end: span var(--country-span);
+    }
+}
+
 /* Native pickers can render outside the page, where a translucent fill loses its backdrop. */
 .dark select {
     color-scheme: dark;

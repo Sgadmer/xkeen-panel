@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IconCheck } from '@tabler/icons-react'
 import { Group, Row } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
-import { countryLabel, countryName } from '@/lib/format'
+import { countryLabel } from '@/lib/format'
 
 const check = <IconCheck className='size-5 shrink-0 text-tint' stroke={2.6} />
 
@@ -11,45 +11,48 @@ export function CountriesSheet({
     onClose,
     value,
     candidates,
+    catalogStatus,
+    onRetry,
     onSave,
 }: {
     open: boolean
     onClose: () => void
     value: string[]
     candidates: string[]
+    catalogStatus?: string
+    onRetry?: () => void
     onSave: (countries: string[]) => Promise<unknown>
 }) {
-    const [picked, setPicked] = useState<string[]>(value)
+    const [edits, setEdits] = useState<Record<string, boolean>>({})
     const [error, setError] = useState('')
-    const wasOpen = useRef(false)
+    const [saving, setSaving] = useState(false)
 
     useEffect(() => {
-        if (open && !wasOpen.current) {
-            setPicked(value)
+        if (open) {
+            setEdits({})
             setError('')
         }
-        wasOpen.current = open
-    }, [open, value])
-
-    const options = useMemo(
-        () =>
-            [...new Set([...value, ...candidates, ...picked].map(code => code.trim().toUpperCase()).filter(code => /^[A-Z]{2}$/.test(code)))].sort((a, b) =>
-                (countryName(a) || a).localeCompare(countryName(b) || b, 'ru'),
-            ),
-        [value, candidates, picked],
-    )
-
-    const toggle = (code: string) =>
-        setPicked(p =>
-            p.includes(code) ? p.filter(c => c !== code) : [...p, code],
-        )
+    }, [open])
 
     const save = async () => {
+        // Keep saved countries that disappeared while editing. Apply only visible edits.
+        const next = new Set(value)
+        for (const code of candidates) {
+            if (edits[code] === true) next.add(code)
+            if (edits[code] === false) next.delete(code)
+        }
+        if (value.length === next.size && value.every(code => next.has(code))) {
+            onClose()
+            return
+        }
+        setSaving(true)
         try {
-            await onSave(picked)
+            await onSave([...next])
             onClose()
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Не удалось сохранить')
+        } finally {
+            setSaving(false)
         }
     }
 
@@ -58,7 +61,7 @@ export function CountriesSheet({
             open={open}
             onClose={onClose}
             title='Не выбирать страны'
-            done={{ label: 'Готово', onClick: save }}
+            done={{ label: 'Готово', onClick: save, disabled: saving }}
         >
             <Group
                 footer={
@@ -69,14 +72,14 @@ export function CountriesSheet({
                     )
                 }
             >
-                {options.map(code => (
+                {candidates.map(code => (
                     <Row
                         key={code}
                         label={countryLabel(code)}
-                        hint={!candidates.includes(code) ? 'Сейчас нет серверов этой страны' : undefined}
-                        onClick={() => toggle(code)}
+                        disabled={saving}
+                        onClick={() => setEdits(prev => ({ ...prev, [code]: !(prev[code] ?? value.includes(code)) }))}
                         trailing={
-                            picked.includes(code) ? (
+                            (edits[code] ?? value.includes(code)) ? (
                                 check
                             ) : (
                                 <span className='size-5' />
@@ -84,7 +87,9 @@ export function CountriesSheet({
                         }
                     />
                 ))}
-                {!options.length && <Row label='В подписках пока нет серверов с известной страной' />}
+                {catalogStatus && <Row label={catalogStatus} />}
+                {onRetry && <Row label='Повторить загрузку стран' tone='tint' onClick={onRetry} />}
+                {!catalogStatus && !candidates.length && <Row label='В подписках пока нет серверов с известной страной' />}
             </Group>
         </Sheet>
     )
