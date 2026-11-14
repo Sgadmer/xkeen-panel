@@ -19,15 +19,32 @@ const panelProxyName = "panel"
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// Configurator output may quote integer arguments even when JSON commands
+// accept a numeric port. Both representations denote the same TCP port.
+type rciPort uint16
+
+func (p *rciPort) UnmarshalJSON(raw []byte) error {
+	var value json.Number
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	port, err := strconv.ParseUint(string(value), 10, 16)
+	if err != nil || port == 0 {
+		return errors.New("некорректный номер порта в ответе Netcraze")
+	}
+	*p = rciPort(port)
+	return nil
+}
+
 type proxyRule struct {
 	Name   string `json:"name"`
 	Domain struct {
 		NDNS bool `json:"ndns"`
 	} `json:"domain"`
 	Upstream struct {
-		HTTP bool   `json:"http"`
-		IP   string `json:"ip"`
-		Port int    `json:"port"`
+		HTTP bool    `json:"http"`
+		IP   string  `json:"ip"`
+		Port rciPort `json:"port"`
 	} `json:"upstream"`
 	Level struct {
 		Public bool `json:"public"`
@@ -39,7 +56,7 @@ type routerHTTP struct {
 	Proxy []proxyRule `json:"proxy"`
 	SSL   struct {
 		Enable bool
-		Port   int
+		Port   rciPort
 	} `json:"ssl"`
 	Level struct{ Public, Private, Protected bool } `json:"security-level"`
 }
@@ -50,7 +67,7 @@ func (c *Client) readPanelHTTP(ctx context.Context) (routerHTTP, error) {
 	if err != nil {
 		return h, err
 	}
-	if !h.SSL.Enable || h.SSL.Port < 1 || h.SSL.Port > 65535 {
+	if !h.SSL.Enable || h.SSL.Port == 0 {
 		return h, errors.New("в Netcraze не настроен порт управления по HTTPS")
 	}
 	return h, nil
@@ -80,10 +97,10 @@ func (c *Client) panelDomain(ctx context.Context) (string, error) {
 	return "", errors.New("роутер вернул неизвестную доменную зону CrazeDNS")
 }
 
-func panelOrigin(domain string, port int) string {
+func panelOrigin(domain string, port rciPort) string {
 	host := panelProxyName + "." + domain
 	if port != 443 {
-		host = net.JoinHostPort(host, strconv.Itoa(port))
+		host = net.JoinHostPort(host, strconv.Itoa(int(port)))
 	}
 	return "https://" + host
 }
@@ -163,7 +180,7 @@ func proxyConfigured(h routerHTTP, ip string, port int) (bool, error) {
 		if p.Name != panelProxyName {
 			continue
 		}
-		if !p.Domain.NDNS || !p.Upstream.HTTP || p.Upstream.IP != ip || p.Upstream.Port != port || p.Level.Public {
+		if !p.Domain.NDNS || !p.Upstream.HTTP || p.Upstream.IP != ip || int(p.Upstream.Port) != port || p.Level.Public {
 			return false, errors.New("имя panel уже занято другим правилом доступа Netcraze")
 		}
 		return true, nil

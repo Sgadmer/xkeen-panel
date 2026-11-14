@@ -29,9 +29,9 @@ func TestFaceIDLANProvisioning(t *testing.T) {
 				result = map[string]any{"name": label, "booked": label, "domain": panelDNSZone}
 			}
 		case "show/rc/ip/http":
-			config := map[string]any{"ssl": map[string]any{"enable": true, "port": 8443}, "security-level": map[string]bool{"public": !private, "private": private}}
+			config := map[string]any{"ssl": map[string]any{"enable": true, "port": "8443"}, "security-level": map[string]bool{"public": !private, "private": private}}
 			if proxy {
-				config["proxy"] = []any{map[string]any{"name": "panel", "upstream": map[string]any{"http": true, "ip": ip, "port": 3000}, "domain": map[string]bool{"ndns": true}}}
+				config["proxy"] = []any{map[string]any{"name": "panel", "upstream": map[string]any{"http": true, "ip": ip, "port": "3000"}, "domain": map[string]bool{"ndns": true}}}
 			}
 			result = config
 		case "show/rc/ip/host":
@@ -91,5 +91,20 @@ func TestFaceIDLANProvisioning(t *testing.T) {
 	}
 	if bookCount != 1 || proxyCount != 1 {
 		t.Fatalf("duplicate provisioning %d %d", bookCount, proxyCount)
+	}
+}
+
+func TestRCIPort(t *testing.T) {
+	for _, raw := range []string{`8443`, `"8443"`} {
+		var p rciPort
+		if err := json.Unmarshal([]byte(raw), &p); err != nil || p != 8443 {
+			t.Errorf("%s: %d %v", raw, p, err)
+		}
+	}
+	for _, raw := range []string{`0`, `"65536"`, `"abc"`, `1.2`, `null`, `"-1"`} {
+		var p rciPort
+		if err := json.Unmarshal([]byte(raw), &p); err == nil {
+			t.Errorf("invalid port accepted: %s", raw)
+		}
 	}
 }
