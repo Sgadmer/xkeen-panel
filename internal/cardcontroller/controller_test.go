@@ -91,7 +91,7 @@ func TestMihomoReloadExactRouteAndKeepDirect(t *testing.T) {
 			t.Fatal(e)
 		}
 		rules := list(state.doc["rules"])
-		if str(rules[len(rules)-1]) != "MATCH,DIRECT" || str(rules[len(rules)-3]) != "DOMAIN-SUFFIX,test.example,DIRECT" {
+		if str(rules[len(rules)-1]) != "MATCH,DIRECT" || str(rules[len(rules)-2]) != "DOMAIN-SUFFIX,openai.com,XKP-card-reject" || str(rules[len(rules)-4]) != "DOMAIN-SUFFIX,test.example,DIRECT" {
 			t.Fatal("direct rules were modified")
 		}
 	}

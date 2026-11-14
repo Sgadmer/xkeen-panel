@@ -190,6 +190,25 @@ class SelectiveGuardTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'commits').read_text().splitlines(), list(POOLS))
         hook = opt / 'etc/ndm/netfilter.d/99-xkeen-panel-guard.sh'
+        guard = [self.shell, shell_path(opt / 'sbin/xkeen-panel-guard')]
+        def run(mode, **env):
+            return subprocess.run(guard + [mode], env=dict(self.env, **env),
+                                  capture_output=True, timeout=20)
+        self.assertEqual(run('apply').returncode, 0)
+        self.assertNotEqual(run('suspend-api', GUARD_FAIL_FAMILY='ip6tables').returncode, 0)
+        self.assertTrue((opt / 'etc/xkeen-panel-guard-api.pending').is_file())
+        self.assertEqual(run('suspend-api').returncode, 0)
+        self.assertFalse((opt / 'etc/xkeen-panel-guard-api.pending').exists())
+        self.assertNotEqual(run('check-api').returncode, 0)
+        snapshot = {family: (self.root / family).read_bytes() for family in POOLS}
+        self.assertIn(b'198.18.0.0/15', snapshot['iptables'])
+        self.assertIn(b'2001:2::/48', snapshot['ip6tables'])
+        self.assertNotIn(b'160.79.104.0/23', snapshot['iptables'])
+        self.assertNotIn(b'2607:6bc0::/48', snapshot['ip6tables'])
+        self.assertEqual(run('apply-api').returncode, 0)
+        self.assertEqual(snapshot, {family: (self.root / family).read_bytes() for family in POOLS})
+        self.assertEqual(run('resume-api').returncode, 0)
+        self.assertEqual(run('check-api').returncode, 0)
         hook.write_bytes(b'#!/bin/sh\n# preexisting operator version\n')
         self.assertNotEqual(subprocess.run(command, env=self.env, capture_output=True).returncode, 0)
         self.assertIn(b'preexisting operator', hook.read_bytes())

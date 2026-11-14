@@ -2,7 +2,9 @@ package cardcontroller
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -32,7 +34,25 @@ type cardEndpoint struct {
 	name string
 }
 
+func failoverName(scope, route string) string {
+	sum := sha256.Sum256([]byte(scope + "\x00" + route))
+	return fmt.Sprintf("%s%x", failoverPrefix, sum[:16])
+}
+
 func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]cardEndpoint, defaultSourceAvailable bool) (map[string]string, error) {
+	policy, err := readKillSwitch(p.doc)
+	if err != nil {
+		return nil, err
+	}
+	registry, err := readRefilter(p.doc)
+	if err != nil {
+		return nil, err
+	}
+	if _, ownedProvider := p.doc[refilterKey]; ownedProvider {
+		if err := refilterProviders(p.doc, registry); err != nil {
+			return nil, err
+		}
+	}
 	_, owned := p.doc[stateKey]
 	original := []string{}
 	for _, item := range list(p.doc["rules"]) {
@@ -80,6 +100,46 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	if err != nil {
 		return nil, err
 	}
+	if err := protectNativeGroups(groups, nodes, policy); err != nil {
+		return nil, err
+	}
+	native := map[string]bool{}
+	manualBlocks := map[string]bool{"REJECT": true, "REJECT-DROP": true}
+	for _, value := range append(append([]interface{}{}, groups...), nodes...) {
+		native[str(object(value)["name"])] = true
+	}
+	// A named direct, reject or DNS adapter is the owner's explicit policy.
+	// Wrapping it in a health-tested VPN fallback would turn a deliberate
+	// block into DIRECT when the kill switch is disabled.
+	for _, value := range nodes {
+		node := object(value)
+		switch strings.ToLower(str(node["type"])) {
+		case "direct", "reject", "reject-drop", "rejectdrop", "pass", "compatible", "dns", "rematch":
+			delete(native, str(node["name"]))
+		}
+		if kind := strings.ToLower(str(node["type"])); kind == "reject" || kind == "reject-drop" || kind == "rejectdrop" {
+			manualBlocks[str(node["name"])] = true
+		}
+	}
+	// A selector's deliberate REJECT must remain effective even with failover
+	// allowed. Such groups keep their native behavior. The panel cannot
+	// distinguish healthy intentional rejection from a tunnel outage by probe.
+	for changed := true; changed; {
+		changed = false
+		for _, value := range groups {
+			group := object(value)
+			name := str(group["name"])
+			if manualBlocks[name] || str(group["type"]) != "select" {
+				continue
+			}
+			for _, child := range namesOf(group["proxies"]) {
+				if manualBlocks[child] {
+					manualBlocks[name], changed = true, true
+					break
+				}
+			}
+		}
+	}
 	used := map[string]bool{}
 	adapter := func(key string) string {
 		if key == directTarget {
@@ -100,6 +160,45 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	rejectGroup := cardPrefix + "reject"
 	groups = append(groups, map[string]interface{}{"name": rejectGroup, "type": "select", "proxies": []string{"REJECT"}})
 	expected[rejectGroup] = "REJECT"
+	directGroup := cardPrefix + "direct"
+	terminal := func(protected bool) string {
+		if protected {
+			return rejectGroup
+		}
+		if _, exists := expected[directGroup]; !exists {
+			groups = append(groups, map[string]interface{}{"name": directGroup, "type": "select", "proxies": []string{"DIRECT"}})
+			expected[directGroup] = "DIRECT"
+		}
+		return directGroup
+	}
+	probeURL := p.probeURL
+	if probeURL == "" {
+		probeURL = "https://www.gstatic.com/generate_204"
+	}
+	routeFor := func(scope, route string, protected bool) string {
+		if protected || route == "DIRECT" {
+			return route
+		}
+		if route == "REJECT" {
+			return "DIRECT"
+		}
+		if manualBlocks[route] {
+			return route
+		}
+		name := failoverName(scope, route)
+		if _, exists := expected[name]; !exists {
+			groups = append(groups, map[string]interface{}{"name": name, "type": "fallback", "proxies": []string{route, "DIRECT"}, "url": probeURL, "interval": 60, "timeout": 5000, "lazy": false})
+			expected[name] = route
+		}
+		return name
+	}
+	defaultTarget, _ := nativeDefault(*p, nil)
+	if key := p.assigned[defaultID]; key != "" {
+		defaultTarget = "REJECT"
+		if defaultSourceAvailable {
+			defaultTarget = adapter(key)
+		}
+	}
 	// On unassign/direct remove the private listener at the same reload as the
 	// strict-only group. A connection accepted on an obsolete listener still
 	// names the removed private group and cannot select the public DIRECT card.
@@ -139,6 +238,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		p.doc["listeners"] = kept
 	}
 	priority := []string{}
+	var registryDomainOverrides, registryIPOverrides []string
 	claudeRuleCount := 0
 	for _, service := range services {
 		id := service.ID
@@ -147,25 +247,46 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		// take over a more specific existing group. Keep the original group
 		// for those destination matches in the same specific-first order.
 		protectChild := key == "" && (id == "youtube" && p.assigned["google"] != "" || id == "primevideo" && p.assigned["amazon"] != "" || id == "openai" && p.assigned["ai"] != "")
-		if key == "" && id != "claude" && !protectChild {
+		hasOverride := policy.Services[id] != ""
+		// A kill-switch override controls failure handling, not whether an
+		// otherwise unassigned service should be sent through the VPN.
+		registryOverride := registry.Enabled && id != "claude" && key == "" && hasOverride
+		if registry.Enabled && id != "claude" && key == "" && !registryOverride {
+			continue
+		}
+		if key == "" && id != "claude" && !protectChild && !hasOverride {
 			continue
 		}
 		name := cardPrefix + id
 		route := adapter(key)
-		if protectChild {
+		if key == "" && id != "claude" {
 			name += "-inherited"
 			route = groupNames[id]
-			defined := false
-			for _, group := range groups {
-				if str(object(group)["name"]) == route {
-					defined = true
-					break
+			classified := false
+			if native[route] {
+				for _, r := range original {
+					fields, end := targetPart(r)
+					if fields[end] == route && fields[0] != "MATCH" {
+						classified = true
+						break
+					}
 				}
 			}
-			if !defined {
-				continue
+			if !classified {
+				if !hasOverride {
+					continue
+				}
+				route = defaultTarget
+				if p.assigned[defaultID] == "" && (route == "DIRECT" || route == "REJECT" || route == "REJECT-DROP") && !registryOverride {
+					continue
+				}
+			}
+			if registryOverride {
+				route = defaultTarget
 			}
 		}
+		protected := policy.Protects(id)
+		route = routeFor(id, route, protected)
 		groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{route}})
 		expected[name] = route
 		if forced[id] {
@@ -176,13 +297,31 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		seen := map[string]bool{}
 		add := func(r string) {
 			if !seen[r] {
+				if registryOverride {
+					// The policy override changes failover only for VPN matches.
+					// Other addresses of the same service still follow DIRECT.
+					fields, end := targetPart(r)
+					condition := strings.Join(fields[:end], ",")
+					opts := strings.Join(fields[end+1:], ",")
+					if opts != "" {
+						condition += "," + opts
+					}
+					combine := func(set string) []string {
+						predicate := "AND,((" + condition + "),(RULE-SET," + set + ")),"
+						return []string{predicate + name, predicate + terminal(protected)}
+					}
+					registryDomainOverrides = append(registryDomainOverrides, combine(refilterSites)...)
+					registryIPOverrides = append(registryIPOverrides, combine(refilterIPs)...)
+					seen[r] = true
+					return
+				}
 				priority = append(priority, r)
 				// Mihomo continues to the next rule if a matched adapter lacks
 				// UDP, is missing or is PASS. A second identical predicate
 				// terminates that path in REJECT before any owner DIRECT.
-				if !protectChild && key != directTarget {
+				if key != directTarget {
 					fields, end := targetPart(r)
-					fields[end] = rejectGroup
+					fields[end] = terminal(protected)
 					priority = append(priority, strings.Join(fields, ","))
 				}
 				seen[r] = true
@@ -229,31 +368,85 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	rules = append(rules, priority[:claudeRuleCount]...)
 	rules = append(rules, original[:head]...)
 	rules = append(rules, priority[claudeRuleCount:]...)
-	if key := p.assigned[defaultID]; key != "" {
-		name := cardPrefix + defaultID
-		route := "REJECT"
-		if defaultSourceAvailable {
-			route = adapter(key)
+	defaultKey := p.assigned[defaultID]
+	if defaultKey != "" || registry.Enabled {
+		if registry.Enabled && defaultKey == "" && !native[defaultTarget] {
+			return nil, errors.New("для совпадений Re:filter сначала выберите основной VPN-сервер или пул")
 		}
+		name := cardPrefix + defaultID
+		route := routeFor(defaultID, defaultTarget, policy.Enabled)
 		groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{route}})
 		expected[name] = route
-		found := false
+	}
+	if registry.Enabled {
+		// Keep the owner's base rules after a managed terminal MATCH. They
+		// remain available to service classifiers, nativeDefault and undo,
+		// while inherited broad VPN groups cannot capture unlisted sites.
+		direct := terminal(false)
 		for _, r := range original[head:] {
-			parts, end := targetPart(r)
-			if parts[0] == "MATCH" {
-				parts[end] = name
-				rules = append(rules, strings.Join(parts, ","))
-				parts[end] = rejectGroup
-				rules = append(rules, strings.Join(parts, ","))
-				found = true
+			f, end := targetPart(r)
+			if f[0] == "MATCH" {
+				continue
 			}
-			rules = append(rules, r)
+			switch f[end] {
+			case "DIRECT":
+				f[end] = direct
+			case "REJECT", "REJECT-DROP":
+				if f[end] == "REJECT-DROP" {
+					drop := cardPrefix + "refilter-drop"
+					if expected[drop] == "" {
+						groups = append(groups, map[string]interface{}{"name": drop, "type": "select", "proxies": []string{"REJECT-DROP"}})
+						expected[drop] = "REJECT-DROP"
+					}
+					f[end] = drop
+				} else {
+					f[end] = rejectGroup
+				}
+			default:
+				continue
+			}
+			rules = append(rules, strings.Join(f, ","))
 		}
-		if !found {
-			return nil, errors.New("в профиле отсутствует правило MATCH для общего маршрута")
+		for _, cidr := range []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "255.255.255.255/32", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8"} {
+			rules = append(rules, "IP-CIDR,"+cidr+","+direct+",no-resolve")
 		}
-	} else {
-		rules = append(rules, original[head:]...)
+		route := cardPrefix + defaultID
+		rules = append(rules, registryDomainOverrides...)
+		rules = append(rules, "RULE-SET,"+refilterSites+","+route, "RULE-SET,"+refilterSites+","+terminal(policy.Enabled))
+		// Explicitly known names have already matched the domain database.
+		// An IP-only prefix on a shared CDN should not take over another host.
+		rules = append(rules, "DOMAIN-REGEX,.+,"+direct)
+		rules = append(rules, registryIPOverrides...)
+		rules = append(rules,
+			"RULE-SET,"+refilterIPs+","+route+",no-resolve", "RULE-SET,"+refilterIPs+","+terminal(policy.Enabled)+",no-resolve",
+			"MATCH,"+direct)
+	}
+	found := false
+	for _, r := range original[head:] {
+		parts, end := targetPart(r)
+		dst := parts[end]
+		if parts[0] == "MATCH" && defaultKey != "" {
+			parts[end] = cardPrefix + defaultID
+			rules = append(rules, strings.Join(parts, ","))
+			parts[end] = terminal(policy.Enabled)
+			rules = append(rules, strings.Join(parts, ","))
+			found = true
+		} else if native[dst] && !policy.Enabled {
+			parts[end] = routeFor("native", dst, false)
+			rules = append(rules, strings.Join(parts, ","))
+			parts[end] = terminal(false)
+			rules = append(rules, strings.Join(parts, ","))
+		}
+		rules = append(rules, r)
+		if native[dst] && policy.Enabled {
+			// Unsupported UDP and PASS adapters otherwise continue into the
+			// owner's next (potentially DIRECT) rule.
+			parts[end] = rejectGroup
+			rules = append(rules, strings.Join(parts, ","))
+		}
+	}
+	if defaultKey != "" && !found {
+		return nil, errors.New("в профиле отсутствует правило MATCH для общего маршрута")
 	}
 	p.doc[stateKey] = p.assigned
 	p.doc["proxies"], p.doc["proxy-groups"], p.doc["rules"] = nodes, groups, rules
@@ -290,7 +483,7 @@ func (c *Controller) drain(ctx context.Context, a coreAPI, id, want string, serv
 			relevant = true
 		}
 		for _, chain := range flow.Chains {
-			if chain == cardPrefix+id || chain != "" && chain == groupNames[id] || chain == dedicatedGroup(id) {
+			if chain == cardPrefix+id || chain == cardPrefix+id+"-inherited" || chain != "" && chain == groupNames[id] || chain == dedicatedGroup(id) {
 				relevant = true
 			}
 			if chain == want {
@@ -331,6 +524,46 @@ func (c *Controller) drain(ctx context.Context, a coreAPI, id, want string, serv
 			if flow.ID == "" || a.request(ctx, "DELETE", "/connections/"+url.PathEscape(flow.ID), nil, nil) != nil {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, expected map[string]string, doc map[string]interface{}) bool {
+	var snapshot struct {
+		Connections []struct {
+			ID     string
+			Chains []string
+		}
+	}
+	if api.request(ctx, "GET", "/connections", nil, &snapshot) != nil {
+		return false
+	}
+	protectedAuto := map[string]bool{}
+	direct := map[string]bool{"DIRECT": true, "COMPATIBLE": true}
+	for _, value := range list(doc["proxies"]) {
+		proxy := object(value)
+		if strings.EqualFold(str(proxy["type"]), "direct") {
+			direct[str(proxy["name"])] = true
+		}
+	}
+	for _, value := range list(doc["proxy-groups"]) {
+		group := object(value)
+		if group[nativeGuardKey] != nil && str(group["type"]) != "select" {
+			protectedAuto[str(group["name"])] = true
+		}
+	}
+	for _, flow := range snapshot.Connections {
+		stale, fromAuto, wentDirect := false, false, false
+		for _, chain := range flow.Chains {
+			fromAuto = fromAuto || protectedAuto[chain]
+			wentDirect = wentDirect || direct[chain]
+			if strings.HasPrefix(chain, failoverPrefix) && expected[chain] == "" || chain == cardPrefix+"direct" && expected[chain] == "" {
+				stale = true
+			}
+		}
+		if (stale || fromAuto && wentDirect) && (flow.ID == "" || api.request(ctx, "DELETE", "/connections/"+url.PathEscape(flow.ID), nil, nil) != nil) {
+			return false
 		}
 	}
 	return true

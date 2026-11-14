@@ -162,11 +162,22 @@ type ImportReport struct {
 }
 
 // Status is the connection status reported to the UI.
+// RouteProbe describes a check through the selected Mihomo route. Checked is
+// false if the local controller could not tell whether traffic got through.
+type RouteProbe struct {
+	Name, Protocol string
+	Latency        int
+	Checked        bool
+	Selective      bool
+}
+
 type Status struct {
 	Connected      bool      `json:"connected"`
 	Internet       bool      `json:"internet"`      // the router's own uplink works
 	ProxyChecked   bool      `json:"proxy_checked"` // connected was measured through the proxy
 	XrayRunning    bool      `json:"xray_running"`
+	ProcessUnknown bool      `json:"process_unknown,omitempty"`
+	Selective      bool      `json:"selective,omitempty"` // probe targets the VPN route for the blocklist
 	Restarting     bool      `json:"restarting"`
 	CurrentServer  string    `json:"current_server"`
 	Protocol       string    `json:"protocol"`

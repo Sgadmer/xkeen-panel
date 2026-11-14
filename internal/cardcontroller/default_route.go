@@ -3,6 +3,7 @@ package cardcontroller
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -19,7 +20,9 @@ type DefaultRoute struct {
 	Group, Auto, Name, Protocol, Current, Pinned      string
 	ScopeID, SelectionKind, SelectionName, SourceName string
 	CurrentSource                                     string
+	Selective                                         bool
 	Nodes                                             []xkeen.PoolNodeView
+	probeTarget                                       string
 }
 
 func nativeDefault(p profile, live map[string]selector) (group, auto string) {
@@ -73,8 +76,21 @@ func configuredAuto(p profile) bool {
 func (c *Controller) defaultRoute(p profile, live map[string]selector) DefaultRoute {
 	group, auto := nativeDefault(p, live)
 	state := DefaultRoute{Group: group, Auto: auto, Pinned: p.assigned[defaultID], ScopeID: p.scopeID(), SelectionKind: "native", SelectionName: live[group].Now}
-	if state.Pinned != "" {
+	state.Selective = refilterEnabled(p.doc)
+	if state.Pinned != "" || state.Selective {
 		state.Group = cardPrefix + defaultID
+	} else if policy, err := readKillSwitch(p.doc); err == nil && !policy.Enabled {
+		// The original MATCH remains in the file for lossless restoration.
+		// The running rule above it uses the health-checked direct fallback.
+		for _, raw := range list(p.doc["rules"]) {
+			parts, end := targetPart(str(raw))
+			if end == 1 && parts[0] == "MATCH" {
+				if strings.HasPrefix(parts[end], failoverPrefix) {
+					state.Group = parts[end]
+				}
+				break
+			}
+		}
 	}
 	name := state.Group
 	seen := map[string]bool{}
@@ -83,6 +99,15 @@ func (c *Controller) defaultRoute(p profile, live map[string]selector) DefaultRo
 		name = live[name].Now
 	}
 	state.Name, state.Protocol = name, live[name].Type
+	// Test the actual outbound, not a selector that could switch to DIRECT
+	// between reading its state and sending the health request.
+	if leaf, ok := live[name]; ok && leaf.Now == "" && len(leaf.All) == 0 {
+		switch strings.ToLower(leaf.Type) {
+		case "", "direct", "reject", "rejectdrop", "pass", "compatible", "selector", "fallback", "urltest", "loadbalance", "relay":
+		default:
+			state.probeTarget = name
+		}
+	}
 	servers := c.catalog()
 	scope := p.pool(state.ScopeID)
 	if scope != nil {
@@ -165,7 +190,7 @@ func (c *Controller) currentDefault(ctx context.Context) (profile, DefaultRoute,
 		return p, DefaultRoute{}, errors.New("контроллер не подтвердил общий маршрут Mihomo")
 	}
 	if state.SelectionKind == "auto" && state.Current == state.ScopeID {
-		endpoint := live[state.Group].Now
+		endpoint := fallbackSelection(live[state.Group].Now, live)
 		for _, raw := range list(p.doc["proxies"]) {
 			proxy := object(raw)
 			if str(proxy["name"]) != endpoint {
@@ -323,25 +348,38 @@ func (c *Controller) RefreshMatchingProviders(ctx context.Context, sources []str
 	return nil
 }
 
-func (c *Controller) ProbeDefault(ctx context.Context, checkURL string) (string, string, int, error) {
+func (c *Controller) ProbeDefault(ctx context.Context, checkURL string) (models.RouteProbe, error) {
 	c.mu.Lock()
 	p, state, err := c.currentDefault(ctx)
 	c.mu.Unlock()
+	probe := models.RouteProbe{Name: state.Name, Protocol: state.Protocol, Latency: -1, Selective: refilterEnabled(p.doc)}
 	if err != nil {
-		return "", "", -1, err
+		return probe, err
 	}
-	if state.Name == "" || state.Name == "DIRECT" || state.Name == "REJECT" || state.Name == "PASS" {
-		return state.Name, state.Protocol, -1, errors.New("общий маршрут не использует доступный прокси")
+	if state.probeTarget == "" {
+		return probe, errors.New("общий маршрут не использует доступный прокси")
 	}
 	var result struct{ Delay int }
-	path := "/proxies/" + url.PathEscape(state.Group) + "/delay?timeout=8000&url=" + url.QueryEscape(checkURL)
-	if err := p.api.request(ctx, "GET", path, nil, &result); err != nil {
-		return state.Name, state.Protocol, -1, err
+	path := "/proxies/" + url.PathEscape(state.probeTarget) + "/delay?timeout=8000&url=" + url.QueryEscape(checkURL)
+	for attempt := 0; attempt < 2; attempt++ {
+		err = p.api.request(ctx, "GET", path, nil, &result)
+		if err == nil {
+			if result.Delay <= 0 {
+				return probe, errors.New("ядро не вернуло результат проверки задержки")
+			}
+			probe.Latency, probe.Checked = result.Delay, true
+			return probe, nil
+		}
+		// Mihomo returns 503 or 504 when the outbound URL test fails.
+		// Authentication, a disappearing group, or a lost controller response
+		// do not establish a data-plane failure.
+		var status apiResponseError
+		if !errors.As(err, &status) || (status != http.StatusServiceUnavailable && status != http.StatusGatewayTimeout) {
+			return probe, err
+		}
 	}
-	if result.Delay <= 0 {
-		return state.Name, state.Protocol, -1, errors.New("ядро не подтвердило прохождение пробы")
-	}
-	return state.Name, state.Protocol, result.Delay, nil
+	probe.Checked = true
+	return probe, err
 }
 
 // A batched probe uses a temporary Xray process, like the workers that serve

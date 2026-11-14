@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconShield, IconWorld } from '@tabler/icons-react'
 import { serviceIcons } from '@/lib/serviceIcons'
 import { PageTitle } from '@/components/ios'
+import { ServiceKillSwitch, useKillSwitch } from '@/components/killSwitch'
 import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { countryLabel, scopeLabel, withCountryFlag } from '@/lib/format'
@@ -10,7 +12,7 @@ import { countryLabel, scopeLabel, withCountryFlag } from '@/lib/format'
 interface InheritedRoute {
     group: string
     via: string[]
-    kind: 'server' | 'direct' | 'reject' | 'unknown'
+    kind: 'server' | 'direct' | 'reject' | 'unknown' | 'conditional'
     endpoint?: string
     strategy?: 'url-test' | 'fallback' | 'load-balance'
     members?: string[]
@@ -36,6 +38,9 @@ interface ServiceRoutes {
 }
 
 function InheritedRouteInfo({route}: {route: InheritedRoute}) {
+    if (route.kind === 'conditional') {
+        return <p className='mt-2 text-sm text-muted-foreground'>Совпадения с Re:filter идут через основной VPN. Остальные адреса идут напрямую. Действуют исключения VPN.</p>
+    }
     let current = 'Ядро пока не сообщило маршрут'
     if (route.kind === 'server' && route.endpoint) current = route.endpoint
     if (route.kind === 'direct') current = 'Напрямую, без VPN'
@@ -76,7 +81,7 @@ interface ClaudeFirewall {
     ready: boolean
 }
 
-function ClaudeApiFirewall() {
+function ClaudeApiFirewall({ protectionEnabled }: { protectionEnabled?: boolean }) {
     const client = useQueryClient()
     const key = ['claude-api-firewall']
     const path = '/api/service-routes/claude-api-firewall'
@@ -92,8 +97,9 @@ function ClaudeApiFirewall() {
             <p className='font-semibold'>Защита адресов Anthropic API</p>
             {state.data && <p className='mt-1 text-muted-foreground'>{state.data.ready
                 ? 'Роутер блокирует прямые пакеты к трём опубликованным IPv4/IPv6-сетям API и Console.'
+                : protectionEnabled === false ? 'Kill switch Claude выключен. Прямой выход к адресам API разрешён.'
                 : 'Фильтр блокирует прямой выход к трём сетям API и Console при остановке перехвата. Другие адреса Claude требуют отдельной защиты.'}</p>}
-            {state.data?.available && !state.data.ready && <button type='button' disabled={install.isPending}
+            {state.data?.available && !state.data.ready && protectionEnabled !== false && <button type='button' disabled={install.isPending}
                 className='mt-2 min-h-11 rounded-xl px-3 font-semibold text-tint disabled:opacity-60'
                 onClick={() => install.mutate()}>{install.isPending ? 'Проверяем правила…' : (state.data.installed ? 'Восстановить фильтр API' : 'Включить фильтр API')}</button>}
             {state.data && !state.data.available && <p className='mt-1 text-muted-foreground'>Для включения фильтра нужна панель на роутере.</p>}
@@ -148,7 +154,8 @@ export function ServiceRoutesPage() {
         onError: () => { void qc.invalidateQueries({ queryKey: key }) },
     })
     const view = query.data
-    const error = change.error ?? query.error
+    const killSwitch = useKillSwitch(view?.scope === 'mihomo')
+    const error = change.error ?? query.error ?? killSwitch.error
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
     const scopeById = new Map(scopes?.map(scope => [scope.id, scope]))
     const category = (target: ServiceRoutes['targets'][number]) =>
@@ -184,14 +191,15 @@ export function ServiceRoutesPage() {
                     <div className='flex items-start gap-3 rounded-card bg-card p-4'>
                         <IconShield aria-hidden className='mt-0.5 size-5 shrink-0 text-tint' />
                         <div>
-                            <p className='font-semibold'>{view.active && view.guard_ready ? 'Защита маршрутов включена' : (view.scope === 'mihomo' && view.active ? 'Назначенные маршруты работают' : 'Защита маршрутов не подтверждена')}</p>
+                            <p className='font-semibold'>{view.scope === 'mihomo' && view.active ? 'Маршруты Mihomo' : (view.active && view.guard_ready ? 'Защита маршрутов включена' : 'Защита маршрутов не подтверждена')}</p>
                             <p className='mt-1 text-sm text-muted-foreground'>
-                                {view.guard_ready
+                                {view.scope === 'mihomo'
+                                    ? 'Kill switch блокирует прямой выход при отказе VPN в работающем Mihomo. При полной остановке ядра продолжают действовать отдельные фильтры роутера. Фильтр адресов Anthropic API показан в карточке Claude.'
+                                    : view.guard_ready
                                     ? (view.active ? 'При потере назначенного VPN защищённый маршрут блокируется.' : 'Выберите VPN для Claude, чтобы включить маршруты сервисов.')
-                                    : (view.scope === 'mihomo'
-                                        ? 'При полной остановке перехвата подтверждена только защита адресов, для которых включён сетевой фильтр. Состояние фильтра Anthropic показано в карточке Claude.'
-                                        : 'Для применения нужен работающий сетевой фильтр на роутере.')}
+                                    : 'Для применения нужен работающий сетевой фильтр на роутере.'}
                             </p>
+                            {view.scope === 'mihomo' && <Link to='/settings#kill-switch' className='mt-1 inline-block text-sm text-tint'>Общий kill switch в настройках</Link>}
                         </div>
                     </div>
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
@@ -230,8 +238,10 @@ export function ServiceRoutesPage() {
                                         ))}
                                     </select>
                                     {!service.target && service.inherited_route && <InheritedRouteInfo route={service.inherited_route} />}
+                                    {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
                                     {busy && <p role='status' className='mt-2 text-sm text-muted-foreground'>Применяем маршрут…</p>}
-                                    {isClaude && <ClaudeApiFirewall />}
+                                    {isClaude && <ClaudeApiFirewall protectionEnabled={killSwitch.data?.services?.claude
+                                        ? killSwitch.data.services.claude === 'on' : killSwitch.data?.enabled} />}
                                     {view.scope === 'mihomo' && !!service.target && service.target !== 'direct' && <ClientProxy service={service} />}
                                     {!busy && service.blocked && view.active && <p className='mt-2 text-sm text-warning'>Ядро блокирует соединения этого сервиса</p>}
                                     {service.domains?.length > 0 && (

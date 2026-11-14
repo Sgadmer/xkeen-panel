@@ -675,7 +675,8 @@ func (h *Handlers) HandlePoolStatus(w http.ResponseWriter, r *http.Request) {
 			current = ""
 		}
 		writeJSON(w, 200, map[string]interface{}{"mode": mode, "balancer_tag": state.Auto, "pool_tags": tags, "nodes": state.Nodes, "pinned_tag": state.Pinned, "pin_manual": state.Pinned != "", "current_tag": current, "api_available": true, "core": xkeen.CoreMihomo,
-			"auto_scope_id": state.ScopeID, "selection_kind": state.SelectionKind, "selection_name": state.SelectionName, "source_name": state.SourceName})
+			"auto_scope_id": state.ScopeID, "selection_kind": state.SelectionKind, "selection_name": state.SelectionName, "source_name": state.SourceName,
+			"selective": state.Selective, "current_name": state.Name})
 		return
 	}
 	rt := h.detector.Runtime()

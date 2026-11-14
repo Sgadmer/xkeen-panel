@@ -6,7 +6,7 @@ LC_ALL=C
 export LC_ALL
 
 [ "$#" = 1 ] || exit 2
-case "$1" in check|apply|check-api|apply-api|check-policy) mode=$1 ;; *) exit 2 ;; esac
+case "$1" in check|apply|check-api|apply-api|check-policy|suspend-api|resume-api) mode=$1 ;; *) exit 2 ;; esac
 
 if [ "$mode" = check-policy ]; then
     # Candidate selectors arrive on stdin. A native exclusive route and a
@@ -31,11 +31,42 @@ at_head() {
     '
 }
 
+disabled=/opt/etc/xkeen-panel-guard-api.disabled
+pending=/opt/etc/xkeen-panel-guard-api.pending
+if [ "$mode" = suspend-api ]; then
+    (umask 077; : > "$pending"; : > "$disabled")
+elif [ "$mode" = resume-api ]; then
+    (umask 077; : > "$pending")
+    rm -f "$disabled"
+    mode=apply-api
+elif [ "$mode" = apply-api ] && [ -f "$disabled" ]; then
+    exit 0
+elif [ "$mode" = check-api ] && [ -f "$disabled" ]; then
+    exit 1
+fi
+
 reconcile() {
     family=$1 prefixes=$2
     # Keenetic ships xtables 1.4.21, whose -w takes no timeout. Without -w a
     # contended lock fails promptly, allowing the caller to retry safely.
     snapshot=$("$family" -t filter -S) || return 1
+    if [ "$mode" = suspend-api ]; then
+        # Only remove the API entries owned by the installed companion.
+        # Leave FakeDNS and the rest of the owner's IPv4/IPv6 table intact.
+        batch=$(printf '%s\n' "$snapshot" | awk -v prefixes="$prefixes" '
+            BEGIN {
+                print "*filter"; n=split(prefixes,p," ")
+                for (i=1;i<=n;i++) {
+                    ours["-A OUTPUT -d " p[i] " -j DROP"]=1
+                    ours["-A FORWARD -d " p[i] " -j DROP"]=1
+                }
+            }
+            $0 in ours { delete ours[$0]; sub(/^-A /,"-D "); print }
+            END { print "COMMIT" }
+        ') || return 1
+        printf '%s\n' "$batch" | "$family-restore" --noflush
+        return
+    fi
     at_head && return 0
     case "$mode" in apply|apply-api) ;; *) return 1 ;; esac
 
@@ -84,6 +115,15 @@ if ! reconcile ip6tables "$v6"; then
     failed=1
 fi
 [ "$failed" = 0 ] || exit 1
+case "$mode" in apply-api|suspend-api) rm -f "$pending" ;; esac
+# A firmware hook may have started immediately before suspension.
+if [ "$mode" = apply-api ] && [ -f "$disabled" ]; then
+    exec "$0" suspend-api
+fi
+if [ "$mode" = suspend-api ]; then
+    printf 'anthropic-api-firewall-suspended\n'
+    exit 0
+fi
 case "$mode" in
     check-api|apply-api) printf 'anthropic-api-firewall-ready\n' ;;
     *) printf 'selective-firewall-ready\n' ;;

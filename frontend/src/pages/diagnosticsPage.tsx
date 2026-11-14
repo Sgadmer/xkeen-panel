@@ -122,19 +122,23 @@ export function DiagnosticsPage() {
                         title='Проверки'
                         footer={
                             s && !s.proxy_checked && checked
-                                ? 'Связь проверена напрямую с роутера: у ядра нет проверочного входа, поэтому работа самого VPN не подтверждена.'
+                                ? s.core === 'mihomo'
+                                    ? 'У Mihomo нет результата проверки через VPN. Подробности последней попытки есть в журнале панели.'
+                                    : 'У ядра нет проверочного входа. Панель смогла проверить только связь с самого роутера.'
                                 : undefined
                         }
                     >
                         <Check
                             verdict={proxyVerdict}
-                            label='Прокси через VPN'
+                            label={s?.selective ? 'VPN для адресов из Re:filter' : 'Прокси через VPN'}
                             detail={
+                                s?.current_server === 'DIRECT' && !s.proxy_checked ? 'Прямое подключение' :
                                 s?.connected && s.latency_ms > 0
                                     ? `${s.latency_ms} мс`
                                     : undefined
                             }
                         />
+                        {s?.selective && <Row label='Трафик без совпадения с правилами' detail='Напрямую' />}
                         <Check
                             verdict={
                                 !checked
@@ -147,7 +151,7 @@ export function DiagnosticsPage() {
                         />
                         <Check
                             verdict={
-                                !s ? 'unknown' : s.xray_running ? 'ok' : 'bad'
+                                !s || s.process_unknown || s.restarting ? 'unknown' : s.xray_running ? 'ok' : 'bad'
                             }
                             label={`Ядро ${s?.core ?? ''}`}
                             detail={s?.mode}
@@ -205,7 +209,7 @@ export function DiagnosticsPage() {
                             onClick={() => selftest.mutate()}
                             disabled={selftest.isPending}
                         />
-                        {s?.xray_running === false ? (
+                        {s && !s.process_unknown && !s.restarting && (s.xray_running === false ? (
                             <Row
                                 label='Запустить прокси'
                                 tone='tint'
@@ -225,7 +229,7 @@ export function DiagnosticsPage() {
                                 }
                                 disabled={busy}
                             />
-                        )}
+                        ))}
                     </Group>
 
                     <Group

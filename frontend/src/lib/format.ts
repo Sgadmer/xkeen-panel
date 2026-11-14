@@ -56,13 +56,19 @@ export type Tone = 'good' | 'warn' | 'bad' | 'idle'
 export function statusInfo(s?: Status): { label: string; tone: Tone } {
     if (!s) return { label: 'Загрузка', tone: 'idle' }
     if (s.restarting) return { label: 'Перезапуск', tone: 'warn' }
+    if (s.process_unknown) return { label: 'Состояние ядра неизвестно', tone: 'warn' }
     if (!s.xray_running) return { label: 'Прокси остановлен', tone: 'bad' }
     if (!isSet(s.last_check)) return { label: 'Проверяю', tone: 'idle' }
+    if (s.core === 'mihomo' && !s.proxy_checked) {
+        if (s.current_server === 'DIRECT') return { label: s.selective ? 'Для списка выбран прямой выход' : 'Основной маршрут напрямую', tone: s.selective ? 'warn' : 'idle' }
+        if (s.current_server === 'REJECT') return { label: s.selective ? 'Маршрут для списка заблокирован' : 'Основной маршрут заблокирован', tone: 'warn' }
+        return { label: 'Проверка маршрута недоступна', tone: 'warn' }
+    }
     if (s.connected && s.proxy_checked)
-        return { label: 'Защищено', tone: 'good' }
+        return { label: s.selective ? 'VPN для списка работает' : 'VPN-маршрут работает', tone: 'good' }
     if (s.connected) return { label: 'Не подтверждено', tone: 'warn' }
     if (!s.internet) return { label: 'Нет интернета', tone: 'bad' }
-    return { label: 'VPN не работает', tone: 'bad' }
+    return { label: s.selective ? 'VPN для списка не отвечает' : 'Основной маршрут не отвечает', tone: 'bad' }
 }
 
 export const toneText: Record<Tone, string> = {

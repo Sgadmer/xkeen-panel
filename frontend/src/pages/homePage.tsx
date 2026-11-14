@@ -54,10 +54,14 @@ export function HomePage() {
     const current = node ? servers.find(s => s.id === node.server_id)
         : pool?.selection_kind ? servers.find(s => s.target_id === pool.current_tag && (!pool.source_name || s.source_name === pool.source_name))
         : servers.find(s => s.active)
-    const code = node?.country || serverCountry(current)
+    const selective = pool?.selective ?? status?.selective
+    const actualName = pool?.current_name ?? status?.current_server
+    const direct = actualName === 'DIRECT'
+    const blocked = actualName === 'REJECT'
+    const code = direct || blocked ? '' : node?.country || serverCountry(current)
     const source = pool?.source_name || ((!pool?.selection_kind || !['native', 'auto'].includes(pool.selection_kind)) ? current?.source_name : undefined)
     const awaitingMember = pool?.selection_kind === 'auto' && !pool.current_tag
-    const endpoint = awaitingMember ? 'Пул проверяет доступные узлы' : current?.name || node?.name || status?.current_server
+    const endpoint = direct ? 'Прямое подключение' : blocked ? 'Маршрут заблокирован' : awaitingMember ? 'Пул проверяет доступные узлы' : current?.name || node?.name || actualName
     const mode = pool?.selection_kind ?? (isAuto ? 'auto' : 'manual')
     const route = mode === 'auto'
         ? 'Автовыбор · ' + (scope ? scopeLabel(scope) : pool?.selection_name || 'Общий пул')
@@ -116,14 +120,15 @@ export function HomePage() {
                                 </div>
                                 <div className='truncate text-[15px] tracking-[-0.24px] text-muted-foreground'>
                                     {endpoint}
-                                    {!awaitingMember && status &&
+                                    {!direct && !blocked && !awaitingMember && status &&
                                         status.latency_ms > 0 &&
                                         ` · ${status.latency_ms} мс`}
                                 </div>
                             </div>
                         </div>
                         {!!pool && <div className='grid gap-1 border-t border-white/10 pt-2.5 text-[14px]'>
-                            <p className='break-words'><span className='text-muted-foreground'>Основной маршрут · </span>{route}</p>
+                            <p className='break-words'><span className='text-muted-foreground'>{selective ? 'Маршрут для Re:filter' : 'Основной маршрут'} · </span>{route}</p>
+                            {selective && <p className='text-muted-foreground'>После правил сервисов и исключений адреса из списка идут по выбранному маршруту. Остальные адреса открываются напрямую.</p>}
                             {source && <p className='break-words'><span className='text-muted-foreground'>Подписка · </span>{source}</p>}
                         </div>}
                         {isPool && (

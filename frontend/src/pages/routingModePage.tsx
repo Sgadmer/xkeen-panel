@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconLoader2 } from '@tabler/icons-react'
 import { Group, PageTitle } from '@/components/ios'
+import { BlocklistRouting } from '@/components/blocklistRouting'
+import { useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { safeNotice } from '@/lib/subscription'
 
@@ -15,6 +17,13 @@ const choices: { id: Mode; title: string; hint: string }[] = [
 ]
 
 export function RoutingModeForm({ onApplied }: { onApplied?: () => void }) {
+    const status = useStatus()
+    if (status.data?.core === 'mihomo') return <BlocklistRouting onApplied={onApplied} />
+    if (!status.data && status.isPending) return <p role='status' className='px-4 py-4'>Определяем ядро VPN…</p>
+    return <XrayRoutingModeForm onApplied={onApplied} />
+}
+
+function XrayRoutingModeForm({ onApplied }: { onApplied?: () => void }) {
     const qc = useQueryClient()
     const query = useQuery({ queryKey: ['routing-mode'], queryFn: () => api.get<PolicyResponse>('/api/routing-mode') })
     const [mode, setMode] = useState<Mode>('preserve')
@@ -41,6 +50,7 @@ export function RoutingModeForm({ onApplied }: { onApplied?: () => void }) {
     }
     if (query.isPending) return <p className='flex items-center gap-2 px-4 py-4'><IconLoader2 className='size-5 animate-spin' />Читаем действующие правила…</p>
     if (query.error) return <Group><p role='alert' className='py-4 text-destructive'>{query.error.message}</p><button type='button' className='min-h-11 text-tint' onClick={() => query.refetch()}>Повторить</button></Group>
+    if (query.data?.core === 'mihomo') return <BlocklistRouting onApplied={onApplied} />
     const unsupported = query.data?.core !== 'xray'
     return <form onSubmit={submit} className='flex flex-col gap-5'>
         {query.data?.profile_active && <Group><p className='py-4 text-[14px] text-muted-foreground'>Этот профиль содержит свои правила. Для ручного режима выберите обычный сервер в разделе «Серверы». До этого доступно сохранение провайдерской политики.</p></Group>}

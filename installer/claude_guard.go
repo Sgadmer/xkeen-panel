@@ -5,8 +5,10 @@ package installer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,11 +46,11 @@ func ClaudeFirewallStatus(ctx context.Context) ClaudeFirewall {
 			return status
 		}
 		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Size() != int64(len(asset)) {
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || info.Size() > 64<<10 {
 			return status
 		}
 		raw, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(raw, asset) {
+		if err != nil || !bytes.Equal(raw, asset) && !legacyGuard(name, raw) {
 			return status
 		}
 	}
@@ -61,9 +63,96 @@ func ClaudeFirewallStatus(ctx context.Context) ClaudeFirewall {
 	return status
 }
 
+// This is the exact LF-encoded script embedded in earlier panel releases.
+func legacyGuard(name string, raw []byte) bool {
+	return name == "strict-guard.sh" && fmt.Sprintf("%x", sha256.Sum256(raw)) == "e992747abdeccd061c9fa0a424aa69558c29e6f89941154f565dad95b773e564"
+}
+
+func upgradeLegacyGuard() error {
+	path := companions["strict-guard.sh"]
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !legacyGuard("strict-guard.sh", raw) {
+		return nil
+	}
+	asset, err := guardScripts.ReadFile("strict-guard.sh")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".xkp-guard-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.Write(asset); err == nil {
+		err = tmp.Chmod(0755)
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return errors.New("изменился файл фильтра Anthropic")
+	}
+	current, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(raw, current) {
+		return errors.New("изменился файл фильтра Anthropic")
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func SetInstalledClaudeFirewall(ctx context.Context, enabled bool) error {
+	status := ClaudeFirewallStatus(ctx)
+	if !status.Installed {
+		if status.Available {
+			if _, err := os.Lstat(companions["strict-guard.sh"]); !os.IsNotExist(err) {
+				return errors.New("версия установленного фильтра Anthropic не распознана")
+			}
+		}
+		return nil
+	}
+	if err := upgradeLegacyGuard(); err != nil {
+		return err
+	}
+	mode := "suspend-api"
+	if enabled {
+		mode = "resume-api"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, companions["strict-guard.sh"], mode)
+	cmd.Env = firewallEnv
+	if cmd.Run() != nil {
+		return errors.New("не удалось изменить фильтр адресов Anthropic")
+	}
+	return nil
+}
+
+func ClaudeFirewallNeedsSync(enabled bool) bool {
+	if _, err := os.Lstat(companions["strict-guard.sh"]); err != nil {
+		return false
+	}
+	if _, err := os.Lstat("/opt/etc/xkeen-panel-guard-api.pending"); err == nil {
+		return true
+	}
+	_, err := os.Stat("/opt/etc/xkeen-panel-guard-api.disabled")
+	return enabled && err == nil || !enabled && os.IsNotExist(err)
+}
+
 func InstallClaudeFirewall(ctx context.Context) (ClaudeFirewall, error) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		return ClaudeFirewall{}, errors.New("для включения фильтра требуется процесс панели на роутере с правами root")
+	}
+	if err := upgradeLegacyGuard(); err != nil {
+		return ClaudeFirewall{}, err
 	}
 	dir, err := os.MkdirTemp("", "xkeen-panel-guard-")
 	if err != nil {

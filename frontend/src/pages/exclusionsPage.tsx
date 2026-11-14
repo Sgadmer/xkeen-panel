@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconLoader2, IconPlus, IconRouteOff, IconTrash } from '@tabler/icons-react'
 import { Group, PageTitle, Row } from '@/components/ios'
+import { useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 
 interface ExclusionEntry {
@@ -25,6 +26,7 @@ const inputClass =
     'mt-1.5 min-h-11 w-full rounded-xl border border-white/10 bg-fill px-3 py-2 text-[16px] outline-none transition-colors focus:border-tint disabled:opacity-50'
 
 export function ExclusionsPage() {
+    const mihomo = useStatus().data?.core === 'mihomo'
     const qc = useQueryClient()
     const [value, setValue] = useState('')
     const [comment, setComment] = useState('')
@@ -131,9 +133,9 @@ export function ExclusionsPage() {
                         {add.isPending ? 'Применение…' : 'Добавить исключение'}
                     </button>
                     <p className='text-[13px] leading-snug text-muted-foreground'>
-                        Изменения применяются сразу. VPN может ненадолго прерваться
-                        при перезапуске. Исключения сохраняются при смене сервера и
-                        обновлении подписки.
+                        {mihomo ? 'Mihomo применяет исключения без перезапуска ядра. Они действуют и в режиме Re:filter.'
+                            : 'Изменения применяются сразу. При перезапуске VPN соединения могут ненадолго прерваться.'}
+                        {' '}Исключения сохраняются при смене сервера и обновлении подписки.
                     </p>
                 </form>
             </Group>

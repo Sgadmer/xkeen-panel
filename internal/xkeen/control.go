@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ var (
 
 	runningMu        sync.Mutex
 	runningCached    bool
+	runningKnown     bool
 	runningCore      string
 	runningCheckedAt time.Time
 )
@@ -67,6 +69,11 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 	cmd.SysProcAttr = detachedProcessAttrs()
 
 	runErr := cmd.Run()
+	if controlled {
+		runningMu.Lock()
+		runningCheckedAt = time.Time{}
+		runningMu.Unlock()
+	}
 
 	body, _ := os.ReadFile(out.Name())
 	text := strings.TrimSpace(string(ansiRe.ReplaceAll(body, nil)))
@@ -189,6 +196,13 @@ func IsRestarting() bool {
 // IsRunning reports whether the proxy core process is alive. Cached for 2s —
 // polling /proc on every SSE push is expensive on a router.
 func IsRunning(core string) bool {
+	running, _ := CoreProcessStatus(core)
+	return running
+}
+
+// CoreProcessStatus distinguishes an unobservable process table from a
+// completed scan that found no proxy. A missed read must not mean "stopped".
+func CoreProcessStatus(core string) (running, known bool) {
 	if core == "" {
 		core = CoreXray
 	}
@@ -197,30 +211,29 @@ func IsRunning(core string) bool {
 	defer runningMu.Unlock()
 
 	if core == runningCore && time.Since(runningCheckedAt) < 2*time.Second {
-		return runningCached
+		return runningCached, runningKnown
 	}
 
-	runningCached = coreProcessRunning(core)
+	runningCached, runningKnown = coreProcessStatus("/proc", "/opt/var/run", core)
 	runningCore = core
 	runningCheckedAt = time.Now()
 
-	return runningCached
+	return runningCached, runningKnown
 }
 
-// coreProcessRunning looks for the core process. The PID file XKeen maintains is
-// checked first; /proc is the fallback because a stale PID file outlives a crash.
-func coreProcessRunning(core string) bool {
-	if pid, ok := readPIDFile("/opt/var/run/" + core + ".pid"); ok && processAlive(pid, core) {
-		return true
+func coreProcessStatus(proc, run, core string) (running, known bool) {
+	if pid, ok := readPIDFile(filepath.Join(run, core+".pid")); ok {
+		if match, _ := corePID(proc, strconv.Itoa(pid), core); match {
+			return true, true
+		}
 	}
 
-	entries, err := os.ReadDir("/proc")
+	entries, err := os.ReadDir(proc)
 	if err != nil {
-		// No /proc (macOS during development) — fall back to ps
-		out, _ := exec.Command("sh", "-c", "ps | grep -v grep | grep "+core).Output()
-		return len(bytes.TrimSpace(out)) > 0
+		return false, false
 	}
 
+	known = true
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -228,20 +241,16 @@ func coreProcessRunning(core string) bool {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
 			continue
 		}
-		data, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
-		if err != nil {
-			continue
+		match, err := corePID(proc, e.Name(), core)
+		if match {
+			return true, true
 		}
-		cmd := string(bytes.ReplaceAll(data, []byte{0}, []byte{' '}))
-		if strings.Contains(cmd, "xkeen-panel") {
-			continue // do not count the panel itself
-		}
-		if strings.Contains(cmd, core) {
-			return true
+		if err != nil && !os.IsNotExist(err) {
+			known = false
 		}
 	}
 
-	return false
+	return false, known
 }
 
 func readPIDFile(path string) (int, bool) {
@@ -256,12 +265,22 @@ func readPIDFile(path string) (int, bool) {
 	return pid, true
 }
 
-// processAlive verifies the PID is both alive and actually the core — PIDs get
-// recycled, so the cmdline is checked too.
-func processAlive(pid int, core string) bool {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+func corePID(proc, pid, core string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(proc, pid, "cmdline"))
 	if err != nil {
-		return false
+		return false, err
 	}
-	return strings.Contains(string(bytes.ReplaceAll(data, []byte{0}, []byte{' '})), core)
+	exe, args, _ := bytes.Cut(data, []byte{0})
+	if filepath.Base(string(exe)) != core {
+		return false, nil
+	}
+	if core == CoreXray {
+		// Xray also runs isolated workers and temporary tests for Mihomo.
+		for _, helper := range []string{"/xkeen-panel-cards/", "/xkeen-panel-service-workers/", "/.node-probes-", "/xkeen-panel-sitecheck-"} {
+			if bytes.Contains(args, []byte(helper)) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }

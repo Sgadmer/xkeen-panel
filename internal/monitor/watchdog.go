@@ -50,17 +50,18 @@ type Watchdog struct {
 	geoip        *geoip.Matcher
 	blacklist    map[string]time.Time // keyed by RawURI, which survives reindexing
 
-	health         *HealthChecker
-	ticks          int
-	badNodes       map[string]time.Time // pool tags an exit check condemned, by expiry
-	lastRotation   time.Time
-	poolStore      *xkeen.PoolStore
-	trigger        chan struct{}
-	probeServers   func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
-	mihomoProbe    func(context.Context, string) (string, string, int, error)
-	mihomoRecovery func(context.Context) (string, error)
-	mihomoName     string
-	mihomoProtocol string
+	health          *HealthChecker
+	ticks           int
+	badNodes        map[string]time.Time // pool tags an exit check condemned, by expiry
+	lastRotation    time.Time
+	poolStore       *xkeen.PoolStore
+	trigger         chan struct{}
+	probeServers    func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
+	mihomoProbe     func(context.Context, string) (models.RouteProbe, error)
+	mihomoRecovery  func(context.Context) (string, error)
+	mihomoName      string
+	mihomoProtocol  string
+	mihomoSelective bool
 }
 
 func NewWatchdog(cfg *models.Config, sub *xkeen.SubscriptionManager, det *xkeen.Detector) *Watchdog {
@@ -85,7 +86,7 @@ func (w *Watchdog) SetPoolStore(store *xkeen.PoolStore) {
 	w.poolStore = store
 }
 
-func (w *Watchdog) SetMihomoProbe(probe func(context.Context, string) (string, string, int, error)) {
+func (w *Watchdog) SetMihomoProbe(probe func(context.Context, string) (models.RouteProbe, error)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.mihomoProbe = probe
@@ -138,7 +139,7 @@ func (w *Watchdog) Start(ctx context.Context) {
 	w.writeLog("Watchdog запущен (интервал: %s)", interval)
 
 	// Check once immediately
-	w.check()
+	w.check(true)
 
 	for {
 		select {
@@ -149,16 +150,14 @@ func (w *Watchdog) Start(ctx context.Context) {
 			}
 			return
 		case <-ticker.C:
-			if w.IsActive() {
-				w.check()
-			}
+			w.check(false)
 		case <-w.trigger:
-			w.check()
+			w.check(true)
 		}
 	}
 }
 
-func (w *Watchdog) check() {
+func (w *Watchdog) check(restoreSelection bool) {
 	w.changeMu.Lock()
 	defer w.changeMu.Unlock()
 	// Mid-restart the core refuses connections, which says nothing about the node
@@ -169,8 +168,9 @@ func (w *Watchdog) check() {
 	probe := w.mihomoProbe
 	w.mu.RUnlock()
 	if probe != nil && w.detector.Runtime().Core == xkeen.CoreMihomo {
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		name, protocol, latency, err := probe(ctx, w.config.CheckURL)
+		// Allow two eight-second URL tests and the local route lookup.
+		ctx, cancel := context.WithTimeout(context.Background(), 24*time.Second)
+		result, err := probe(ctx, w.config.CheckURL)
 		cancel()
 		internet := err == nil
 		if err != nil {
@@ -182,11 +182,12 @@ func (w *Watchdog) check() {
 			}
 		}
 		w.mu.Lock()
-		w.lastCheck, w.mihomoName, w.mihomoProtocol = time.Now(), name, protocol
-		w.connected, w.lastLatency, w.internet = err == nil, latency, internet
-		w.proxyChecked = name != "" && name != "DIRECT" && name != "REJECT" && name != "PASS"
+		w.lastCheck, w.mihomoName, w.mihomoProtocol = time.Now(), result.Name, result.Protocol
+		w.mihomoSelective = result.Selective
+		w.connected, w.lastLatency, w.internet = err == nil, result.Latency, internet
+		w.proxyChecked = result.Checked
 		recover := w.mihomoRecovery
-		if err != nil && internet && w.active && recover != nil {
+		if err != nil && result.Checked && internet && w.active && recover != nil {
 			w.failCount++
 		} else {
 			w.failCount = 0
@@ -199,7 +200,7 @@ func (w *Watchdog) check() {
 		if err != nil {
 			w.writeLog("[MIHOMO] Проверка общего маршрута: %v", err)
 		} else {
-			w.writeLog("[OK] Общий маршрут Mihomo работает (%dms)", latency)
+			w.writeLog("[OK] Общий маршрут Mihomo работает (%dms)", result.Latency)
 		}
 		w.publishStatus()
 		if tryRecovery {
@@ -217,12 +218,15 @@ func (w *Watchdog) check() {
 	}
 	// A status check while the watchdog is off may restore the owner's stored
 	// choice, but must never create an automatic choice of its own.
-	if !w.IsActive() && w.poolStore != nil && w.poolStore.Get().PinManual {
+	if restoreSelection && !w.IsActive() && w.poolStore != nil && w.poolStore.Get().PinManual {
 		w.superviseP(w.detector.Runtime(), w.detector.Topology())
 	}
 
 	proxy := w.proxyURL()
 	latency, err := fetchLatency(w.config.CheckURL, proxy, 10*time.Second)
+	if err != nil && proxy != nil {
+		latency, err = fetchLatency(w.config.CheckURL, proxy, 10*time.Second)
+	}
 
 	// Only a direct request can tell a dead node from a dead uplink, and on a
 	// dead uplink switching nodes is pointless churn
@@ -911,12 +915,9 @@ func (w *Watchdog) GetStatus() models.Status {
 	rt := w.detector.Runtime()
 
 	restarting := xkeen.IsRestarting()
-	coreRunning := xkeen.IsRunning(rt.Core)
-
-	// During a restart the core's state is unreliable — the process may still be
-	// alive or already killed — so "connected" is withheld rather than guessed
-	if restarting {
-		coreRunning = false
+	var coreRunning, processKnown bool
+	if !restarting {
+		coreRunning, processKnown = xkeen.CoreProcessStatus(rt.Core)
 	}
 
 	status := models.Status{
@@ -924,6 +925,7 @@ func (w *Watchdog) GetStatus() models.Status {
 		Internet:       w.internet,
 		ProxyChecked:   w.proxyChecked,
 		XrayRunning:    coreRunning,
+		ProcessUnknown: !processKnown,
 		Restarting:     restarting,
 		Latency:        w.lastLatency,
 		LastCheck:      w.lastCheck,
@@ -950,6 +952,7 @@ func (w *Watchdog) GetStatus() models.Status {
 	// In pool mode traffic goes through the pinned node, not the subscription's active entry
 	if w.mihomoProbe != nil && rt.Core == xkeen.CoreMihomo {
 		status.CurrentServer, status.Protocol = w.mihomoName, w.mihomoProtocol
+		status.Selective = w.mihomoSelective
 	} else if server := w.currentServer(); server != nil {
 		status.CurrentServer = server.Name
 		status.Protocol = server.Protocol

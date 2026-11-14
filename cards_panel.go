@@ -49,6 +49,9 @@ func maintainCardRoutes(ctx context.Context, controller *cardcontroller.Controll
 	for {
 		wd.LockChanges()
 		attempt, cancel := context.WithTimeout(ctx, 90*time.Second)
+		if _, err := controller.UpdateRefilter(attempt, nil, false); err != nil && ctx.Err() == nil {
+			wd.Log("Re:filter: %v", err)
+		}
 		if err := controller.Reconcile(attempt); err != nil && ctx.Err() == nil {
 			log.Print("Маршруты сервисов ожидают готовности локального контроллера.")
 		}

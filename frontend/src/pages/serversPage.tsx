@@ -56,11 +56,26 @@ const OTHER = '—'
 // One list on a phone, separate cards side by side on a desktop
 const TILE = 'lg:rounded-card lg:bg-card lg:px-4'
 
-type CountryGroup = { code: string; list: Server[] }
+type CountryGroup = { code: string; list: Server[]; bestLatency: number }
+type CountryOrder = 'name-asc' | 'name-desc' | 'latency'
 
 type Tab = 'pool' | 'all'
 
 const TAB_KEY = 'servers_tab'
+const COUNTRY_ORDER_KEY = 'servers_country_order'
+const countryCollator = new Intl.Collator('ru', { sensitivity: 'base' })
+
+function countryOrder(value: string | null): CountryOrder {
+    return value === 'name-desc' || value === 'latency' ? value : 'name-asc'
+}
+
+function savedCountryOrder(): CountryOrder {
+    try {
+        return countryOrder(localStorage.getItem(COUNTRY_ORDER_KEY))
+    } catch {
+        return 'name-asc'
+    }
+}
 
 function savedTab(): Tab {
     try {
@@ -98,6 +113,7 @@ export function ServersPage() {
     const { check, checking, error: checkError, progress, isPendingServer, latencyFor } = useStreamLatency()
     const [query, setQuery] = useState('')
     const [country, setCountryFilter] = useState('all')
+    const [order, setOrder] = useState<CountryOrder>(savedCountryOrder)
     const [catalogSheet, setCatalogSheet] = useState<'sources' | 'pools' | null>(null)
     const [editingPool, setEditingPool] = useState<string | null>(null)
     const [tab, setTabState] = useState<Tab>(savedTab)
@@ -134,38 +150,11 @@ export function ServersPage() {
         } catch {}
     }
 
-    const countries = useMemo(() => {
-        const counts = new Map<string, number>()
-        servers.forEach(s => {
-            if (s.protocol === 'xray-profile') return
-            const c = serverCountry(s) || OTHER
-            counts.set(c, (counts.get(c) ?? 0) + 1)
-        })
-        return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c)
-    }, [servers])
-
-    const groups = useMemo(() => {
-        const byCountry = new Map<string, Server[]>()
-        servers.forEach(s => {
-            if (s.protocol === 'xray-profile') return
-            const c = serverCountry(s) || OTHER
-            if (country !== 'all' && c !== country) return
-            if (!matches(query, s.name, c, s.source_name)) return
-            byCountry.set(c, [...(byCountry.get(c) ?? []), s])
-        })
-        const hasActive = (g: CountryGroup) =>
-            g.list.some(s => s.active) ? 0 : 1
-        return [...byCountry.entries()]
-            .map(([code, list]) => ({ code, list: list.sort(byLatency) }))
-            .sort(
-                (a, b) =>
-                    hasActive(a) - hasActive(b) ||
-                    (countryName(a.code) || 'я').localeCompare(
-                        countryName(b.code) || 'я',
-                        'ru',
-                    ),
-            )
-    }, [servers, query, country])
+    const catalogGroups = useMemo(() => groupServers(servers, order), [servers, order])
+    const groups = useMemo(() => catalogGroups
+        .filter(g => country === 'all' || g.code === country)
+        .map(g => ({ ...g, list: g.list.filter(s => matches(query, s.name, g.code, s.source_name)) }))
+        .filter(g => g.list.length > 0), [catalogGroups, country, query])
 
     const poolRows = useMemo(() => {
         const byId = new Map(servers.map(s => [s.id, s]))
@@ -505,12 +494,26 @@ export function ServersPage() {
                                 onChange={setQuery}
                                 className='lg:hidden'
                             />
+                            <label className='flex flex-wrap items-center gap-x-3 gap-y-1 text-[15px]'>
+                                <span>Порядок стран</span>
+                                <select value={order}
+                                    className='min-h-10 max-w-full rounded-xl border border-white/10 bg-fill px-2'
+                                    onChange={event => {
+                                        const next = countryOrder(event.target.value)
+                                        setOrder(next)
+                                        try { localStorage.setItem(COUNTRY_ORDER_KEY, next) } catch {}
+                                    }}>
+                                    <option value='name-asc'>По названию (А–Я)</option>
+                                    <option value='name-desc'>По названию (Я–А)</option>
+                                    <option value='latency'>По наименьшему пингу</option>
+                                </select>
+                            </label>
                             <div
                                 role='group'
                                 aria-label='Страна'
                                 className='-mx-4 flex gap-2 overflow-x-auto px-4 [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-40px),transparent)] [-webkit-mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-40px),transparent)] [scrollbar-width:none]'
                             >
-                                {['all', ...countries].map(c => (
+                                {['all', ...catalogGroups.map(g => g.code)].map(c => (
                                     <button
                                         key={c}
                                         type='button'
@@ -532,13 +535,9 @@ export function ServersPage() {
                         </div>
                     )}
 
-                    <div className='flex flex-col gap-4 lg:block lg:columns-2 lg:gap-4'>
+                    <div className='grid min-w-0 items-start gap-4 lg:grid-cols-2'>
                         {groups.map(g => (
-                            <Group
-                                key={g.code}
-                                title={groupTitle(g)}
-                                className='lg:mb-4 lg:break-inside-avoid'
-                            >
+                            <Group key={g.code} title={groupTitle(g)}>
                                 {g.list.map(s => (
                                     <ServerRow key={s.id} {...rowProps(s)} />
                                 ))}
@@ -728,6 +727,37 @@ function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
 
 function groupTitle(g: CountryGroup) {
     return `${countryLabel(g.code) || 'Страна не определена'} · ${g.list.length}`
+}
+
+function groupServers(servers: Server[], order: CountryOrder) {
+    const groups = new Map<string, CountryGroup>()
+    for (const server of servers) {
+        if (server.protocol === 'xray-profile') continue
+        const code = serverCountry(server) || OTHER
+        let group = groups.get(code)
+        if (!group) {
+            group = { code, list: [], bestLatency: Infinity }
+            groups.set(code, group)
+        }
+        group.list.push(server)
+        // The catalogue receives the completed HTTPS run in one batch. Live
+        // results update each row separately and never enter the group rank.
+        if (server.probe_kind === 'https' && !server.check_error && server.latency_ms > 0) {
+            group.bestLatency = Math.min(group.bestLatency, server.latency_ms)
+        }
+    }
+    for (const group of groups.values()) group.list.sort(byLatency)
+    return [...groups.values()].sort((a, b) => {
+        if (a.code === b.code) return 0
+        if (a.code === OTHER) return 1
+        if (b.code === OTHER) return -1
+        if (order === 'latency' && a.bestLatency !== b.bestLatency) {
+            return a.bestLatency - b.bestLatency
+        }
+        const byName = countryCollator.compare(countryName(a.code), countryName(b.code))
+            || countryCollator.compare(a.code, b.code)
+        return order === 'name-desc' ? -byName : byName
+    })
 }
 
 function byLatency(a: Server, b: Server) {

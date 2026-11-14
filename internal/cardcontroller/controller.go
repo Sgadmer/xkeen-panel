@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"xkeen-panel/installer"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
 )
@@ -44,10 +45,12 @@ type Controller struct {
 	validate           func(context.Context, string) error
 	prepare            func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
 	pending            map[string]bool
+	refilterError      string
 	avoidCountries     func() []string
 	autoAllowed        func(models.Server) bool
 	sourceProviderURLs func() map[string]string
 	autoPoolLimit      int
+	probeURL           string
 }
 
 // SetAutoPoolLimit uses the panel's existing router-wide capacity setting.
@@ -75,6 +78,12 @@ type coreAPI struct {
 	client       *http.Client
 }
 
+type apiResponseError int
+
+func (e apiResponseError) Error() string {
+	return fmt.Sprintf("локальный API Mihomo ответил HTTP %d", int(e))
+}
+
 func (a coreAPI) request(ctx context.Context, method, path string, body, result interface{}) error {
 	var payload io.Reader
 	if body != nil {
@@ -96,7 +105,7 @@ func (a coreAPI) request(ctx context.Context, method, path string, body, result 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("локальный API Mihomo ответил HTTP %d", res.StatusCode)
+		return apiResponseError(res.StatusCode)
 	}
 	if result != nil {
 		return json.NewDecoder(io.LimitReader(res.Body, 20<<20)).Decode(result)
@@ -143,11 +152,12 @@ type profile struct {
 	assigned  map[string]string
 	pools     []MultiPool
 	autoLimit int
+	probeURL  string
 	api       coreAPI
 }
 
 func (c *Controller) read() (profile, error) {
-	p := profile{assigned: map[string]string{}}
+	p := profile{assigned: map[string]string{}, probeURL: c.probeURL}
 	st, err := os.Lstat(c.path)
 	if err != nil || !st.Mode().IsRegular() || st.Size() > 32<<20 {
 		return p, errors.New("обычный файл конфигурации Mihomo недоступен")
@@ -158,6 +168,9 @@ func (c *Controller) read() (profile, error) {
 	}
 	if err = yaml.Unmarshal(p.raw, &p.doc); err != nil || p.doc == nil {
 		return p, errors.New("не удалось прочитать YAML Mihomo")
+	}
+	if _, err = readKillSwitch(p.doc); err != nil {
+		return p, err
 	}
 	p.autoLimit = normalizeAutoLimit(c.autoPoolLimit)
 	if value, present := p.doc[autoLimitKey]; present {
@@ -255,27 +268,51 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		}
 	}
 	var providerNodes map[string]selector
+	policy, _ := readKillSwitch(p.doc)
+	registry, _ := readRefilter(p.doc)
 	for i := range result.Services {
 		s := &result.Services[i]
 		s.Target = p.assigned[s.ID]
 		s.Blocked = false
+		if registry.Enabled && s.Target == "" && s.ID != "claude" {
+			s.InheritedRoute = &xkeen.InheritedRoute{Kind: "conditional", Via: []string{}}
+			continue
+		}
 		if !managed || s.ID != "claude" && s.Target == "" {
 			group := groupNames[s.ID]
-			if !groupRoutes[group] && !(groupRoutes[cardPrefix+s.ID+"-inherited"] && live[cardPrefix+s.ID+"-inherited"].Now == group) {
+			start := group
+			if own := cardPrefix + s.ID + "-inherited"; groupRoutes[own] {
+				start = live[own].Now
+			} else if wrap := failoverName("native", group); groupRoutes[wrap] {
+				start = wrap
+			} else if !groupRoutes[group] {
 				group = ""
+				start = ""
 			}
-			s.InheritedRoute = inheritedRoute(group, live, names, func(name string) selector {
+			s.InheritedRoute = inheritedRoute(start, live, names, func(name string) selector {
 				if providerNodes == nil {
 					providerNodes = p.api.providerNodes(ctx)
 				}
 				return providerNodes[name]
 			})
+			if start != group {
+				s.InheritedRoute.Group = group
+				if len(s.InheritedRoute.Via) > 0 && s.InheritedRoute.Via[0] == group {
+					s.InheritedRoute.Via = s.InheritedRoute.Via[1:]
+				}
+			}
 			if group != "" {
-				s.RouteName = publicRouteName(live[group].Now, names)
+				current := fallbackSelection(start, live)
+				if current == group {
+					current = live[group].Now
+				}
+				s.RouteName = publicRouteName(current, names)
 			}
 			continue
 		}
 		group := live[cardPrefix+s.ID]
+		oneMember := len(group.All) == 1 && group.All[0] == group.Now
+		group.Now = fallbackSelection(group.Now, live)
 		s.Blocked = result.ControllerReady && len(group.All) == 1 && group.Now == "REJECT"
 		target := nodePrefix + s.Target
 		if s.Target == directTarget {
@@ -285,12 +322,13 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		if s.Target != directTarget {
 			matches = p.endpointName(s.Target, group.Now)
 		}
-		if len(group.All) != 1 || group.All[0] != group.Now || (!matches && !s.Blocked) {
+		directFallback := !policy.Protects(s.ID) && group.Now == "DIRECT"
+		if !oneMember || (!matches && !s.Blocked && !directFallback) {
 			result.Active = false
 		}
 		if s.Blocked {
 			s.RouteName = "REJECT"
-		} else if target == "DIRECT" && group.Now == target {
+		} else if group.Now == "DIRECT" {
 			s.RouteName = "DIRECT"
 		} else if matches {
 			for _, t := range result.Targets {
@@ -304,9 +342,8 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 	return result, nil
 }
 
-// A dispatcher stop (including the stop phase of restart) removes the
-// transparent interception rules. The managed profile always protects Claude,
-// including when it has no selected endpoint and resolves to REJECT.
+// A dispatcher stop (including restart) removes transparent interception.
+// Only allow this if the user has released every protected VPN route.
 func (c *Controller) CheckCoreInterruption() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -315,7 +352,23 @@ func (c *Controller) CheckCoreInterruption() error {
 		return err
 	}
 	if _, managed := p.doc[stateKey]; managed {
-		return errors.New("остановка или перезапуск XKeen снимет перехват защищённых сервисов. Назначения серверов применяются без остановки ядра")
+		policy, err := readKillSwitch(p.doc)
+		if err != nil {
+			return err
+		}
+		if !policy.Enabled {
+			protected := false
+			for id := range policy.Services {
+				if policy.Protects(id) && p.assigned[id] != directTarget {
+					protected = true
+					break
+				}
+			}
+			if !protected {
+				return nil
+			}
+		}
+		return errors.New("Kill switch включён. Остановка или перезапуск XKeen снимет перехват защищённых маршрутов")
 	}
 	return nil
 }
@@ -350,7 +403,19 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	if _, enabled := p.doc[stateKey]; !enabled {
 		return c.reconcileCountryGroups(ctx, p)
 	}
+	policy, err := readKillSwitch(p.doc)
+	if err != nil {
+		return err
+	}
+	if policy.Protects("claude") && installer.ClaudeFirewallNeedsSync(true) {
+		if err := installer.SetInstalledClaudeFirewall(ctx, true); err != nil {
+			return err
+		}
+	}
 	_, err = c.apply(ctx, "", "", nil)
+	if err == nil && !policy.Protects("claude") && installer.ClaudeFirewallNeedsSync(false) {
+		err = installer.SetInstalledClaudeFirewall(ctx, false)
+	}
 	return err
 }
 
@@ -492,6 +557,10 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 		name := cardPrefix + service.ID
 		want := expected[name]
 		previous, exists := selections[name]
+		if inherited := name + "-inherited"; want == "" && expected[inherited] != "" {
+			want = expected[inherited]
+			previous, exists = selections[inherited]
+		}
 		if c.pending[service.ID] || (want != "" || exists) && (previous.Now != want || service.ID == id) {
 			if !c.drain(ctx, p.api, service.ID, want, view.Services) {
 				c.pending[service.ID] = true
@@ -508,6 +577,15 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 		} else {
 			c.pending[defaultID] = true
 		}
+	}
+	// The transparent rule may switch back from a native fallback group
+	// without having a service assignment. A live CONNECT keeps its old
+	// chain across hot reloads, including an established DIRECT socket.
+	const obsolete = "obsolete-fallback"
+	if c.drainObsoleteFallback(ctx, p.api, expected, p.doc) {
+		delete(c.pending, obsolete)
+	} else {
+		c.pending[obsolete] = true
 	}
 	result.ActiveConnectionsPending = len(c.pending) > 0
 	if result.Active && !result.ActiveConnectionsPending {
@@ -543,6 +621,12 @@ func stage(dir string, raw []byte) (string, error) {
 func groupsReady(live map[string]selector, expected map[string]string) bool {
 	for name, v := range expected {
 		g := live[name]
+		if strings.HasPrefix(name, failoverPrefix) {
+			if !strings.EqualFold(g.Type, "fallback") || len(g.All) != 2 || g.All[0] != v || g.All[1] != "DIRECT" || g.Now != v && g.Now != "DIRECT" {
+				return false
+			}
+			continue
+		}
 		if !strings.EqualFold(g.Type, "selector") || g.Now != v || len(g.All) != 1 || g.All[0] != v {
 			return false
 		}
@@ -592,7 +676,7 @@ func (c *Controller) keepOriginal(raw []byte) error {
 // compiled into this configuration, before any pre-existing direct rule.
 func (a coreAPI) rulesReady(ctx context.Context, doc map[string]interface{}) bool {
 	rules, err := a.rules(ctx)
-	return err == nil && activeRulesMatch(rules, doc)
+	return err == nil && activeRulesMatch(rules, doc) && a.refilterReady(ctx, doc)
 }
 
 type liveRule struct {
@@ -633,7 +717,7 @@ func activeRulesMatch(rules []liveRule, doc map[string]interface{}) bool {
 			return false
 		}
 		switch parts[0] {
-		case "DOMAIN", "DOMAIN-SUFFIX", "IP-CIDR", "IP-CIDR6":
+		case "DOMAIN", "DOMAIN-SUFFIX", "IP-CIDR", "IP-CIDR6", "RULE-SET":
 			if !strings.EqualFold(actual.Payload, parts[1]) {
 				return false
 			}

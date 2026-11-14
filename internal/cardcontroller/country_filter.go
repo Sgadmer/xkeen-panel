@@ -128,7 +128,7 @@ func (c *Controller) renderCountryFilter(p *profile, servers []models.Server) (a
 		if err := removeCountryFilter(group); err != nil {
 			return result, err
 		}
-		if !enabled {
+		if !enabled || strings.HasPrefix(str(group["name"]), cardPrefix) {
 			continue
 		}
 		switch str(group["type"]) {

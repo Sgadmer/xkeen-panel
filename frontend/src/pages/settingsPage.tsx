@@ -10,6 +10,7 @@ import {
     IconWand,
 } from '@tabler/icons-react'
 import { Group, IconTile, PageTitle, Row } from '@/components/ios'
+import { GlobalKillSwitch } from '@/components/killSwitch'
 import { useAuth } from '@/hooks/useAuth'
 import { useStatus, useUpdate } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
@@ -47,7 +48,7 @@ export function SettingsPage() {
 
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <Group title='XKeen'>
-                    <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint='Выбранные сервисы или весь трафик' to='/settings/routing' />
+                    <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint={status?.core === 'mihomo' ? 'По списку блокировок или по правилам профиля' : 'Выбранные сервисы или весь трафик'} to='/settings/routing' />
                     <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint='Версии XKeen/Xray, обновления и геоданные' to='/settings/components' />
                     <Row
                         icon={icon('#30d158', IconArrowsExchange)}
@@ -150,6 +151,7 @@ export function SettingsPage() {
                     />
                 </Group>
 
+                {status?.core === 'mihomo' && <div id='kill-switch'><GlobalKillSwitch /></div>}
                 <Group>
                     <Row label='Выйти' tone='destructive' onClick={logout} />
                 </Group>

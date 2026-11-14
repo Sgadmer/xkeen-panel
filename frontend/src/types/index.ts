@@ -33,6 +33,8 @@ export type Status = {
     internet: boolean
     proxy_checked: boolean
     xray_running: boolean
+    process_unknown?: boolean
+    selective?: boolean
     restarting: boolean
     current_server: string
     protocol: string
@@ -54,6 +56,8 @@ export type PoolStatus = {
     selection_kind?: 'auto' | 'manual' | 'profile' | 'native' | 'replacement'
     selection_name?: string
     source_name?: string
+    selective?: boolean
+    current_name?: string
     balancer_tag?: string
     pool_tags?: string[]
     proxy_tags?: string[]
