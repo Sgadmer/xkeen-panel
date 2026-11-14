@@ -87,7 +87,8 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                             <IconX aria-hidden className='size-5' />
                         </Dialog.Close>
                     </header>
-                    <div className='min-h-0 space-y-2.5 overflow-y-auto overscroll-contain bg-muted/40 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))]' onKeyDown={moveFocus}>
+                    <div className='min-h-0 overflow-y-auto overscroll-contain bg-muted/40' onKeyDown={moveFocus}>
+                      <div className='space-y-2.5 p-3 pb-[max(.75rem,env(safe-area-inset-bottom))]'>
                         {(allowInherited || allowDirect || missing) && <div className='divide-y overflow-hidden rounded-2xl border bg-card'>
                             {missing && <p className='px-4 py-3 text-sm text-muted-foreground'>{currentLabel}</p>}
                             {allowInherited && <RouteChoice label={inheritedLabel} current={value === ''} disabled={disabled} onClick={() => choose('')} />}
@@ -118,6 +119,7 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                             )
                         })}
                         {!groups.length && <p className='p-2 text-sm text-muted-foreground'>Доступных VPN-маршрутов нет.</p>}
+                      </div>
                     </div>
                 </Dialog.Popup>
             </Dialog.Portal>

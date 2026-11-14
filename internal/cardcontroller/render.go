@@ -29,6 +29,52 @@ func targetPart(rule string) ([]string, int) {
 	return fields, last
 }
 
+// A broad Google classifier can include YouTube's GeoSite and API names.
+// Excluding the child from the parent lets an unassigned YouTube connection
+// continue through the owner's rules or Re:filter, including explicit blocks.
+func youtubeCondition(services []xkeen.ServiceRouteView, original []string) string {
+	conditions := []string{}
+	seen := map[string]bool{}
+	add := func(condition string) {
+		if !seen[condition] {
+			conditions = append(conditions, "("+condition+")")
+			seen[condition] = true
+		}
+	}
+	for _, service := range services {
+		if service.ID != "youtube" {
+			continue
+		}
+		for _, domain := range service.Domains {
+			if suffix, ok := strings.CutPrefix(domain, "domain:"); ok {
+				add("DOMAIN-SUFFIX," + suffix)
+			}
+		}
+	}
+	for _, rule := range original {
+		parts, end := targetPart(rule)
+		if parts[end] != groupNames["youtube"] || end != 2 {
+			continue
+		}
+		switch parts[0] {
+		case "DOMAIN", "DOMAIN-SUFFIX", "DOMAIN-WILDCARD", "DOMAIN-REGEX", "DOMAIN-KEYWORD", "GEOSITE", "RULE-SET":
+			add(ruleCondition(parts, end))
+		}
+	}
+	if len(conditions) == 0 {
+		return ""
+	}
+	return "NOT,((OR,(" + strings.Join(conditions, ",") + ")))"
+}
+
+func ruleCondition(fields []string, target int) string {
+	condition := strings.Join(fields[:target], ",")
+	if target+1 < len(fields) {
+		condition += "," + strings.Join(fields[target+1:], ",")
+	}
+	return condition
+}
+
 type cardEndpoint struct {
 	xkeen.CardProxy
 	name string
@@ -295,17 +341,21 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 			expected[strict] = route
 		}
 		seen := map[string]bool{}
+		withoutYouTube := ""
+		if id == "google" && p.assigned["youtube"] == "" {
+			withoutYouTube = youtubeCondition(services, original)
+		}
 		add := func(r string) {
+			if withoutYouTube != "" && !strings.HasPrefix(r, "IN-NAME,") {
+				fields, end := targetPart(r)
+				r = "AND,((" + ruleCondition(fields, end) + "),(" + withoutYouTube + "))," + fields[end]
+			}
 			if !seen[r] {
 				if registryOverride {
 					// The policy override changes failover only for VPN matches.
 					// Other addresses of the same service still follow DIRECT.
 					fields, end := targetPart(r)
-					condition := strings.Join(fields[:end], ",")
-					opts := strings.Join(fields[end+1:], ",")
-					if opts != "" {
-						condition += "," + opts
-					}
+					condition := ruleCondition(fields, end)
 					combine := func(set string) []string {
 						predicate := "AND,((" + condition + "),(RULE-SET," + set + ")),"
 						return []string{predicate + name, predicate + terminal(protected)}
@@ -531,10 +581,7 @@ func (c *Controller) drain(ctx context.Context, a coreAPI, id, want string, serv
 
 func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, expected map[string]string, doc map[string]interface{}) bool {
 	var snapshot struct {
-		Connections []struct {
-			ID     string
-			Chains []string
-		}
+		Connections []connectionTracker
 	}
 	if api.request(ctx, "GET", "/connections", nil, &snapshot) != nil {
 		return false
@@ -558,6 +605,12 @@ func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, exp
 		for _, chain := range flow.Chains {
 			fromAuto = fromAuto || protectedAuto[chain]
 			wentDirect = wentDirect || direct[chain]
+			// A connection opened before the YouTube split can outlive the
+			// hot reload. The managed transparent Google card no longer owns it.
+			if (chain == cardPrefix+"google" || chain == cardPrefix+"google-inherited") &&
+				(xkeen.ServiceForHost(flow.Metadata.Host) == "youtube" || xkeen.ServiceForHost(flow.Metadata.SniffHost) == "youtube") {
+				stale = true
+			}
 			if strings.HasPrefix(chain, failoverPrefix) && expected[chain] == "" || chain == cardPrefix+"direct" && expected[chain] == "" {
 				stale = true
 			}

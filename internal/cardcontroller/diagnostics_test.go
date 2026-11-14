@@ -37,4 +37,12 @@ func TestConnectionUsesObservedChainAndOnlyPublicFields(t *testing.T) {
 			t.Errorf("incorrect service icon or route for %q", domain)
 		}
 	}
+	f.Chains = []string{"US", cardPrefix + "google"}
+	for host, want := range map[string]string{"i.ytimg.com": "youtube", "yt3.googleusercontent.com": "youtube", "youtubei.googleapis.com": "youtube", "play.googleapis.com": "google", "ytimg.com.other.test": "google"} {
+		f.Metadata.Host = host
+		row := f.project(map[string]string{cardPrefix + "google": "Google"})
+		if row.ServiceID != want || !reflect.DeepEqual(row.Route, []string{"Google", "US"}) {
+			t.Errorf("wrong service or observed route for %s: %+v", host, row)
+		}
+	}
 }

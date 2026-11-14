@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { WanTraffic, type WanInterval } from './wanTraffic'
 
 export type RouterSample = {
     at: string
@@ -8,6 +9,7 @@ export type RouterSample = {
     ram_total_kib?: number
     ram_used_kib?: number
     temperature_c?: number
+    wan?: WanInterval[]
 }
 
 const valueFormat = new Intl.NumberFormat('ru', { maximumFractionDigits: 1 })
@@ -236,6 +238,7 @@ export function RouterMetrics({
                     detail='Максимум по датчикам роутера'
                 />
             </div>
+            <WanTraffic history={history} current={system} minutes={minutes} />
             {!!system?.load?.length && (
                 <p className='px-2 text-xs text-muted-foreground'>
                     Средняя нагрузка за 1 / 5 / 15 мин ·{' '}

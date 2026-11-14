@@ -150,7 +150,7 @@ func (s *Server) Handler() http.Handler {
 			r.Use(middleware.Timeout(120 * time.Second))
 
 			r.Get("/status", handlers.HandleStatus)
-			r.Get("/diagnostics", api.NewDiagnosticsHandler(lifetime, s.Cards))
+			r.Get("/diagnostics", api.NewDiagnosticsHandler(lifetime, s.Cards, devicesHandler))
 			r.Get("/access", handlers.HandlePanelAccess)
 			if s.Notifications != nil {
 				s.Notifications.Mount(r)

@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
     IconBell,
-    IconActivity,
     IconAdjustmentsHorizontal,
     IconArrowsExchange,
     IconCpu,
@@ -50,12 +49,6 @@ export function SettingsPage() {
                 <Group title='XKeen'>
                     <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint={status?.core === 'mihomo' ? 'По списку блокировок или по правилам профиля' : 'Выбранные сервисы или весь трафик'} to='/settings/routing' />
                     <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint='Версии XKeen/Xray, обновления и геоданные' to='/settings/components' />
-                    <Row
-                        icon={icon('#30d158', IconArrowsExchange)}
-                        label='Исключения VPN'
-                        hint='Домены, URL, IP-адреса и подсети без VPN'
-                        to='/exclusions'
-                    />
                     <Row
                         icon={icon('#6366f1', IconCpu)}
                         label='Ядро'
@@ -143,11 +136,6 @@ export function SettingsPage() {
                         icon={icon('#5856d6', IconWand)}
                         label='Мастер настройки'
                         to='/welcome'
-                    />
-                    <Row
-                        icon={icon('#ff375f', IconActivity)}
-                        label='Диагностика и журнал'
-                        to='/diagnostics'
                     />
                 </Group>
 

@@ -54,7 +54,7 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(siteFile, file(domain("blocked.test"), domain("habr.test"), domain("192.0.2.12"), domain("habr.test")))
+	write(siteFile, file(domain("blocked.test"), domain("habr.test"), domain("192.0.2.12"), domain("habr.test"), domain("ytimg.com"), domain("googleapis.com")))
 	write(ipFile, file(append(field(10, []byte{192, 0, 2, 0}), 16, 24)))
 	port := func() *net.TCPAddr {
 		l, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -85,10 +85,10 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 	defer upstream.Close()
 	u := upstream.Listener.Addr().(*net.TCPAddr)
 	base := map[string]interface{}{"mode": "rule", "mixed-port": proxy.Port, "external-controller": api.String(), "secret": "test-only",
-		"hosts":        map[string]string{"blocked.test": "192.0.2.2", "habr.test": "192.0.2.2", "ordinary.test": "192.0.2.2"},
+		"hosts":        map[string]string{"blocked.test": "192.0.2.2", "habr.test": "192.0.2.2", "ordinary.test": "192.0.2.2", "i.ytimg.com": "192.0.2.2", "youtubei.googleapis.com": "192.0.2.2", "maps.googleapis.com": "192.0.2.2"},
 		"proxies":      []interface{}{map[string]interface{}{"name": "Dead", "type": "http", "server": "127.0.0.1", "port": u.Port}},
-		"proxy-groups": []interface{}{map[string]interface{}{"name": "General", "type": "select", "proxies": []string{"Dead"}}},
-		"rules":        []string{"DOMAIN-SUFFIX,habr.test,DIRECT", "DOMAIN-SUFFIX,ordinary.test,General", "MATCH,General"}}
+		"proxy-groups": []interface{}{map[string]interface{}{"name": "General", "type": "select", "proxies": []string{"Dead"}}, map[string]interface{}{"name": "Google", "type": "select", "proxies": []string{"Dead"}}},
+		"rules":        []string{"DOMAIN-SUFFIX,habr.test,DIRECT", "DOMAIN-SUFFIX,ytimg.com,Google", "DOMAIN-SUFFIX,ordinary.test,General", "MATCH,General"}}
 	b, err := json.Marshal(base)
 	if err != nil {
 		t.Fatal(err)
@@ -130,13 +130,13 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 		return s
 	}
 	s := check(&on, false)
-	if !s.Enabled || s.Domains != 4 || s.Prefixes != 1 {
+	if !s.Enabled || s.Domains != 6 || s.Prefixes != 1 {
 		t.Fatal(s)
 	}
 	var providers struct {
 		Providers map[string]struct{ RuleCount int }
 	}
-	if err := p.api.request(ctx, "GET", "/providers/rules", nil, &providers); err != nil || providers.Providers[refilterSites].RuleCount != 4 || providers.Providers[refilterIPs].RuleCount != 1 {
+	if err := p.api.request(ctx, "GET", "/providers/rules", nil, &providers); err != nil || providers.Providers[refilterSites].RuleCount != 6 || providers.Providers[refilterIPs].RuleCount != 1 {
 		t.Fatalf("providers: %+v, %v", providers, err)
 	}
 	dst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) }))
@@ -159,6 +159,22 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 	assertDirect("habr.test", true)
 	assertDirect("ordinary.test", true)
 	assertDirect("192.0.2.2", false)
+	// A broad assigned Google route must not absorb an inherited YouTube
+	// site from Re:filter, including an API host within googleapis.com.
+	if _, err := c.Set(ctx, "google", directTarget); err != nil {
+		t.Fatal(err)
+	}
+	assertDirect("i.ytimg.com", false)
+	assertDirect("youtubei.googleapis.com", false)
+	assertDirect("maps.googleapis.com", true)
+	if _, err := c.Set(ctx, "youtube", directTarget); err != nil {
+		t.Fatal(err)
+	}
+	assertDirect("i.ytimg.com", true)
+	if _, err := c.Set(ctx, "youtube", ""); err != nil {
+		t.Fatal(err)
+	}
+	assertDirect("i.ytimg.com", false)
 	first, _ := os.ReadFile(config)
 	if !strings.Contains(string(first), "MATCH,General") {
 		t.Fatal("owner MATCH lost")
@@ -175,6 +191,7 @@ func TestRefilterLivePolicyAndRollback(t *testing.T) {
 	assertDirect("ordinary.test", true)
 	write(siteFile, file(domain("ordinary.test"), domain("habr.test")))
 	check(nil, true)
+	assertDirect("i.ytimg.com", true)
 	assertDirect("ordinary.test", false)
 	assertDirect("blocked.test", true)
 	assertDirect("habr.test", true)
@@ -239,5 +256,26 @@ func TestRefilterDrainResumesAfterPanelRestartWhenDisabled(t *testing.T) {
 	}
 	if _, err := newController().UpdateRefilter(context.Background(), nil, false); err != nil || attempts != 2 {
 		t.Fatalf("retry after ack %v, requests %d", err, attempts)
+	}
+}
+
+func TestYouTubeSplitDrainsOnlyStaleGoogleSockets(t *testing.T) {
+	var closed []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			closed = append(closed, strings.TrimPrefix(r.URL.Path, "/connections/"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		io.WriteString(w, `{"connections":[
+			{"id":"old","chains":["VPN","XKP-card-google"],"metadata":{"sniffHost":"i.ytimg.com"}},
+			{"id":"google","chains":["VPN","XKP-card-google"],"metadata":{"host":"maps.googleapis.com"}},
+			{"id":"youtube","chains":["VPN","XKP-card-youtube"],"metadata":{"host":"youtube.com"}},
+			{"id":"native","chains":["VPN","Google"],"metadata":{"host":"youtube.com"}}]}`)
+	}))
+	defer server.Close()
+	api := coreAPI{base: server.URL, client: server.Client()}
+	if !(&Controller{}).drainObsoleteFallback(context.Background(), api, nil, nil) || len(closed) != 1 || closed[0] != "old" {
+		t.Fatalf("unexpected closed connections: %v", closed)
 	}
 }

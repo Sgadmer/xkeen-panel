@@ -77,10 +77,9 @@ func (f connectionTracker) project(names map[string]string) Connection {
 			row.Route = append(row.Route, tag)
 		}
 	}
-	if row.ServiceID == "" || row.ServiceID == "ai" {
-		if service := xkeen.ServiceForHost(host); service != "" {
-			row.ServiceID = service
-		}
+	if service := xkeen.ServiceForHost(host); service != "" &&
+		(row.ServiceID == "" || row.ServiceID == "ai" || row.ServiceID == "google" && service == "youtube") {
+		row.ServiceID = service
 	}
 	return row
 }

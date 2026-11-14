@@ -5,13 +5,14 @@ import { Group, Row } from '@/components/ios'
 import { useDevices } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { RouterMetrics, type RouterSample } from '@/components/routerMetrics'
-import { serviceIcons } from '@/lib/serviceIcons'
+import { ServiceLogo } from '@/components/serviceLogo'
 
 type Flow = { id: string; device: string; host: string; port?: string; network?: string; rule?: string; service_id?: string; route: string[]; start: string }
 type Activity = {
     system: RouterSample
     history?: RouterSample[]
     connections: Flow[]
+    services?: { id: string; name: string }[]
     connections_error?: string
 }
 
@@ -21,6 +22,7 @@ export function RouterActivity() {
     const [params, setParams] = useSearchParams()
     const device = params.get('device') ?? ''
     const [search, setSearch] = useState('')
+    const [service, setService] = useState('')
     const [snapshot, setSnapshot] = useState<{ data: Activity; at: number; error?: string } | null>(null)
     const paused = snapshot !== null
     const [page, setPage] = useState(0)
@@ -40,16 +42,16 @@ export function RouterActivity() {
     for (const f of flows) if (f.device && !devices.has(f.device)) devices.set(f.device, '')
     if (device && !devices.has(device)) devices.set(device, '')
     const input = search.trim().toLowerCase()
-    const filtered = flows.filter(f => (!device || f.device === device) &&
+    const filtered = flows.filter(f => (!device || f.device === device) && (!service || f.service_id === service) &&
         (!input || [f.host, f.rule, ...f.route].some(s => s?.toLowerCase().includes(input))))
     const pageSize = 25
     const last = Math.max(0, Math.ceil(filtered.length / pageSize) - 1)
     const current = Math.min(page, last)
-    useEffect(() => { setPage(0) }, [search, device])
+    useEffect(() => { setPage(0) }, [search, device, service])
     return <>
         <RouterMetrics system={sys} history={data?.history}/>
         <Group title='Соединения по устройствам' footer='Здесь видны активные соединения, прошедшие через Mihomo. Для HTTPS отображается домен или IP, путь страницы зашифрован. Если маршрут заканчивается пулом или профилем Xray, его внутренний выбор сервера Mihomo не видит.'>
-            <div className='grid gap-3 py-3 sm:grid-cols-2'>
+            <div className='grid gap-3 py-3 sm:grid-cols-2 lg:grid-cols-3'>
                 <label className='grid min-w-0 gap-1 text-sm text-muted-foreground'>Устройство
                     <select className='min-h-11 min-w-0 w-full rounded-xl bg-fill px-3 text-foreground' value={device} onChange={e => {
                         const next = new URLSearchParams(params)
@@ -62,8 +64,20 @@ export function RouterActivity() {
                             <option key={ip} value={ip}>{name && name !== ip ? name + ' · ' + ip : ip}</option>)}
                     </select>
                 </label>
+                <label className='grid min-w-0 gap-1 text-sm text-muted-foreground'>Сервис
+                    <select className='min-h-11 min-w-0 w-full rounded-xl bg-fill px-3 text-foreground' value={service} onChange={e => {
+                        setService(e.target.value)
+                        setSearch('')
+                    }}>
+                        <option value=''>Все сервисы</option>
+                        {data?.services?.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                </label>
                 <label className='grid min-w-0 gap-1 text-sm text-muted-foreground'>Поиск
-                    <input type='search' placeholder='Домен, IP, правило или маршрут' value={search} onChange={e => setSearch(e.target.value)}
+                    <input type='search' placeholder='Домен, IP, правило или маршрут' value={search} onChange={e => {
+                        setSearch(e.target.value)
+                        setService('')
+                    }}
                         className='min-h-11 min-w-0 rounded-xl bg-fill px-3 text-foreground' />
                 </label>
             </div>
@@ -75,14 +89,13 @@ export function RouterActivity() {
             </div>
             {error ? <Row label='Соединения сейчас недоступны' hint={error} />
                 : !data ? <Row label='Читаем соединения…' />
-                : !filtered.length ? <Row label={search || device ? 'Подходящих соединений сейчас нет' : 'Сейчас нет активных соединений'} /> : null}
+                : !filtered.length ? <Row label={search || device || service ? 'Подходящих соединений сейчас нет' : 'Сейчас нет активных соединений'} /> : null}
             {filtered.slice(current*pageSize, (current+1)*pageSize).map(f => {
                 const name = devices.get(f.device)
-                const Glyph = f.service_id && serviceIcons[f.service_id]
                 const destination = f.host.includes(':') && f.port ? '[' + f.host + ']' : f.host
                 return <article key={f.id} className='min-w-0 py-3'>
                     <div className='flex flex-wrap items-baseline justify-between gap-x-3'>
-                        <strong className='flex min-w-0 items-center gap-2 break-all text-[15px]'>{Glyph && <Glyph aria-hidden className={'size-5 shrink-0 '+(f.service_id==='claude'?'text-orange-400':'text-tint')} stroke={1.8}/>}<span>{destination || 'Адрес неизвестен'}{f.port && ':' + f.port}</span></strong>
+                        <strong className='flex min-w-0 items-center gap-2 break-all text-[15px]'>{f.service_id && <ServiceLogo id={f.service_id} className='size-5' />}<span>{destination || 'Адрес неизвестен'}{f.port && ':' + f.port}</span></strong>
                         <span className='text-xs text-muted-foreground'>{f.network}</span>
                     </div>
                     <p className='break-words text-sm text-muted-foreground'>{name && name !== f.device ? name + ' · ' : ''}{f.device || 'Источник неизвестен'}</p>

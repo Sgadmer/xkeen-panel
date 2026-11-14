@@ -16,7 +16,7 @@ var serviceCatalog = []struct {
 }{
 	{"claude", "Claude / Anthropic", "anthropic", "anthropic.com claude.ai claude.com claudeusercontent.com claudemcpcontent.com claudeassets.com claude.site anthropicusercontent.com"},
 	{"openai", "ChatGPT / OpenAI", "openai", "chatgpt.com openai.com oaistatic.com oaiusercontent.com"},
-	{"youtube", "YouTube", "youtube", "youtube.com youtu.be youtube-nocookie.com googlevideo.com ytimg.com youtubei.googleapis.com"},
+	{"youtube", "YouTube", "youtube", "youtube.com youtu.be yt.be youtube-nocookie.com googlevideo.com ytimg.com youtubei.googleapis.com youtube.googleapis.com youtubeembeddedplayer.googleapis.com yt3.googleusercontent.com yt3.ggpht.com youtube-ui.l.google.com wide-youtube.l.google.com youtubekids.com"},
 	{"telegram", "Telegram", "telegram", "telegram.org t.me telegram.me tdesktop.com telegram-cdn.org"},
 	{"discord", "Discord", "discord", "discord.com discord.gg discordapp.com discordapp.net discord.media"},
 	{"spotify", "Spotify", "spotify", "spotify.com scdn.co spotifycdn.com spotifycdn.net"},
@@ -108,4 +108,18 @@ func knownService(id string) bool {
 		}
 	}
 	return false
+}
+
+// ServiceNames lists the cards in display order without resolving routes or loading geodata.
+func ServiceNames() []ServiceName {
+	result := make([]ServiceName, 0, len(serviceCatalog))
+	for _, service := range serviceCatalog {
+		result = append(result, ServiceName{ID: service.id, Name: service.name})
+	}
+	return result
+}
+
+type ServiceName struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }

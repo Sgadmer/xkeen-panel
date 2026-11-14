@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 import { Group, Row, Switch } from '@/components/ios'
 import { api } from '@/lib/api'
 
@@ -49,7 +48,6 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
             {data?.enabled && <button type='button' className='min-h-11 py-2 text-tint disabled:opacity-60' disabled={update.isPending}
                 onClick={() => update.mutate('refresh')}>Перечитать геобазы роутера</button>}
         </Group>
-        <p className='px-4 text-sm text-muted-foreground'><Link className='text-tint' to='/services'>Маршруты сервисов</Link> · <Link className='text-tint' to='/exclusions'>Исключения VPN</Link></p>
         {update.isPending && <p role='status' className='px-4 text-sm text-tint'>Проверяем и применяем правила…</p>}
         {error && <p role='alert' className='px-4 text-sm text-destructive'>{error}</p>}
     </div>

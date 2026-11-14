@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { IconShield, IconWorld } from '@tabler/icons-react'
-import { serviceIcons } from '@/lib/serviceIcons'
+import { IconShield } from '@tabler/icons-react'
+import { ServiceLogo } from '@/components/serviceLogo'
 import { PageTitle } from '@/components/ios'
 import { ServiceKillSwitch, useKillSwitch } from '@/components/killSwitch'
 import { ServiceRoutePicker } from '@/components/serviceRoutePicker'
@@ -184,7 +184,6 @@ export function ServiceRoutesPage() {
                     </div>
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
                         {view.services.map(service => {
-                            const Glyph = serviceIcons[service.id] ?? IconWorld
                             const isClaude = service.id === 'claude'
                             const selected = view.targets.find(t => t.id === service.target)
                             const busy = change.isPending && change.variables?.service_id === service.id
@@ -192,8 +191,8 @@ export function ServiceRoutesPage() {
                             return (
                                 <section key={service.id} className='min-w-0 rounded-card bg-card p-4' aria-labelledby={label}>
                                     <div className='mb-3 flex items-center gap-3'>
-                                        <span className={'grid size-10 shrink-0 place-items-center rounded-xl bg-fill ' + (isClaude ? 'text-orange-400' : 'text-tint')}>
-                                            <Glyph aria-hidden className='size-6' stroke={1.8} />
+                                        <span className='grid size-10 shrink-0 place-items-center'>
+                                            <ServiceLogo id={service.id} className='size-8' />
                                         </span>
                                         <h2 id={label} className='font-semibold'>{service.name}</h2>
                                     </div>
