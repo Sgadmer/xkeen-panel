@@ -39,13 +39,12 @@ export function ComponentsPage() {
     const qc = useQueryClient()
     const query = useQuery({ queryKey: ['components'], queryFn: () => api.get<ComponentsState>('/api/components'), refetchInterval: q => q.state.data?.job && !q.state.data.job.finished ? 2000 : 30000 })
     const [preview, setPreview] = useState<Preview | null>(null)
-    const [geo, setGeo] = useState<GeoSettings>({ sources: [], auto: false, day: -1, hour: 4, minute: 0 })
-    const [dirty, setDirty] = useState(false)
+    const [geoDraft, setGeoDraft] = useState<GeoSettings | null>(null)
+    const geo = geoDraft ?? query.data?.geodata
     const [notice, setNotice] = useState('')
     const [settingIntent, setSettingIntent] = useState<SettingIntent | null>(null)
     const [pendingSetting, setPendingSetting] = useState<PendingSetting | null>(null)
     const settingSequence = useRef(0)
-    useEffect(() => { if (query.data && !dirty) setGeo(query.data.geodata) }, [query.data, dirty])
     const check = useMutation({
         mutationFn: (request: object) => api.post<Preview>('/api/components/preview', request),
         onSuccess: p => { setPreview(p); setNotice('') },
@@ -76,8 +75,8 @@ export function ComponentsPage() {
         onSuccess: () => { setNotice('Восстанавливаем резервную копию.'); qc.invalidateQueries({ queryKey: ['components'] }) },
     })
     const saveGeo = useMutation({
-        mutationFn: () => api.put<ComponentsState>('/api/components/geodata', geo),
-        onSuccess: data => { qc.setQueryData(['components'], data); setDirty(false); setNotice('Источники и расписание сохранены. Для первой загрузки нажмите «Проверить обновление геобаз».') },
+        mutationFn: (draft: GeoSettings) => api.put<ComponentsState>('/api/components/geodata', draft),
+        onSuccess: data => { qc.setQueryData(['components'], data); setGeoDraft(null); setNotice('Источники и расписание сохранены. Для первой загрузки нажмите «Проверить обновление геобаз».') },
     })
     const state = query.data
     const busy = !!state?.job && !state.job.finished
@@ -96,7 +95,7 @@ export function ComponentsPage() {
             : `Параметр «${pendingSetting.setting.name}»: ${actual?.enabled ? 'включено' : 'выключено'}.`)
     }, [state, pendingSetting, qc])
     function inspect(request: object) { apply.reset(); rollback.reset(); check.reset(); setPreview(null); check.mutate(request) }
-    function changeGeo(next: GeoSettings) { setGeo(next); setDirty(true); setPreview(null); setNotice('') }
+    function changeGeo(next: GeoSettings) { setGeoDraft(next); setPreview(null); setNotice('') }
     function inspectSetting(setting: Setting, desired: boolean) {
         settingApply.reset()
         setPreview(null)
@@ -110,12 +109,13 @@ export function ComponentsPage() {
     }
 
     return <>
-        <PageTitle title='Компоненты и геобазы' back={{ to: '/settings', label: 'Настройки' }} subtitle='Версии XKeen и Xray, источники геоданных и безопасное применение изменений.' />
+        <PageTitle title='Компоненты и геобазы' back={{ to: '/settings', label: 'Настройки' }} />
         {query.isPending ? <p className='px-4 text-muted-foreground'>Проверяем установку…</p> : query.error ? <p role='alert' className='px-4 text-destructive'>{query.error.message}</p> : null}
         {state && <>
-            <Group title='Установлено' footer={state.reason || 'Рекомендуемый выбор — стабильный совместимый релиз. Предварительные версии предназначены для тестирования.'}>
+            <Group title='Установлено' footer={state.core === 'mihomo' ? 'Выбор версий XKeen и Xray доступен при активном ядре Xray.' : state.reason}>
                 <Row label='XKeen' detail={state.xkeen_version || 'Не определена'} />
-                <Row label='Xray' detail={state.xray_version || 'Не определена'} />
+                {state.core === 'xray' ? <Row label='Xray' detail={state.xray_version || 'Не определена'} />
+                    : <Row label='Активное ядро' detail={state.core === 'mihomo' ? 'Mihomo' : state.core || 'Не определено'} />}
                 <Row label='Архитектура' detail={state.architecture} />
                 <Row label='Режим перехвата' detail={state.mode || 'Определяется XKeen'} hint='Режим зависит от доступных модулей ядра и конфигурации входов. Режим маршрутизации VPN настраивается отдельно.' />
             </Group>
@@ -128,41 +128,43 @@ export function ComponentsPage() {
                     </div>
                 </div>
             </Group>}
-            <div className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
+            {state.core === 'mihomo' && <Group title='Геобазы Mihomo'>
+                <Row label='Re:filter' hint='Доменные правила и IP-префиксы' to='/settings/routing' />
+            </Group>}
+            {state.supported && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
                 <VersionChoice component='xkeen' title='Версия XKeen' disabled={disabled} onPreview={inspect} />
                 <VersionChoice component='xray' title='Версия Xray' disabled={disabled} onPreview={inspect} />
-            </div>
-            <Group title='Источники геобаз' footer='Выбор сохраняет список управляемых баз. Уже установленные другие базы остаются на месте. Обновление списка само по себе не меняет правила маршрутизации.'>
-                <div className='space-y-3 py-4'>
-                    {state.sources.map(source => <label key={source.id} className='flex cursor-pointer items-start gap-3'>
-                        <input type='checkbox' checked={geo.sources.includes(source.id)} disabled={disabled} onChange={event => changeGeo({ ...geo, sources: event.target.checked ? [...geo.sources, source.id] : geo.sources.filter(id => id !== source.id) })} className='mt-1 size-4 accent-violet-500' />
-                        <span><span className='text-[15px]'>{source.kind} · {source.name}</span><span className='block text-[12px] text-muted-foreground'>{source.repository}</span></span>
-                    </label>)}
-                    <p className='text-[13px] leading-snug text-muted-foreground'>GeoIPSET выводит российские IP из VPN ещё до Xray. Его обход имеет приоритет над доменными правилами внутри Xray.</p>
-                </div>
-            </Group>
-            <Group title='Обновление выбранных геобаз' footer={`Расписание использует время роутера: ${new Date(state.router_time).toLocaleString('ru-RU')}. При ошибке рабочие базы сохраняются.`}>
+            </div>}
+            {state.supported && geo && <Group title='Источники геобаз' footer='GeoIPSET исключает российские IP из VPN до проверки доменных правил Xray.'>
+                {state.sources.map(source => <label key={source.id} className='flex min-h-11 cursor-pointer items-center justify-between gap-3 py-2'>
+                    <span><span className='text-[15px]'>{source.kind} · {source.name}</span><span className='block text-[12px] text-muted-foreground'>{source.repository}</span></span>
+                    <input type='checkbox' checked={geo.sources.includes(source.id)} disabled={disabled} onChange={event => changeGeo({ ...geo, sources: event.target.checked ? [...geo.sources, source.id] : geo.sources.filter(id => id !== source.id) })} className='size-5 shrink-0 accent-violet-500' />
+                </label>)}
+            </Group>}
+            {state.supported && geo && <Group title='Обновление выбранных геобаз' footer={`Расписание использует время роутера: ${new Date(state.router_time).toLocaleString('ru-RU')}. При ошибке рабочие базы сохраняются.`}>
+                <Row label='Обновлять автоматически' trailing={<Switch label='Обновлять автоматически' checked={geo.auto} disabled={disabled} onChange={auto => changeGeo({ ...geo, auto })} />} />
                 <div className='space-y-4 py-4'>
-                    <label className='flex items-center gap-3 text-[15px]'><input type='checkbox' checked={geo.auto} disabled={disabled} onChange={e => changeGeo({ ...geo, auto: e.target.checked })} className='size-4 accent-violet-500' />Обновлять автоматически</label>
                     <div className='grid grid-cols-3 gap-3'>
                         <label className='text-[13px] text-muted-foreground'>День<select aria-label='День обновления геобаз' className={field} value={geo.day} disabled={disabled} onChange={e => changeGeo({ ...geo, day: Number(e.target.value) })}>{['Ежедневно', 'Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'].map((day, i) => <option key={day} value={i - 1}>{day}</option>)}</select></label>
                         <label className='text-[13px] text-muted-foreground'>Час<input aria-label='Час обновления' type='number' min={0} max={23} className={field} value={geo.hour} disabled={disabled} onChange={e => changeGeo({ ...geo, hour: Number(e.target.value) })} /></label>
                         <label className='text-[13px] text-muted-foreground'>Минута<input aria-label='Минута обновления' type='number' min={0} max={59} className={field} value={geo.minute} disabled={disabled} onChange={e => changeGeo({ ...geo, minute: Number(e.target.value) })} /></label>
                     </div>
-                    <button className={`${button} w-full`} disabled={disabled || !dirty} onClick={() => saveGeo.mutate()}>Сохранить источники и расписание</button>
-                    <button className={`${button} w-full`} disabled={disabled || dirty || geo.sources.length === 0} onClick={() => inspect({ component: 'geodata' })}>Проверить обновление геобаз</button>
+                    <button className={`${button} w-full`} disabled={disabled || !geoDraft} onClick={() => saveGeo.mutate(geo)}>Сохранить источники и расписание</button>
+                    <button className={`${button} w-full`} disabled={disabled || !!geoDraft || geo.sources.length === 0} onClick={() => inspect({ component: 'geodata' })}>Проверить обновление геобаз</button>
                 </div>
-            </Group>
-            <Group title='Параметры XKeen' footer='Доступность определяется по установленной версии XKeen. Каждое изменение сначала показывается для проверки и применяется с резервной копией.'>
+            </Group>}
+            <Group title='Параметры XKeen'>
                 {state.settings.map(setting => {
                     const checked = pendingSetting?.setting.id === setting.id ? pendingSetting.current : setting.enabled
                     const nativeOff = setting.id === 'native_geodata_schedule' && !setting.enabled
-                    const hint = nativeOff ? 'Штатная задача XKeen выключена. Здесь её можно только отключить. Для автоматического обновления выберите расписание в разделе геобаз выше.' : setting.supported ? setting.hint : 'Недоступно в установленной версии XKeen.'
-                    return <Row key={setting.id} label={setting.name} hint={<>{hint}<span className='mt-1 block'>{checked ? 'Включено' : 'Выключено'}{pendingSetting?.setting.id === setting.id ? ' · ожидаем завершения' : ''}</span></>} trailing={<span className='rounded-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-tint'><Switch checked={checked} label={setting.name} onChange={desired => inspectSetting(setting, desired)} disabled={disabled || !setting.supported || nativeOff} /></span>} />
+                    if (!state.supported || !setting.supported || nativeOff) {
+                        return <Row key={setting.id} label={setting.name} detail={setting.supported || nativeOff ? (checked ? 'Включено' : 'Выключено') : 'Недоступно'} />
+                    }
+                    return <Row key={setting.id} label={setting.name} hint={pendingSetting?.setting.id === setting.id ? 'Ожидаем завершения…' : setting.hint} trailing={<span className='rounded-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-tint'><Switch checked={checked} label={setting.name} onChange={desired => inspectSetting(setting, desired)} disabled={disabled} /></span>} />
                 })}
                 <Row label='Порты и IP-исключения XKeen' to='/settings/xkeen' />
             </Group>
-            {preview && <Group title='Проверка перед применением'>
+            {state.supported && preview && <Group title='Проверка перед применением'>
                 <div className='space-y-3 py-4'>
                     <p className='font-semibold'>{componentName(preview.component)} · {preview.version}</p>
                     {preview.artifacts.map(a => <p key={a.name} className='break-all text-[13px] text-muted-foreground'>{a.repository} · {a.name} · {(a.size / 1048576).toFixed(1)} МБ<br />SHA-256: {a.sha256}</p>)}
@@ -176,11 +178,12 @@ export function ComponentsPage() {
             {error && <p role='alert' className='px-4 text-destructive'>{error.message}</p>}
             {notice && <p role='status' className='px-4 text-tint'>{notice}</p>}
             {state.backups.length > 0 && <Group title='Резервные копии компонентов' footer='Откат восстанавливает компонент и сохранённое состояние его установки. Перед применением ещё раз подтвердите действие.'>
-                {state.backups.map(backup => <BackupRow key={backup.id} backup={backup} disabled={disabled} onRollback={id => rollback.mutate(id)} />)}
+                {state.backups.map(backup => state.supported ? <BackupRow key={backup.id} backup={backup} disabled={disabled} onRollback={id => rollback.mutate(id)} />
+                    : <Row key={backup.id} label={`${componentName(backup.component)} · ${backup.version}`} detail={new Date(backup.created).toLocaleDateString('ru-RU')} />)}
             </Group>}
             <p className='px-4 text-[13px] text-muted-foreground'>Обновления кода панели находятся в разделе <Link className='text-tint' to='/settings/update'>«Обновление панели»</Link>. Подписка обновляется независимо от компонентов.</p>
         </>}
-        {settingIntent && <SettingChangeDialog
+        {state?.supported && settingIntent && <SettingChangeDialog
             name={settingIntent.setting.name}
             current={settingIntent.setting.enabled}
             desired={settingIntent.desired}

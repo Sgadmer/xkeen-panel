@@ -217,7 +217,10 @@ func (m *Manager) support() string {
 func (m *Manager) State() State {
 	rt := m.runtime()
 	reason := m.support()
-	state := State{Supported: reason == "", Reason: reason, Architecture: m.opts.GOARCH, XKeenVersion: rt.Version, XrayVersion: m.binaryVersion(rt.CoreBin), Core: rt.Core, RouterTime: time.Now().Format(time.RFC3339), Sources: GeoSources(), Backups: []Backup{}, Notes: []string{"Версии XKeen/Xray и обновления панели — отдельные операции.", "Перед изменением создаётся локальная резервная копия; конфигурация, подписка и исключения сохраняются.", "GeoIPSET исключает адреса до Xray. Управляйте этими исключениями осознанно в расширенных настройках."}}
+	state := State{Supported: reason == "", Reason: reason, Architecture: m.opts.GOARCH, XKeenVersion: rt.Version, Core: rt.Core, RouterTime: time.Now().Format(time.RFC3339), Sources: GeoSources(), Backups: []Backup{}, Notes: []string{"Версии XKeen/Xray и обновления панели — отдельные операции.", "Перед изменением создаётся локальная резервная копия; конфигурация, подписка и исключения сохраняются.", "GeoIPSET исключает адреса до Xray. Управляйте этими исключениями осознанно в расширенных настройках."}}
+	if rt.Core == xkeen.CoreXray {
+		state.XrayVersion = m.binaryVersion(rt.CoreBin)
+	}
 	state.Settings = m.Settings()
 	state.Mode = rt.Mode
 	m.mu.Lock()

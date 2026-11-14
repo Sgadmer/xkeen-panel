@@ -4,6 +4,7 @@ import {
     IconCircleCheckFilled,
     IconCircleXFilled,
     IconAlertCircleFilled,
+    IconRoute,
 } from '@tabler/icons-react'
 import { Group, PageTitle, Row } from '@/components/ios'
 import { RouterActivity } from '@/components/routerActivity'
@@ -138,7 +139,13 @@ export function DiagnosticsPage() {
                                     : undefined
                             }
                         />
-                        {s?.selective && <Row label='Трафик без совпадения с правилами' detail='Напрямую' />}
+                        {s?.selective && (
+                            <Row
+                                icon={<IconRoute className='size-[22px] shrink-0 text-muted-foreground' aria-hidden='true' />}
+                                label='Остальной трафик'
+                                detail='Напрямую'
+                            />
+                        )}
                         <Check
                             verdict={
                                 !checked
