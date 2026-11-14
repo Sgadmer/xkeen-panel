@@ -200,7 +200,7 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 		if pool == nil || !validHash(generation) {
 			continue
 		}
-		names[tag] = pool.Name + " (мультипул Xray)"
+		names[tag] = pool.Name
 		proxy := proxies[tag]
 		port, _ := proxy["port"].(int)
 		if str(proxy["server"]) != "127.0.0.1" || port <= 0 || port > 65535 {

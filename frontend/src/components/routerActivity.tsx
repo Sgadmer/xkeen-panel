@@ -25,31 +25,29 @@ type Activity = {
 
 const clock = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-function LocationLine({ label, location }: { label: string; location: ServerLocation }) {
-    const country = countryName(location.country)
-    const title = location.name || country
-    const showCountry = country && !title.toLocaleLowerCase('ru').includes(country.toLocaleLowerCase('ru'))
-    return <p className='break-words text-sm'>
-        <span className='text-muted-foreground'>{label} · </span>
-        <span className='whitespace-pre-wrap font-medium'>{withCountryFlag(title, location.country)}</span>
-        {showCountry && <span> · {country}</span>}
-        {location.source && <span className='whitespace-pre-wrap text-muted-foreground'> · {location.source}</span>}
-    </p>
-}
-
-function FlowExit({ flow }: { flow: Flow }) {
-    const exit = flow.exit
-    if (!exit) return null
-    if (exit.kind === 'direct' || exit.kind === 'reject') {
-        const how = exit.kind === 'direct' ? 'Напрямую' : 'Блокировка'
-        return flow.route.at(-1) === how ? null : <p className='text-sm'>Выход · {how}</p>
+function FlowRoute({ flow, service }: { flow: Flow; service?: string }) {
+    const location = flow.exit?.kind === 'server' ? flow.exit : flow.pool_current
+    const country = countryName(location?.country)
+    const node = location && withCountryFlag(location.name || country, location.country)
+    const hops = [...flow.route]
+    if (node && flow.exit?.kind === 'server' && (hops.at(-1) === location?.name || hops.at(-1) === node)) hops.pop()
+    if (service && (hops.length || node)) {
+        if (hops[0] === 'Общий маршрут' && (hops.length > 1 || node)) hops.shift()
+        const head = hops[0]?.replace(/ \((по правилам|прокси устройства)\)$/, '')
+        if (!head || (service !== head && !service.split(' / ').includes(head))) hops.unshift(service)
     }
-    if (exit.kind === 'server' && (exit.name || exit.country)) {
-        return <LocationLine label='Локация соединения' location={exit} />
-    }
+    const outcome = flow.exit?.kind === 'direct' ? 'Напрямую' : flow.exit?.kind === 'reject' ? 'Блокировка' : ''
+    if (outcome && hops.at(-1) !== outcome) hops.push(outcome)
+    const hint = flow.pool_current ? ['Текущий выбор пула', country].filter(Boolean).join(' · ') : country
     return <>
-        {flow.pool_current && <LocationLine label='Выбор пула сейчас' location={flow.pool_current} />}
-        <p className='text-xs text-muted-foreground'>Конечный сервер этого соединения неизвестен</p>
+        <p className='mt-1 whitespace-pre-wrap break-words text-sm' title={flow.route.join(' → ')}>
+            {hops.join(' → ')}{node && <>{hops.length > 0 && ' → '}<span title={hint || undefined}
+                className={flow.pool_current ? 'underline decoration-dotted underline-offset-4' : undefined}>{node}</span></>}
+            {!node && !hops.length && 'Ядро не сообщило маршрут'}
+        </p>
+        {(flow.rule || location?.source) && <p className='whitespace-pre-wrap break-words text-xs text-muted-foreground'>
+            {flow.rule && 'Правило · ' + flow.rule}{flow.rule && location?.source && ' · '}{location?.source}
+        </p>}
     </>
 }
 
@@ -72,6 +70,7 @@ export function RouterActivity() {
     const error = paused ? snapshot.error : query.error?.message ?? data?.connections_error
     const sys = data?.system
     const flows = error ? [] : data?.connections ?? []
+    const services = new Map(data?.services?.map(item => [item.id, item.name]))
     const devices = new Map<string, string>()
     for (const d of known) if (d.ip && d.active) devices.set(d.ip, d.name)
     for (const f of flows) if (f.device && !devices.has(f.device)) devices.set(f.device, '')
@@ -81,7 +80,7 @@ export function RouterActivity() {
         if ((device && f.device !== device) || (service && f.service_id !== service)) return false
         if (!input) return true
         const location = f.exit?.kind === 'server' ? f.exit : f.pool_current
-        return [f.host, f.rule, ...f.route, location?.name, location?.source, location?.country, countryName(location?.country)]
+        return [f.host, f.rule, f.service_id && services.get(f.service_id), ...f.route, location?.name, location?.source, location?.country, countryName(location?.country)]
             .some(s => s?.toLowerCase().includes(input))
     })
     const pageSize = 25
@@ -90,7 +89,7 @@ export function RouterActivity() {
     useEffect(() => { setPage(0) }, [search, device, service])
     return <>
         <RouterMetrics system={sys} history={data?.history}/>
-        <Group title='Соединения по устройствам' footer='Для активных HTTPS-соединений Mihomo показывает домен или IP. Страна сервера указана по каталогу. «Выбор пула сейчас» может отличаться от сервера ранее открытого соединения.'>
+        <Group title='Соединения по устройствам' footer='Пунктиром отмечен текущий выбор пула Xray.'>
             <div className='grid gap-3 py-3 sm:grid-cols-2 lg:grid-cols-3'>
                 <label className='grid min-w-0 gap-1 text-sm text-muted-foreground'>Устройство
                     <select className='min-h-11 min-w-0 w-full rounded-xl bg-fill px-3 text-foreground' value={device} onChange={e => {
@@ -139,9 +138,7 @@ export function RouterActivity() {
                         <span className='text-xs text-muted-foreground'>{f.network}</span>
                     </div>
                     <p className='break-words text-sm text-muted-foreground'>{name && name !== f.device ? name + ' · ' : ''}{f.device || 'Источник неизвестен'}</p>
-                    <p className='mt-1 break-words text-sm'>{f.route.length ? f.route.join(' → ') : 'Ядро не сообщило маршрут'}</p>
-                    <FlowExit flow={f} />
-                    {f.rule && <p className='break-words text-xs text-muted-foreground'>Правило · {f.rule}</p>}
+                    <FlowRoute flow={f} service={f.service_id && services.get(f.service_id)} />
                 </article>
             })}
             {last > 0 && <div className='flex items-center justify-between py-1 text-sm'>
