@@ -1,6 +1,7 @@
 package cardcontroller
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 )
 
 const autoScopeKey = "x-xkeen-panel-auto-scope"
+const autoLimitKey = "x-xkeen-panel-auto-limit"
 
 func scopeHash(key string) string {
 	sum := sha256.Sum256([]byte("xkeen-panel-scope-v1:" + key))
@@ -45,11 +47,13 @@ func builtinPool(id string) *MultiPool {
 }
 
 type AutoScope struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Country     string `json:"country,omitempty"`
-	MemberCount int    `json:"member_count"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Country       string `json:"country,omitempty"`
+	MemberCount   int    `json:"member_count"`
+	EligibleCount int    `json:"eligible_count"`
+	Limit         int    `json:"limit,omitempty"`
 }
 
 func scopes(p profile, nodes []poolNode) []AutoScope {
@@ -71,17 +75,17 @@ func scopes(p profile, nodes []poolNode) []AutoScope {
 		}
 	}
 	sort.Strings(countries)
-	all := builtinPool(allPoolID)
+	all := p.pool(allPoolID)
 	all.members(nodes)
-	result := []AutoScope{{ID: all.ID, Name: all.Name, Kind: "all", MemberCount: all.MemberCount}}
+	result := []AutoScope{{ID: all.ID, Name: all.Name, Kind: "all", MemberCount: all.MemberCount, EligibleCount: all.EligibleCount, Limit: all.limit}}
 	for _, code := range countries {
 		pool := builtinPool(scopeHash("country:" + code))
 		pool.members(nodes)
-		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "country", Country: code, MemberCount: pool.MemberCount})
+		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "country", Country: code, MemberCount: pool.MemberCount, EligibleCount: pool.EligibleCount})
 	}
 	for _, pool := range p.pools {
 		pool.members(nodes)
-		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "custom", MemberCount: pool.MemberCount})
+		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "custom", MemberCount: pool.MemberCount, EligibleCount: pool.EligibleCount})
 	}
 	return result
 }
@@ -115,6 +119,54 @@ func (c *Controller) SetScope(ctx context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.setScope(ctx, id)
+}
+
+func validAutoLimit(n int) bool { return n >= 1 && n <= xkeen.MaxMultiPoolMembers }
+
+func normalizeAutoLimit(n int) int {
+	if n <= 0 {
+		return xkeen.DefaultPoolMaxNodes
+	}
+	return min(n, xkeen.MaxMultiPoolMembers)
+}
+
+func (c *Controller) ChangeAutoPoolLimit(ctx context.Context, n int) error {
+	if !validAutoLimit(n) {
+		return errors.New("недопустимый размер пула")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return err
+	}
+	if p.autoLimit == n {
+		return nil
+	}
+	previous := p.pool(allPoolID)
+	p.doc[autoLimitKey], p.autoLimit = n, n
+	for _, id := range p.assigned {
+		if id != allPoolID {
+			continue
+		}
+		nodes := c.poolNodes(c.catalog())
+		// Both selections are prefixes of the same ranking. Equal sizes mean
+		// that only the setting changed and the existing worker can stay live.
+		if len(previous.members(nodes)) != len(p.pool(allPoolID).members(nodes)) {
+			// Setting a required target without a service changes no assignments
+			// and makes preparation of the replacement worker mandatory.
+			_, err = c.apply(ctx, "", allPoolID, func(next *profile) error {
+				if !bytes.Equal(next.raw, p.raw) {
+					return errors.New("конфигурация изменилась параллельно")
+				}
+				next.doc[autoLimitKey], next.autoLimit = n, n
+				return nil
+			})
+			return err
+		}
+		break
+	}
+	return c.savePoolMetadata(p)
 }
 
 func (c *Controller) setScope(ctx context.Context, id string) error {

@@ -7,9 +7,27 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"xkeen-panel/internal/cardcontroller"
+	"xkeen-panel/internal/xkeen"
 )
 
 func (h *Handlers) mountMultiPools(router chi.Router) {
+	router.Put("/pool/limit", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Limit int `json:"limit"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&input) != nil || dec.Decode(&struct{}{}) != io.EOF || input.Limit < 1 || input.Limit > xkeen.MaxMultiPoolMembers {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Укажите целое число серверов от 1 до 256."})
+			return
+		}
+		if err := h.Cards.ChangeAutoPoolLimit(r.Context(), input.Limit); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		h.watchdog.CheckNow()
+		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+	})
 	router.Get("/multipools", func(w http.ResponseWriter, r *http.Request) {
 		pools, scopes, err := h.Cards.PoolCatalog()
 		if err != nil {

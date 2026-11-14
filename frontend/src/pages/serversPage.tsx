@@ -80,6 +80,7 @@ export function ServersPage() {
     const multipools = poolCatalog.data?.pools ?? []
     const scopes = poolCatalog.data?.scopes ?? []
     const selectedScope = scopes.find(item => item.id === pool?.auto_scope_id)
+    const allLocations = scopes.find(item => item.kind === 'all')
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
     const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
@@ -91,7 +92,9 @@ export function ServersPage() {
         refreshSubscription,
         setCountry,
         setScope,
+        setPoolLimit,
     } = useServerActions()
+    const routeBusy = select.isPending || pin.isPending || auto.isPending || setScope.isPending || setPoolLimit.isPending
     const { check, checking, error: checkError, progress, isPendingServer, latencyFor } = useStreamLatency()
     const [query, setQuery] = useState('')
     const [country, setCountryFilter] = useState('all')
@@ -196,7 +199,7 @@ export function ServersPage() {
     const rowProps = (s: Server) => ({
         server: s,
         countryExcluded: avoidCountries.includes(serverCountry(s)),
-        busy: select.isPending || pin.isPending || auto.isPending || setScope.isPending,
+        busy: routeBusy,
         measuring: isPendingServer(s.id),
         liveLatency: latencyFor(s.id),
         onSelect: () => select.mutate(s.id),
@@ -273,7 +276,7 @@ export function ServersPage() {
                 const measured = server.probe_kind === 'https' || latencyFor(server.id) !== undefined
                 return <Row key={server.id} label={server.name}
                     hint={[server.source_name, `${server.profile_nodes ?? 0} серверов`, server.active && 'Выбран'].filter(Boolean).join(' · ')}
-                    onClick={() => select.mutate(server.id)} disabled={select.isPending || pin.isPending || auto.isPending || setScope.isPending || server.active}
+                    onClick={() => select.mutate(server.id)} disabled={routeBusy || server.active}
                     trailing={<Latency measuring={isPendingServer(server.id)} ms={measured ? ms : 0} />} />
             })}
         </Group>
@@ -382,7 +385,7 @@ export function ServersPage() {
                                     }
                                     label='Автоматически выбирать сервер'
                                     disabled={
-                                        auto.isPending || pin.isPending || setScope.isPending ||
+                                        routeBusy ||
                                         (!isAuto && !pool?.api_available) || (isAuto && !pool?.current_tag)
                                     }
                                 />
@@ -390,8 +393,8 @@ export function ServersPage() {
                             {mihomo && scopes.length > 0 && <label className='flex min-h-[52px] flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2'>
                                 <span className='text-[15px] font-medium'>Пул автовыбора</span>
                                 <select className='min-h-10 min-w-0 max-w-full flex-1 rounded-xl border border-white/10 bg-fill px-2 text-[15px] sm:max-w-72'
-                                    value={setScope.isPending ? setScope.variables : isAuto ? (selectedScope?.id ?? scopes.find(item => item.kind === 'all')?.id ?? '') : ''}
-                                    disabled={setScope.isPending || pin.isPending || auto.isPending || select.isPending || !pool?.api_available}
+                                    value={setScope.isPending ? setScope.variables : isAuto ? (selectedScope?.id ?? allLocations?.id ?? '') : ''}
+                                    disabled={routeBusy || !pool?.api_available}
                                     onChange={e => setScope.mutate(e.target.value)}>
                                     {!isAuto && <option value='' disabled>Выберите пул…</option>}
                                     {scopes.filter(item => item.kind === 'all').map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)}</option>)}
@@ -403,6 +406,14 @@ export function ServersPage() {
                                     })}
                                 </select>
                             </label>}
+                            {mihomo && allLocations?.limit != null && allLocations.eligible_count != null
+                                && (!isAuto || (selectedScope ?? allLocations).kind === 'all') && (
+                                <AllLocationsLimit
+                                    limit={allLocations.limit} count={allLocations.member_count}
+                                    eligible={allLocations.eligible_count} disabled={routeBusy || !pool?.api_available}
+                                    mutation={setPoolLimit}
+                                />
+                            )}
                             {poolRows.map(r => (
                                 <PoolRow
                                     key={r.node.tag}
@@ -415,7 +426,7 @@ export function ServersPage() {
                                     current={r.current}
                                     excludedUntil={r.node.excluded_until}
                                     countryExcluded={avoidCountries.includes(r.country ?? '')}
-                                    busy={select.isPending || pin.isPending || auto.isPending || setScope.isPending}
+                                    busy={routeBusy}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
                                     }
@@ -566,6 +577,53 @@ export function ServersPage() {
                 onClose={() => setSiteId(null)}
             />
         </>
+    )
+}
+
+function AllLocationsLimit({ limit, count, eligible, disabled, mutation }: {
+    limit: number
+    count: number
+    eligible: number
+    disabled: boolean
+    mutation: ReturnType<typeof useServerActions>['setPoolLimit']
+}) {
+    const [draft, setDraft] = useState<string | null>(null)
+    const value = draft ?? String(limit)
+    const number = Number(value)
+    const valid = /^\d+$/.test(value) && number >= 1 && number <= 256
+    const canSave = valid && number !== limit && !disabled
+    return (
+        <form className='space-y-1.5 py-3' onSubmit={event => {
+            event.preventDefault()
+            if (canSave) mutation.mutate(number, { onSuccess: () => setDraft(null) })
+        }}>
+            <div className='flex flex-wrap items-center justify-between gap-2'>
+                <div>
+                    <label htmlFor='all-locations-limit' className='text-[15px] font-medium'>Лимит пула «Все локации»</label>
+                    <p className='text-[13px] text-muted-foreground'>От 1 до 256 серверов</p>
+                </div>
+                <div className='flex items-center gap-2'>
+                    <input id='all-locations-limit' type='number' inputMode='numeric' min={1} max={256} step={1}
+                        className='min-h-10 w-[5rem] rounded-xl border border-white/10 bg-fill px-2 text-center text-[16px] text-foreground tabular-nums'
+                        value={value} disabled={disabled} aria-invalid={!valid}
+                        aria-describedby='all-locations-summary all-locations-feedback'
+                        onChange={event => { setDraft(event.target.value); mutation.reset() }} />
+                    <button type='submit' disabled={!canSave}
+                        className='min-h-10 rounded-xl bg-fill px-3 text-[15px] font-medium text-tint disabled:opacity-50'>
+                        {mutation.isPending ? 'Сохраняю…' : 'Сохранить'}
+                    </button>
+                </div>
+            </div>
+            <p id='all-locations-summary' className='text-[13px] text-muted-foreground'>
+                В пуле {count} из {eligible} подходящих. Первыми попадают серверы с наименьшей задержкой из всех подписок.
+                {' '}Дубли, исключённые страны, сборные профили и узлы с неудачной HTTPS-проверкой пропускаются.
+            </p>
+            <div id='all-locations-feedback' aria-live='polite' className='text-[13px] empty:hidden'>
+                {!valid ? 'Введите целое число от 1 до 256.' : mutation.isError
+                    ? safeNotice(mutation.error.message, 'Не удалось сохранить лимит.')
+                    : mutation.isSuccess ? 'Лимит сохранён.' : ''}
+            </div>
+        </form>
     )
 }
 

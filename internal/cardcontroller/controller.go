@@ -138,11 +138,12 @@ func validAssignment(service, target string) bool {
 }
 
 type profile struct {
-	raw      []byte
-	doc      map[string]interface{}
-	assigned map[string]string
-	pools    []MultiPool
-	api      coreAPI
+	raw       []byte
+	doc       map[string]interface{}
+	assigned  map[string]string
+	pools     []MultiPool
+	autoLimit int
+	api       coreAPI
 }
 
 func (c *Controller) read() (profile, error) {
@@ -157,6 +158,14 @@ func (c *Controller) read() (profile, error) {
 	}
 	if err = yaml.Unmarshal(p.raw, &p.doc); err != nil || p.doc == nil {
 		return p, errors.New("не удалось прочитать YAML Mihomo")
+	}
+	p.autoLimit = normalizeAutoLimit(c.autoPoolLimit)
+	if value, present := p.doc[autoLimitKey]; present {
+		n, ok := value.(int)
+		if !ok || !validAutoLimit(n) {
+			return p, errors.New("повреждён лимит пула «Все локации»")
+		}
+		p.autoLimit = n
 	}
 	addr, _ := p.doc["external-controller"].(string)
 	host, port, err := net.SplitHostPort(addr)
@@ -334,7 +343,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 			return err
 		}
 		group, auto := nativeDefault(p, live)
-		if auto != "" && (group == auto || live[group].Now == auto) && len(builtinPool(allPoolID).members(c.poolNodes(c.catalog()))) > 0 {
+		if auto != "" && (group == auto || live[group].Now == auto) && len(p.pool(allPoolID).members(c.poolNodes(c.catalog()))) > 0 {
 			return c.setScope(ctx, allPoolID)
 		}
 	}
@@ -445,6 +454,16 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	expected, err := render(&p, view.Services, peers, defaultSourceAvailable)
 	if err != nil {
 		return View{}, err
+	}
+	// A metadata edit with a required target must not drop an unrelated,
+	// currently working guarded route if its worker cannot be prepared.
+	if id == "" && target != "" {
+		for service, key := range p.assigned {
+			group := cardPrefix + service
+			if key != target && expected[group] == "REJECT" && strings.HasPrefix(selections[group].Now, nodePrefix) {
+				return View{}, errors.New("не удалось сохранить другой действующий маршрут")
+			}
+		}
 	}
 	countryGroups, err := c.renderCountryFilter(&p, servers)
 	if err != nil {

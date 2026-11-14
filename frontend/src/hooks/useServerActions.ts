@@ -44,6 +44,11 @@ export function useServerActions() {
         onSettled: refreshAll,
     })
 
+    const setPoolLimit = useMutation({
+        mutationFn: (limit: number) => api.put('/api/pool/limit', { limit }),
+        onSettled: refreshAll,
+    })
+
     const refreshSubscription = useMutation({
         mutationFn: () =>
             api.post<SubscriptionUpdateResponse>('/api/subscription/refresh'),
@@ -63,5 +68,6 @@ export function useServerActions() {
         refreshSubscription,
         setCountry,
         setScope,
+        setPoolLimit,
     }
 }

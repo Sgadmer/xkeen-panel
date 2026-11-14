@@ -167,6 +167,8 @@ export type AutoScope = {
     kind: 'all' | 'country' | 'custom'
     country?: string
     member_count: number
+    limit?: number
+    eligible_count?: number
 }
 
 export type MultiPool = {

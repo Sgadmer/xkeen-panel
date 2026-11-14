@@ -3,6 +3,7 @@ package cardcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -103,10 +104,9 @@ func TestAutoScopesRankAllSourcesAndKeepExplicitOwnership(t *testing.T) {
 	failed := poolServer("B", "US", "10005")
 	failed.ProbeKind, failed.Latency = "https", -1
 	c := &Controller{}
-	c.SetAutoPoolLimit(2)
 	c.SetCountryPolicy(func() []string { return []string{"RU"} }, func(s models.Server) bool { return s.Country != "RU" })
 	nodes := c.poolNodes([]models.Server{first, next, other, excluded, alias, failed})
-	all := builtinPool(allPoolID)
+	all := (profile{autoLimit: 2}).pool(allPoolID)
 	best := all.members(nodes)
 	if len(best) != 2 || best[0].SourceID != "B" || best[1].SourceID != "C" || all.EligibleCount != 3 {
 		t.Fatal("global selection lost another source, included failed/avoided or overran limit", best)
@@ -260,6 +260,65 @@ func TestNamedPoolThroughMihomoAndXray(t *testing.T) {
 	current, err := c.Default(ctx)
 	if err != nil || current.Current != pool.ID || current.Name != spec.Name {
 		t.Fatal("active rename lost assignment", err)
+	}
+	// Edit the global limit while a different pool is active. Then route an
+	// independent service through All and resize it without changing MATCH.
+	if err := c.ChangeAutoPoolLimit(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Set(ctx, "github", allPoolID); err != nil {
+		t.Fatal(err)
+	}
+	checkLimit := func(want int) string {
+		t.Helper()
+		fresh := New(path, dir, rt, c.catalog)
+		fresh.SetAutoPoolLimit(32)
+		_, scopes, err := fresh.PoolCatalog()
+		if err != nil || scopes[0].Limit != want || scopes[0].MemberCount != want || scopes[0].EligibleCount != 2 {
+			t.Fatalf("persisted All metrics %v, %v", scopes, err)
+		}
+		live, err := p.api.selectors(ctx)
+		if err != nil || live[cardPrefix+defaultID].Now != old || live[cardPrefix+"openai"].Now != old || live[cardPrefix+"claude"].Now != nodePrefix+xkeen.ServiceTargetID(pinned) {
+			t.Fatal("unrelated route changed", err)
+		}
+		active := live[cardPrefix+"github"]
+		if len(active.All) != 1 || active.All[0] != active.Now || !strings.HasPrefix(active.Now, nodePrefix+allPoolID+"-") {
+			t.Fatal("All lost its VPN-only route", active)
+		}
+		return active.Now
+	}
+	priorWorker := checkLimit(1)
+	prepare := c.prepare
+	c.prepare = func(rt xkeen.Runtime, key string, target models.Server) (xkeen.CardProxy, error) {
+		if target.GeneratedPool && len(target.RawProfile) > 0 {
+			return xkeen.CardProxy{}, errors.New("fixture: pool worker unavailable")
+		}
+		return prepare(rt, key, target)
+	}
+	if err := c.ChangeAutoPoolLimit(ctx, 2); err == nil {
+		t.Fatal("failed worker accepted")
+	}
+	if got := checkLimit(1); got != priorWorker {
+		t.Fatal("failed resize replaced healthy worker")
+	}
+	c.prepare = func(rt xkeen.Runtime, key string, target models.Server) (xkeen.CardProxy, error) {
+		if key == xkeen.ServiceTargetID(pinned) {
+			return xkeen.CardProxy{}, errors.New("fixture: pinned worker unavailable")
+		}
+		return prepare(rt, key, target)
+	}
+	if err := c.ChangeAutoPoolLimit(ctx, 2); err == nil {
+		t.Fatal("resize dropped unrelated working route")
+	}
+	if got := checkLimit(1); got != priorWorker {
+		t.Fatal("unrelated preparation failure replaced the pool")
+	}
+	c.prepare = prepare
+	if err := c.ChangeAutoPoolLimit(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkLimit(2); got == priorWorker {
+		t.Fatal("successful resize kept old worker")
 	}
 	disposable, err := c.EditMultiPool(ctx, "", &PoolSpec{Name: "Только B", SourceIDs: []string{"B"}}, sources)
 	if err != nil {

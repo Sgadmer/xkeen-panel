@@ -40,6 +40,7 @@ type MultiPool struct {
 	PoolSpec      `yaml:",inline"`
 	MemberCount   int `json:"member_count" yaml:"-"`
 	EligibleCount int `json:"eligible_count" yaml:"-"`
+	limit         int
 }
 
 func readPools(doc map[string]interface{}) ([]MultiPool, error) {
@@ -67,10 +68,9 @@ func readPools(doc map[string]interface{}) ([]MultiPool, error) {
 // Group eligibility by the complete outbound identity. A blocked alias must
 // never reintroduce the same VPN endpoint under a different country or name.
 type poolNode struct {
-	id        string
-	server    models.Server
-	allowed   bool
-	autoLimit int
+	id      string
+	server  models.Server
+	allowed bool
 }
 
 func (c *Controller) poolNodes(servers []models.Server) []poolNode {
@@ -88,7 +88,7 @@ func (c *Controller) poolNodes(servers []models.Server) []poolNode {
 		if filter && (c.autoAllowed == nil || !c.autoAllowed(s)) {
 			denied[id] = true
 		}
-		nodes = append(nodes, poolNode{id: id, server: s, autoLimit: c.autoPoolLimit})
+		nodes = append(nodes, poolNode{id: id, server: s})
 	}
 	for i := range nodes {
 		nodes[i].allowed = !denied[nodes[i].id]
@@ -138,10 +138,7 @@ func (pool *MultiPool) members(nodes []poolNode) []models.Server {
 	}
 	limit := xkeen.MaxMultiPoolMembers
 	if pool.ID == allPoolID {
-		limit = xkeen.DefaultPoolMaxNodes
-		if len(nodes) > 0 && nodes[0].autoLimit > 0 {
-			limit = min(nodes[0].autoLimit, xkeen.MaxMultiPoolMembers)
-		}
+		limit = normalizeAutoLimit(pool.limit)
 	}
 	for _, n := range nodes {
 		if !n.allowed || seen[n.id] || probeRank(n.server) == 2 && pool.ID == allPoolID {
@@ -185,7 +182,11 @@ func (p profile) pool(id string) *MultiPool {
 			return &p.pools[i]
 		}
 	}
-	return builtinPool(id)
+	pool := builtinPool(id)
+	if id == allPoolID {
+		pool.limit = normalizeAutoLimit(p.autoLimit)
+	}
+	return pool
 }
 
 func (p profile) endpointName(id, name string) bool {
@@ -338,18 +339,24 @@ func (c *Controller) EditMultiPool(ctx context.Context, id string, spec *PoolSpe
 	if err = write(&p); err != nil {
 		return result, err
 	}
+	return result, c.savePoolMetadata(p)
+}
+
+// Inactive pool edits only change private panel metadata. Keep the current
+// kernel and selectors in place and compare the original file before replacing it.
+func (c *Controller) savePoolMetadata(p profile) error {
 	raw, err := yaml.Marshal(p.doc)
 	if err != nil {
-		return result, err
+		return err
 	}
 	path, err := stage(filepath.Dir(c.path), raw)
 	if err != nil {
-		return result, err
+		return err
 	}
 	defer os.Remove(path)
 	current, err := os.ReadFile(c.path)
 	if err != nil || !bytes.Equal(current, p.raw) {
-		return result, errors.New("конфигурация изменилась параллельно")
+		return errors.New("конфигурация изменилась параллельно")
 	}
-	return result, os.Rename(path, c.path)
+	return os.Rename(path, c.path)
 }
