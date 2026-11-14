@@ -25,6 +25,7 @@ import {
     countryFlag,
     panelEvents,
     serverCountry,
+    scopeLabel,
     statusInfo,
     timeAgo,
     toneDot,
@@ -45,12 +46,25 @@ export function HomePage() {
     const setup = useSetupState().data
 
     const info = statusInfo(status)
-    const current = servers.find(s => s.active)
-    const code = serverCountry(current)
     const isPool = pool?.mode === 'pool'
-    const isAuto = isPool && !pool?.pin_manual
-    const multiPools = useMultiPools(status?.core === 'mihomo' && !!pool?.pinned_tag).data
-    const activePool = multiPools?.find(item => item.id === pool?.pinned_tag)
+    const isAuto = pool?.selection_kind ? pool.selection_kind === 'auto' : isPool && !pool?.pin_manual
+    const catalog = useMultiPools(status?.core === 'mihomo').data
+    const scope = catalog?.scopes?.find(item => item.id === pool?.auto_scope_id)
+    const node = pool?.nodes?.find(item => item.tag === pool.current_tag)
+    const current = node ? servers.find(s => s.id === node.server_id)
+        : pool?.selection_kind ? servers.find(s => s.target_id === pool.current_tag && (!pool.source_name || s.source_name === pool.source_name))
+        : servers.find(s => s.active)
+    const code = node?.country || serverCountry(current)
+    const source = pool?.source_name || ((!pool?.selection_kind || !['native', 'auto'].includes(pool.selection_kind)) ? current?.source_name : undefined)
+    const awaitingMember = pool?.selection_kind === 'auto' && !pool.current_tag
+    const endpoint = awaitingMember ? 'Пул проверяет доступные узлы' : current?.name || node?.name || status?.current_server
+    const mode = pool?.selection_kind ?? (isAuto ? 'auto' : 'manual')
+    const route = mode === 'auto'
+        ? 'Автовыбор · ' + (scope ? scopeLabel(scope) : pool?.selection_name || 'Общий пул')
+        : mode === 'replacement' ? 'Автоматическая замена · сервер той же страны'
+        : mode === 'native' ? 'Группа провайдера · ' + (pool?.selection_name || 'По правилам подписки')
+        : mode === 'profile' || !pool?.selection_kind && current?.protocol === 'xray-profile' ? 'Профиль провайдера · ' + (pool?.selection_name || current?.name || '')
+        : 'Сервер выбран вручную'
     const events = panelEvents(logs, 5)
 
     const inVpn = devices?.devices.filter(d => d.vpn).length ?? 0
@@ -97,38 +111,39 @@ export function HomePage() {
                             <div className='min-w-0'>
                                 <div className='truncate text-[22px] font-bold tracking-[-0.26px]'>
                                     {countryName(code) ||
-                                        status?.current_server ||
+                                        endpoint ||
                                         'Сервер не выбран'}
                                 </div>
                                 <div className='truncate text-[15px] tracking-[-0.24px] text-muted-foreground'>
-                                    {current?.name ?? status?.current_server}
-                                    {status &&
+                                    {endpoint}
+                                    {!awaitingMember && status &&
                                         status.latency_ms > 0 &&
                                         ` · ${status.latency_ms} мс`}
                                 </div>
                             </div>
                         </div>
+                        {!!pool && <div className='grid gap-1 border-t border-white/10 pt-2.5 text-[14px]'>
+                            <p className='break-words'><span className='text-muted-foreground'>Основной маршрут · </span>{route}</p>
+                            {source && <p className='break-words'><span className='text-muted-foreground'>Подписка · </span>{source}</p>}
+                        </div>}
                         {isPool && (
                             <div className='flex min-h-11 items-center gap-3 border-t border-white/10 pt-2.5'>
                                 <div className='min-w-0 flex-1'>
                                     <div className='text-[17px] tracking-[-0.43px]'>
-                                        Выбирать сервер сам
+                                        Автоматически выбирать сервер
                                     </div>
                                     <div className='mt-0.5 text-[13px] text-muted-foreground'>
-                                        {pool?.pin_note ||
-                                            (isAuto
-                                                ? `Самый быстрый из ${pool?.pool_tags?.length ?? 0} серверов пула`
-                                                : activePool ? 'Мультипул · ' + activePool.name : 'Сервер выбран вручную')}
+                                        {pool?.pin_note || (isAuto ? `Кандидатов в пуле: ${pool?.nodes?.length ?? 0}` : 'При включении панель выберет сервер из пула')}
                                     </div>
                                 </div>
                                 <Switch
                                     checked={isAuto}
                                     onChange={toggleAuto}
-                                    label='Выбирать сервер сам'
+                                    label='Автоматически выбирать сервер'
                                     disabled={
                                         auto.isPending ||
                                         pin.isPending ||
-                                        !pool?.api_available
+                                        !pool?.api_available || (isAuto && !pool?.current_tag)
                                     }
                                 />
                             </div>

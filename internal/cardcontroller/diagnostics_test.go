@@ -23,4 +23,18 @@ func TestConnectionUsesObservedChainAndOnlyPublicFields(t *testing.T) {
 	if row.Host != "192.0.2.1" || len(row.Route) != 0 {
 		t.Fatalf("%+v", row)
 	}
+	for tag, id := range map[string]string{"ChatGPT": "openai", cardPrefix + "openai-inherited": "openai", dedicatedGroup("claude"): "claude", "Other": ""} {
+		f.Chains = []string{"DIRECT", tag}
+		if got := f.project(nil).ServiceID; got != id {
+			t.Errorf("tag %q: %q", tag, got)
+		}
+	}
+	f.Chains = []string{"DIRECT"}
+	for domain, want := range map[string]string{"API.Anthropic.com.": "claude", "chatgpt.com": "openai", "notchatgpt.com": "", "chatgpt.com.example": ""} {
+		f.Metadata.Host = domain
+		row = f.project(nil)
+		if row.ServiceID != want || !reflect.DeepEqual(row.Route, []string{"DIRECT"}) {
+			t.Errorf("incorrect service icon or route for %q", domain)
+		}
+	}
 }

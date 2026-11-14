@@ -9,6 +9,7 @@ import { ServiceRoutesPage } from '@/pages/serviceRoutesPage'
 import { DevicesPage } from '@/pages/devicesPage'
 import { ExclusionsPage } from '@/pages/exclusionsPage'
 import { SettingsPage } from '@/pages/settingsPage'
+import { NotificationsPage } from '@/pages/notificationsPage'
 import { UpdatePage } from '@/pages/updatePage'
 import { XkeenSettingsPage } from '@/pages/xkeenSettingsPage'
 import { DiagnosticsPage } from '@/pages/diagnosticsPage'
@@ -71,6 +72,7 @@ export function App() {
                             <Route path='devices' element={<DevicesPage />} />
                             <Route path='exclusions' element={<ExclusionsPage />} />
                             <Route path='settings' element={<SettingsPage />} />
+                            <Route path='settings/notifications' element={<NotificationsPage />} />
                             <Route path='settings/access' element={<AccessPage />} />
                             <Route path='settings/routing' element={<RoutingModePage />} />
                             <Route path='settings/components' element={<ComponentsPage />} />

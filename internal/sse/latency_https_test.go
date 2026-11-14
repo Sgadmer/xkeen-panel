@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -14,6 +15,11 @@ import (
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
 )
+
+func newHTTPSLatencyHandler(sub *xkeen.SubscriptionManager, runtime func() xkeen.Runtime, stateDir string, concurrency int, timeout time.Duration, probe func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)) http.HandlerFunc {
+	jobs := NewProbeJobs(sub, xkeen.ProbeOptions{StateDir: stateDir, Concurrency: concurrency, Timeout: timeout}, func(s []models.Server, o xkeen.ProbeOptions) ([]models.Server, error) { return probe(runtime(), s, o) }, nil)
+	return jobs.Stream
+}
 
 func httpsTestSubscription(t *testing.T) *xkeen.SubscriptionManager {
 	t.Helper()
@@ -79,20 +85,21 @@ func TestHTTPSLatencyStreamSanitizesProbeErrors(t *testing.T) {
 	}
 }
 
-func TestHTTPSLatencyStreamCancelsBackgroundProbeOnDisconnect(t *testing.T) {
+func TestHTTPSLatencyJobSurvivesDisconnectAndJoinsConcurrentClients(t *testing.T) {
 	sub := httpsTestSubscription(t)
-	started, canceled := make(chan struct{}), make(chan struct{})
-	handler := newHTTPSLatencyHandler(sub, func() xkeen.Runtime { return xkeen.Runtime{} }, "", 3, 8*time.Second,
-		func(_ xkeen.Runtime, _ []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
+	started, release := make(chan struct{}), make(chan struct{})
+	jobs := NewProbeJobs(sub, xkeen.ProbeOptions{},
+		func(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
+			servers[0].Latency, servers[0].ProbeKind = 27, "https"
+			options.OnResult(servers[0])
 			close(started)
-			<-options.Context.Done()
-			close(canceled)
-			return nil, options.Context.Err()
-		})
+			<-release
+			return servers, options.Context.Err()
+		}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	finished := make(chan struct{})
 	go func() {
-		handler(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/servers/check", nil).WithContext(ctx))
+		jobs.Stream(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/servers/check", nil).WithContext(ctx))
 		close(finished)
 	}()
 	select {
@@ -101,11 +108,22 @@ func TestHTTPSLatencyStreamCancelsBackgroundProbeOnDisconnect(t *testing.T) {
 		t.Fatal("background probe was not started")
 	}
 	cancel()
-	for _, signal := range []<-chan struct{}{finished, canceled} {
-		select {
-		case <-signal:
-		case <-time.After(time.Second):
-			t.Fatal("disconnected request left its probe running")
-		}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("client did not detach")
+	}
+	run := jobs.start()
+	if s := jobs.Snapshot(); !s.Running || s.Run != 1 || len(s.Results) != 1 || s.Results[0].Latency != 27 {
+		t.Fatalf("lost progress %+v", s)
+	}
+	close(release)
+	select {
+	case <-run.done:
+	case <-time.After(time.Second):
+		t.Fatal("did not finish")
+	}
+	if jobs.Snapshot().Running || sub.GetServers()[0].Latency != 27 {
+		t.Fatal("detached job did not commit its result")
 	}
 }

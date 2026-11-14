@@ -22,6 +22,7 @@ import (
 	"xkeen-panel/internal/localtz"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
+	"xkeen-panel/internal/notifications"
 	"xkeen-panel/internal/server"
 	"xkeen-panel/internal/sse"
 	"xkeen-panel/internal/updater"
@@ -218,6 +219,7 @@ func main() {
 	panelSettings := api.NewPanelSettingsHandler(cfg, geoMatcher, geoPath, refreshReset)
 	if cards != nil {
 		cards.SetCountryPolicy(cfg.AvoidCountries, watchdog.AutomaticServerAllowed)
+		cards.SetAutoPoolLimit(cfg.PoolMaxNodes)
 		panelSettings.BindCountryPolicy(watchdog.LockChanges, watchdog.UnlockChanges, cards.Reconcile)
 	}
 
@@ -312,6 +314,33 @@ func main() {
 
 	// HTTP server
 	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, geoMatcher, eventBus, upd, panelSettings, frontendFS)
+	if push, err := notifications.New(cfg.DataDir); err == nil {
+		srv.Notifications = push
+		go push.Run(ctx, func(ctx context.Context) notifications.Snapshot {
+			status := watchdog.GetStatus()
+			s := notifications.Snapshot{Route: status.CurrentServer, Connected: status.Connected,
+				Checked: status.ProxyChecked && !status.Restarting && !status.LastCheck.IsZero()}
+			if cards != nil {
+				s.Route = ""
+				if route, err := cards.Default(ctx); err == nil {
+					s.Route = route.Current
+					if route.SelectionKind == "auto" && route.Current == route.ScopeID {
+						// Keep the previous baseline until the core identifies a member.
+						s.Route = ""
+					} else if s.Route == "" {
+						s.Route = route.Name
+					}
+				}
+			}
+			if u := upd.State(); u.Available && u.Latest != nil {
+				s.Latest = u.Latest.Tag
+			}
+			return s
+		})
+	} else {
+		log.Printf("Уведомления панели недоступны: %v", err)
+	}
+	srv.Lifetime = ctx
 	srv.Cards, srv.CardsHost = cards, cardsHost
 	if cards != nil {
 		srv.CardsListen = listenAddr

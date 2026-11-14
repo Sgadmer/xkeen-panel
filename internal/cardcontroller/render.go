@@ -32,7 +32,7 @@ type cardEndpoint struct {
 	name string
 }
 
-func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]cardEndpoint) (map[string]string, error) {
+func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]cardEndpoint, defaultSourceAvailable bool) (map[string]string, error) {
 	_, owned := p.doc[stateKey]
 	original := []string{}
 	for _, item := range list(p.doc["rules"]) {
@@ -231,7 +231,10 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	rules = append(rules, priority[claudeRuleCount:]...)
 	if key := p.assigned[defaultID]; key != "" {
 		name := cardPrefix + defaultID
-		route := adapter(key)
+		route := "REJECT"
+		if defaultSourceAvailable {
+			route = adapter(key)
+		}
 		groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{route}})
 		expected[name] = route
 		found := false

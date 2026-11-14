@@ -81,6 +81,15 @@ func TestMultiPoolWorkerUsesMeasuredMember(t *testing.T) {
 	mapOf(cfg["observatory"])["probeURL"] = "http://probe.invalid/test"
 	mapOf(cfg["observatory"])["probeInterval"] = "1s"
 	cfg["inbounds"] = []interface{}{map[string]interface{}{"protocol": "http", "tag": workerInput, "listen": "127.0.0.1", "port": port}}
+	// A short synthetic socket under the user's temp directory also exercises
+	// the read-only metrics path under the real core.
+	socketDir, err := os.MkdirTemp("", "xkp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDir)
+	socket := filepath.Join(socketDir, "m.sock")
+	addPoolMetrics(cfg, socket)
 	body, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +116,9 @@ func TestMultiPoolWorkerUsesMeasuredMember(t *testing.T) {
 				data, _ := io.ReadAll(io.LimitReader(res.Body, 64))
 				res.Body.Close()
 				if string(data) == "vpn-only" {
+					if got := readPoolMetrics(ctx, socket); got != ServiceTargetID(models.Server{RawOutbound: raw}) {
+						t.Fatal("worker did not report measured member", got)
+					}
 					return
 				}
 			}

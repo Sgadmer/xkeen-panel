@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,9 +28,18 @@ type ProbeOptions struct {
 	Timeout     time.Duration
 	Concurrency int
 	StateDir    string
+	// OnResult receives each finished measurement. Workers may call it concurrently.
+	OnResult    func(models.Server)
+}
+
+func (o ProbeOptions) report(s models.Server) {
+	if o.OnResult != nil {
+		o.OnResult(s)
+	}
 }
 
 var httpsProbeGate = make(chan struct{}, 1)
+var errProbeConfig = errors.New("Xray отклонил конфигурацию проверки")
 
 // CheckServersHTTPS measures each node through its own loopback HTTP inbound.
 // A single temporary Xray process serves the batch and is always reaped.
@@ -44,7 +54,7 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 		}
 	}
 	if len(ordinary) > 0 {
-		result, err := checkServersHTTPSBatch(rt, ordinary, options)
+		result, err := probeIndependentNodes(rt, ordinary, options, checkServersHTTPSBatch)
 		if err != nil {
 			return nil, err
 		}
@@ -69,11 +79,38 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 			checked[i].ProbeKind = "https"
 			checked[i].LastChecked = time.Now()
 			checked[i].CheckError = "Профиль не принят ядром или не прошёл HTTPS-проверку"
+			options.report(checked[i])
 			continue
 		}
 		checked[i] = result[0]
 	}
 	return checked, nil
+}
+
+// A provider can publish one invalid outbound alongside healthy configurations.
+// Split only on validation failures. An unavailable local core fails the job.
+func probeIndependentNodes(rt Runtime, nodes []models.Server, options ProbeOptions, batch func(Runtime, []models.Server, ProbeOptions) ([]models.Server, error)) ([]models.Server, error) {
+	checked, err := batch(rt, nodes, options)
+	if !errors.Is(err, errProbeConfig) {
+		return checked, err
+	}
+	if len(nodes) == 1 {
+		node := nodes[0]
+		node.Latency, node.ProbeKind, node.LastChecked = -1, "https", time.Now()
+		node.CheckError = errProbeConfig.Error()
+		options.report(node)
+		return []models.Server{node}, nil
+	}
+	middle := len(nodes) / 2
+	left, err := probeIndependentNodes(rt, nodes[:middle], options, batch)
+	if err != nil {
+		return nil, err
+	}
+	right, err := probeIndependentNodes(rt, nodes[middle:], options, batch)
+	if err != nil {
+		return nil, err
+	}
+	return append(left, right...), nil
 }
 
 func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOptions) ([]models.Server, error) {
@@ -142,6 +179,7 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		})
 		if buildErr != nil {
 			checked[i].CheckError = "Настройки сервера не поддерживаются"
+			options.report(checked[i])
 			continue
 		}
 		if len(server.RawProfile) > 0 {
@@ -165,7 +203,7 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		rules = append(rules, map[string]interface{}{"type": "field", "inboundTag": []string{tag}, "outboundTag": out["tag"]})
 	}
 	if len(outbounds) == 0 {
-		return nil, fmt.Errorf("нет поддерживаемых серверов для проверки")
+		return checked, nil
 	}
 	config := map[string]interface{}{"log": map[string]interface{}{"loglevel": "error"}, "inbounds": inbounds, "outbounds": outbounds, "routing": map[string]interface{}{"rules": rules}}
 	if profileBundle != nil {
@@ -223,12 +261,16 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 	validate.Stdout = log
 	validate.Stderr = log
 	if err = validate.Run(); err != nil {
+		var status *exec.ExitError
+		if ctx.Err() != nil || !errors.As(err, &status) || status.ExitCode() <= 0 {
+			return nil, fmt.Errorf("не удалось выполнить проверочное ядро")
+		}
 		if options.StateDir != "" {
 			if details, readErr := os.ReadFile(filepath.Join(dir, "core.log")); readErr == nil {
 				_ = os.WriteFile(filepath.Join(options.StateDir, "last-probe-error.log"), details, 0600)
 			}
 		}
-		return nil, fmt.Errorf("Xray не принял конфигурацию подписки; рабочие настройки сохранены")
+		return nil, errProbeConfig
 	}
 	for _, listener := range reserved {
 		listener.Close()
@@ -299,6 +341,10 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 				return
 			}
 			defer func() { <-semaphore }()
+			defer func() {
+				checked[index].LastChecked = time.Now()
+				options.report(checked[index])
+			}()
 			nodeCtx, nodeCancel := context.WithTimeout(ctx, options.Timeout)
 			defer nodeCancel()
 			proxy, _ := url.Parse("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))

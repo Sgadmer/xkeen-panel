@@ -244,6 +244,14 @@ func prepareProfileWorker(rt Runtime, targetID string, server models.Server, tem
 	if err != nil {
 		return nil, err
 	}
+	if server.GeneratedPool {
+		if socket := poolStatusSocket(filepath.Dir(rt.XrayConfDir), targetID, key.Port); socket != "" {
+			if err := preparePoolStatusSocket(socket); err != nil {
+				return nil, err
+			}
+			addPoolMetrics(config, socket)
+		}
+	}
 	data, err := json.Marshal(config)
 	if err != nil {
 		return nil, profileError()
@@ -355,6 +363,15 @@ func PruneServiceProfiles(rt Runtime, keep map[string]bool) error {
 				if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 					failures = append(failures, err)
 					continue
+				}
+			}
+			if raw, err := os.ReadFile(filepath.Join(dir, "identity")); err == nil {
+				var key struct{ Port int }
+				if json.Unmarshal(raw, &key) == nil {
+					if socket := poolStatusSocket(filepath.Dir(rt.XrayConfDir), target.Name(), key.Port); socket != "" {
+						os.Remove(socket)
+						os.Remove(socket + ".lock")
+					}
 				}
 			}
 			if err := os.RemoveAll(dir); err != nil {

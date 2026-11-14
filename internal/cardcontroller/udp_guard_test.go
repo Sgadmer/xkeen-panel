@@ -43,7 +43,7 @@ func TestMihomoRejectsUnsupportedUDPBeforeDirect(t *testing.T) {
 		"proxy-groups": []interface{}{map[string]interface{}{"name": "ChatGPT", "type": "select", "proxies": []string{"DIRECT"}}},
 		"rules":        []interface{}{"DST-PORT," + portOf(blocked.LocalAddr()) + ",ChatGPT", "MATCH,DIRECT"},
 	}, assigned: map[string]string{"openai": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
-	_, err = render(&p, []xkeen.ServiceRouteView{{RoutingService: xkeen.RoutingService{ID: "openai"}}}, nil)
+	_, err = render(&p, []xkeen.ServiceRouteView{{RoutingService: xkeen.RoutingService{ID: "openai"}}}, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}

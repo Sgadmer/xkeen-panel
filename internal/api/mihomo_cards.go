@@ -40,16 +40,16 @@ func (h *Handlers) MountMihomoCards(r chi.Router, host string) {
 		})
 		r.Put("/service-routes", func(w http.ResponseWriter, r *http.Request) {
 			var choice struct {
-				ServiceID string `json:"service_id"`
-				TargetID  string `json:"target_id"`
+				ServiceID string  `json:"service_id"`
+				TargetID  *string `json:"target_id"`
 			}
 			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048))
 			dec.DisallowUnknownFields()
-			if dec.Decode(&choice) != nil || dec.Decode(&struct{}{}) != io.EOF || choice.ServiceID == "" {
+			if dec.Decode(&choice) != nil || dec.Decode(&struct{}{}) != io.EOF || choice.ServiceID == "" || choice.TargetID == nil {
 				writeJSON(w, 400, map[string]string{"error": "Не удалось прочитать выбор сервиса."})
 				return
 			}
-			data, err := h.Cards.Set(r.Context(), choice.ServiceID, choice.TargetID)
+			data, err := h.Cards.Set(r.Context(), choice.ServiceID, *choice.TargetID)
 			if err != nil {
 				writeJSON(w, 409, map[string]string{"error": err.Error()})
 				return

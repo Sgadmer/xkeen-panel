@@ -9,7 +9,7 @@ import { invalidateServerData } from '@/hooks/useServerActions'
 import { api } from '@/lib/api'
 import { countryLabel, serverCountry, timeAgo } from '@/lib/format'
 import { importWarnings, safeNotice } from '@/lib/subscription'
-import type { MultiPool, ServerSource, SubscriptionUpdateResponse } from '@/types'
+import type { MultiPool, PoolMember, Server, ServerSource, SubscriptionUpdateResponse } from '@/types'
 
 const field = 'min-h-11 w-full rounded-xl border border-white/10 bg-fill px-3 text-[16px] outline-none focus:border-tint'
 const arrow = <IconChevronRight className='size-4 shrink-0 text-label-tertiary' />
@@ -51,7 +51,8 @@ function SourceList() {
         <Group>
             {sources.isLoading && <Row label='Загружаем источники…' />}
             {sources.data?.map(item => <Row key={item.id} label={<span className='break-words'>{item.name}</span>}
-                hint={[kinds[item.kind], item.host !== item.name && item.host, 'Серверов: ' + item.server_count,
+                hint={[kinds[item.kind], item.host !== item.name && item.host, 'Записей: ' + item.server_count, item.imported_profiles && `Режимов провайдера: ${item.imported_profiles}`,
+                    item.skipped_composite && `Пропущено составных профилей: ${item.skipped_composite}`,
                     item.native_provider && 'Используется профилем Mihomo'].filter(Boolean).join(' · ')}
                 onClick={() => select(item.id)} trailing={arrow} />)}
             <Row label='Добавить источник' tone='tint' onClick={() => select('add')} />
@@ -81,7 +82,11 @@ function SourceEditor({ source, onBack, onDone }: { source: ServerSource; onBack
     return <>
         <Back onClick={onBack} />
         <Group title='Источник'>
-            <Row label={kinds[source.kind]} hint={source.host} detail={'Серверов: ' + source.server_count} />
+            <Row label={kinds[source.kind]} hint={source.host} detail={'Записей: ' + source.server_count} />
+            {!!source.imported_profiles && <Row label='Доступные режимы провайдера' detail={String(source.imported_profiles)} />}
+            {!!source.skipped_composite && <Row label='Пропущено составных профилей' detail={String(source.skipped_composite)}
+                hint='Эти профили используют функции, которые панель не может перенести.' />}
+            {!!source.skipped_unsupported && <Row label='Прочие неподдерживаемые записи' detail={String(source.skipped_unsupported)} />}
             <form className='space-y-2 py-3' onSubmit={event => { event.preventDefault(); if (name.trim() && !action.isPending) action.mutate('rename') }}>
                 <label className='flex flex-col gap-1 text-sm'>Название источника
                     <input className={field} required maxLength={80} value={name} disabled={action.isPending} onChange={event => setName(event.target.value)} />
@@ -102,20 +107,20 @@ function SourceEditor({ source, onBack, onDone }: { source: ServerSource; onBack
     </>
 }
 
-export function MultiPoolsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function MultiPoolsSheet({ open, onClose, initialId }: { open: boolean; onClose: () => void; initialId: string | null }) {
     return <Sheet open={open} onClose={onClose} title='Мультипулы'>
-        {open && <MultiPoolList />}
+        {open && <MultiPoolList initialId={initialId} />}
     </Sheet>
 }
 
-function MultiPoolList() {
+function MultiPoolList({ initialId }: { initialId: string | null }) {
     const pools = useMultiPools()
     const sources = useServerSources()
     const routing = usePool()
-    const [edit, setEdit] = useState<string | null>(null)
+    const [edit, setEdit] = useState<string | null>(initialId)
     const [notice, setNotice] = useState('')
-    const current = pools.data?.find(item => item.id === edit)
-    const active = routing.data?.pinned_tag
+    const current = pools.data?.pools?.find(item => item.id === edit)
+    const active = routing.data?.selection_kind === 'auto' ? routing.data.auto_scope_id : routing.data?.pinned_tag
     if (edit === 'add' || current) return <MultiPoolEditor key={edit} pool={current} sources={sources.data || []} active={!!current && current.id === active}
         onBack={() => setEdit(null)} onDone={message => { setNotice(message); setEdit(null) }} />
     return <>
@@ -123,11 +128,12 @@ function MultiPoolList() {
         <ErrorNotice error={pools.error || sources.error} />
         <Group footer='Мультипул выбирает доступный VPN-сервер с наименьшей задержкой. Назначить пул отдельному сервису можно в разделе «Сервисы».'>
             {pools.isLoading && <Row label='Загружаем пулы…' />}
-            {pools.data?.map(item => {
+            {pools.data?.pools?.map(item => {
                 const selected = item.source_ids?.map(id => sources.data?.find(source => source.id === id)?.name || 'Удалённый источник')
                 const countryText = item.countries?.length ? item.countries.map(countryLabel).join(', ') : 'Все разрешённые страны'
                 return <Row key={item.id} label={<span className='break-words'>{item.name}</span>}
-                    hint={[active === item.id && 'Основной маршрут', selected?.length ? selected.join(', ') : 'Все источники', countryText,
+                    hint={[active === item.id && 'Основной маршрут', item.include_filtered !== false && (selected?.length ? selected.join(', ') : 'Все источники'), item.include_filtered !== false && countryText,
+                        !!item.members?.length && `Конфигов вручную: ${item.members.length}`,
                         memberSummary(item)].filter(Boolean).join(' · ')}
                     onClick={() => { setNotice(''); setEdit(item.id) }} trailing={arrow} />
             })}
@@ -141,9 +147,16 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
 }) {
     const qc = useQueryClient()
     const servers = useServers()
+    const scopes = useMultiPools().data?.scopes
     const settings = usePanelSettings()
     const excluded = settings.data?.avoid_countries ?? []
     const [name, setName] = useState(pool?.name || '')
+    const [mode, setMode] = useState<'rules' | 'manual' | 'mixed'>(!pool || pool.include_filtered === false ? 'manual' : pool.members?.length ? 'mixed' : 'rules')
+    const [members, setMembers] = useState<PoolMember[]>(pool?.members || [])
+    const [search, setSearch] = useState('')
+    const [selectedOnly, setSelectedOnly] = useState(false)
+    const filterEnabled = mode !== 'manual'
+    const explicitEnabled = mode !== 'rules'
     const [sourceIds, setSourceIds] = useState<string[]>(pool?.source_ids || [])
     const [allSources, setAllSources] = useState(!pool?.source_ids?.length)
     const [countries, setCountries] = useState<string[]>(pool?.countries || [])
@@ -151,20 +164,43 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
     const [confirmDelete, setConfirmDelete] = useState(false)
     const sourceOptions = [...sources.map(source => ({ id: source.id, name: source.name })),
         ...sourceIds.filter(id => !sources.some(item => item.id === id)).map(id => ({ id, name: 'Удалённый источник' }))]
-    const sourceServers = (servers.data ?? []).filter(s => s.protocol !== 'xray-profile' && (allSources || sourceIds.includes(s.source_id ?? '')))
+    const sourceServers = (servers.data ?? []).filter(s => s.protocol !== 'xray-profile' && (allSources || sourceIds.includes(s.source_id || 'legacy')))
     const availableCountries = [...new Set([...sourceServers.map(serverCountry), ...countries])].filter(Boolean)
         .sort((a, b) => countryLabel(a).localeCompare(countryLabel(b), 'ru'))
-    const valid = !!name.trim() && (allSources || !!sourceIds.length) && (allCountries || !!countries.length)
+    const selectedKeys = new Set(members.map(memberKey))
+    const choices = new Map<string, Server>()
+    for (const server of servers.data ?? []) {
+        if (!server.target_id || server.protocol === 'xray-profile') continue
+        const key = memberKey({ source_id: server.source_id || 'legacy', target_id: server.target_id })
+        if (!choices.has(key)) choices.set(key, server)
+    }
+    const normalized = search.trim().toLocaleLowerCase('ru')
+    const matches = [...choices.entries()].filter(([key, server]) =>
+        (!selectedOnly || selectedKeys.has(key)) &&
+        [server.name, server.source_name, countryLabel(serverCountry(server))].join(' ').toLocaleLowerCase('ru').includes(normalized))
+    const missing = members.filter(member => !choices.has(memberKey(member)))
+    const rulesValid = !filterEnabled || (allSources || !!sourceIds.length) && (allCountries || !!countries.length)
+    const valid = !!name.trim() && rulesValid && (mode !== 'manual' || members.length > 0)
+    const finalSourceIds = filterEnabled && !allSources ? sourceIds : []
+    const finalCountries = filterEnabled && !allCountries ? countries : []
+    const finalMembers = explicitEnabled ? members : []
     const dirty = !pool || name.trim() !== pool.name ||
-        !sameSet(allSources ? [] : sourceIds, pool.source_ids || []) ||
-        !sameSet(allCountries ? [] : countries, pool.countries || [])
+        filterEnabled !== (pool.include_filtered !== false) ||
+        !sameSet(finalSourceIds, pool.source_ids || []) ||
+        !sameSet(finalCountries, pool.countries || []) ||
+        !sameSet(finalMembers.map(memberKey), (pool.members || []).map(memberKey))
     const path = '/api/multipools' + (pool ? '/' + encodeURIComponent(pool.id) : '')
     const action = useMutation({
         mutationFn: async (kind: 'save' | 'delete' | 'pin' | 'auto') => {
             if (kind === 'delete') return api.del(path)
-            if (kind === 'pin') return api.post('/api/pool/pin', { tag: pool!.id })
-            if (kind === 'auto') return api.post('/api/pool/auto')
-            const data = { name: name.trim(), source_ids: allSources ? [] : sourceIds, countries: allCountries ? [] : countries }
+            if (kind === 'pin') return api.post('/api/pool/scope', { id: pool!.id })
+            if (kind === 'auto') {
+                const all = scopes?.find(scope => scope.kind === 'all')
+                if (!all) throw new Error('Не удалось загрузить общий пул')
+                return api.post('/api/pool/scope', { id: all.id })
+            }
+            const data = { name: name.trim(), source_ids: finalSourceIds, countries: finalCountries,
+                include_filtered: filterEnabled, members: finalMembers }
             return pool ? api.put(path, data) : api.post(path, data)
         },
         onSuccess: async (_, kind) => {
@@ -179,29 +215,66 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
                 <input className={field} maxLength={64} value={name} disabled={action.isPending} onChange={e => setName(e.target.value)} placeholder='Например, Европа' />
             </label>
         </Group>
-        <Group title='Источники' footer={allSources ? 'Новые подписки тоже будут входить в этот пул.' : undefined}>
-            <Choice checked={allSources} disabled={action.isPending} label='Все источники' onChange={() => setAllSources(!allSources)} />
-            {!allSources && sourceOptions.map(source => <Choice key={source.id} label={source.name} checked={sourceIds.includes(source.id)}
-                disabled={action.isPending} onChange={() => setSourceIds(ids => toggle(ids, source.id))} />)}
-            {!allSources && !sourceOptions.length && <Row label='Сначала добавьте источник в разделе «Подписки и источники».' />}
+        <Group title='Состав пула'>
+            <label className='flex min-h-12 flex-wrap items-center justify-between gap-2 py-2 text-sm'>
+                Способ добавления
+                <select className='min-h-10 max-w-full rounded-xl border border-white/10 bg-fill px-2' disabled={action.isPending}
+                    value={mode} onChange={e => setMode(e.target.value as typeof mode)}>
+                    <option value='rules'>По странам и подпискам</option>
+                    <option value='manual'>Отдельные конфиги</option>
+                    <option value='mixed'>По условиям и вручную</option>
+                </select>
+            </label>
+            {filterEnabled && <>
+                <details className='py-2'>
+                    <summary className='cursor-pointer py-1 text-[15px]'>Подписки · {allSources ? 'все' : sourceIds.length === 1 ? (sourceOptions.find(s => s.id === sourceIds[0])?.name || '1') : sourceIds.length}</summary>
+                    <Choice checked={allSources} disabled={action.isPending} label='Все, включая новые подписки' onChange={() => setAllSources(!allSources)} />
+                    {!allSources && sourceOptions.map(source => <Choice key={source.id} label={source.name} checked={sourceIds.includes(source.id)}
+                        disabled={action.isPending} onChange={() => setSourceIds(ids => toggle(ids, source.id))} />)}
+                </details>
+                <details className='py-2'>
+                    <summary className='cursor-pointer py-1 text-[15px]'>Страны · {allCountries ? 'все разрешённые' : countries.length === 1 ? countryLabel(countries[0]) : countries.length}</summary>
+                    <Choice checked={allCountries} disabled={action.isPending} label='Все разрешённые страны' onChange={() => setAllCountries(!allCountries)} />
+                    {!allCountries && <div className='grid grid-cols-2 gap-x-3'>{availableCountries.map(code =>
+                        <Choice key={code} label={countryLabel(code) + (excluded.includes(code) ? ' · исключена' : '')}
+                            checked={countries.includes(code)} disabled={action.isPending || excluded.includes(code) && !countries.includes(code)}
+                            onChange={() => setCountries(list => toggle(list, code))} />)}</div>}
+                    {!allCountries && !availableCountries.length && <Row label={servers.isLoading ? 'Загружаем страны…' : 'В выбранных подписках пока нет серверов с известной страной.'} />}
+                </details>
+            </>}
         </Group>
-        <Group title='Страны' footer='Страны, исключённые в настройках панели, пропускаются во всех мультипулах.'>
-            <Choice checked={allCountries} disabled={action.isPending} label='Все разрешённые страны' onChange={() => setAllCountries(!allCountries)} />
-            {!allCountries && availableCountries.map(code => <Choice key={code} label={countryLabel(code) + (excluded.includes(code) ? ' · исключена в настройках' : '')}
-                checked={countries.includes(code)} disabled={action.isPending || excluded.includes(code) && !countries.includes(code)}
-                onChange={() => setCountries(list => toggle(list, code))} />)}
-            {!allCountries && !availableCountries.length && <Row label={servers.isLoading ? 'Загружаем страны…' : 'В выбранных источниках пока нет серверов с известной страной.'} />}
-        </Group>
+        {explicitEnabled && <Group title={`Конфиги · выбрано ${members.length}`} footer={mode === 'mixed' ? 'Выбранные конфиги дополняют серверы, найденные по условиям. Исключённые страны пропускаются.' : 'Пул использует отмеченные конфиги из любых подписок. Исключённые страны пропускаются.'}>
+            <div className='space-y-1 py-2'>
+                <input type='search' aria-label='Найти конфиг' placeholder='Название, страна или подписка' className={field}
+                    value={search} onChange={e => setSearch(e.target.value)} />
+                <Choice checked={selectedOnly} disabled={false} label='Показать только выбранные' onChange={() => setSelectedOnly(!selectedOnly)} />
+            </div>
+            <div className='max-h-72 overflow-auto overscroll-contain divide-y divide-white/10'>
+                {matches.map(([key, server]) => {
+                    const code = serverCountry(server)
+                    const selected = selectedKeys.has(key)
+                    return <Choice key={key} checked={selected} disabled={action.isPending || excluded.includes(code) && !selected}
+                        label={server.name} hint={[server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна'].filter(Boolean).join(' · ')}
+                        onChange={() => setMembers(prev => selected ? prev.filter(item => memberKey(item) !== key) :
+                            [...prev, { source_id: server.source_id || 'legacy', target_id: server.target_id! }])} />
+                })}
+                {!servers.isLoading && missing.map(member => <Choice key={memberKey(member)} checked disabled={action.isPending}
+                    label='Конфиг отсутствует в подписке' hint={sources.find(item => item.id === member.source_id)?.name}
+                    onChange={() => setMembers(prev => prev.filter(item => memberKey(item) !== memberKey(member)))} />)}
+                {servers.isLoading && <Row label='Загружаем конфиги…' />}
+                {!servers.isLoading && !matches.length && !missing.length && <Row label={selectedOnly && !members.length ? 'Конфиги ещё не выбраны' : 'Подходящих конфигов нет'} />}
+            </div>
+        </Group>}
         <ErrorNotice error={action.error || servers.error || settings.error} />
         <Group>
             <Row label={action.isPending && action.variables === 'save' ? 'Сохраняем…' : 'Сохранить мультипул'} tone='tint'
-                disabled={!valid || !dirty || action.isPending} onClick={() => action.mutate('save')} />
+                disabled={!valid || !dirty || action.isPending || !servers.data || !settings.data} onClick={() => action.mutate('save')} />
         </Group>
         {pool && <Group title='Основной маршрут'>
             <Row label={active ? 'Вернуть общий автовыбор' : 'Назначить основным маршрутом'}
                 hint={pool.member_count ? (active ? 'Этот пул уже выбран для основного маршрута.' : 'Для сервисов со своим маршрутом сохраняется их выбор.')
                     : 'Подходящих VPN-серверов нет. Трафик, назначенный этому пулу, блокируется.'}
-                tone='tint' disabled={dirty || action.isPending} onClick={() => action.mutate(active ? 'auto' : 'pin')} />
+                tone='tint' disabled={dirty || action.isPending || (!active && !pool.member_count)} onClick={() => action.mutate(active ? 'auto' : 'pin')} />
         </Group>}
         {pool && <Group>
             <Row label={confirmDelete ? 'Подтвердить удаление «' + pool.name + '»' : 'Удалить мультипул'} tone='destructive'
@@ -211,10 +284,14 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
     </>
 }
 
-function Choice({ checked, disabled, label, onChange }: { checked: boolean; disabled: boolean; label: string; onChange: () => void }) {
+function memberKey(member: PoolMember) {
+    return member.source_id + ':' + member.target_id
+}
+
+function Choice({ checked, disabled, label, hint, onChange }: { checked: boolean; disabled: boolean; label: string; hint?: string; onChange: () => void }) {
     return <label className='flex min-h-11 cursor-pointer items-center gap-3 py-2 has-disabled:opacity-50'>
         <input type='checkbox' className='size-5 shrink-0 accent-[var(--primary)]' checked={checked} disabled={disabled} onChange={onChange} />
-        <span className='min-w-0 break-words'>{label}</span>
+        <span className='min-w-0 break-words'>{label}{hint && <span className='block text-xs text-muted-foreground'>{hint}</span>}</span>
     </label>
 }
 

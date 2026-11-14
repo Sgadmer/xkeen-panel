@@ -91,6 +91,68 @@ func TestNativeDefaultUsesProviderSourceWithMatchingNames(t *testing.T) {
 	}
 }
 
+func TestAutoScopesRankAllSourcesAndKeepExplicitOwnership(t *testing.T) {
+	first := poolServer("A", "DE", "10001")
+	next := poolServer("B", "DE", "10002")
+	other := poolServer("C", "FR", "10003")
+	excluded := poolServer("C", "RU", "10004")
+	first.Latency, next.Latency, other.Latency, excluded.Latency = 120, 20, 30, 1
+	alias := next
+	alias.SourceID = "A"
+	alias.Latency = 25
+	failed := poolServer("B", "US", "10005")
+	failed.ProbeKind, failed.Latency = "https", -1
+	c := &Controller{}
+	c.SetAutoPoolLimit(2)
+	c.SetCountryPolicy(func() []string { return []string{"RU"} }, func(s models.Server) bool { return s.Country != "RU" })
+	nodes := c.poolNodes([]models.Server{first, next, other, excluded, alias, failed})
+	all := builtinPool(allPoolID)
+	best := all.members(nodes)
+	if len(best) != 2 || best[0].SourceID != "B" || best[1].SourceID != "C" || all.EligibleCount != 3 {
+		t.Fatal("global selection lost another source, included failed/avoided or overran limit", best)
+	}
+	de := builtinPool(scopeHash("country:DE"))
+	if got := de.members(nodes); len(got) != 2 || got[0].SourceID != "B" {
+		t.Fatal("country did not aggregate sources", got)
+	}
+	fixed := false
+	custom := MultiPool{ID: scopeHash("custom fixture"), PoolSpec: PoolSpec{Name: "Mix", IncludeFiltered: &fixed, Members: []PoolMember{{SourceID: "B", TargetID: xkeen.ServiceTargetID(next)}}}}
+	if got := custom.members(c.poolNodes([]models.Server{alias})); len(got) != 0 {
+		t.Fatal("explicit reference drifted to a different source")
+	}
+	filtered := true
+	custom.IncludeFiltered = &filtered
+	custom.Countries = []string{"FR"}
+	if got := custom.members(nodes); len(got) != 2 || got[0].SourceID != "B" || got[1].Country != "FR" {
+		t.Fatal("explicit and dynamic sets did not combine", got)
+	}
+	p := profile{doc: map[string]interface{}{autoScopeKey: de.ID}, assigned: map[string]string{"claude": de.ID}, pools: []MultiPool{custom}}
+	got := scopes(p, c.poolNodes([]models.Server{other}))
+	if got[0].Kind != "all" || got[len(got)-1].ID != custom.ID {
+		t.Fatal("pool order", got)
+	}
+	for _, s := range got {
+		if s.ID == de.ID && s.MemberCount == 0 {
+			return
+		}
+	}
+	t.Fatal("missing assigned empty country")
+}
+
+func TestDefaultSourceProvenanceAndReplacement(t *testing.T) {
+	item := poolServer("A", "SE", "10001")
+	item.SourceName = "First"
+	twin := item
+	twin.SourceID, twin.SourceName, twin.Name = "B", "Second", "Mirror"
+	key := xkeen.ServiceTargetID(item)
+	p := profile{doc: map[string]interface{}{defaultSourceKey: "B", replacementKey: key}, assigned: map[string]string{defaultID: key}}
+	c := &Controller{catalog: func() []models.Server { return []models.Server{item, twin} }}
+	state := c.defaultRoute(p, map[string]selector{cardPrefix + defaultID: {Now: nodePrefix + key}})
+	if state.Current != key || state.CurrentSource != "B" || state.SourceName != "Second" || state.SelectionName != "Mirror" || state.SelectionKind != "replacement" {
+		t.Fatal("incorrect attribution", state)
+	}
+}
+
 func TestNamedPoolThroughMihomoAndXray(t *testing.T) {
 	core, xray := os.Getenv("MIHOMO_TEST_BINARY"), os.Getenv("XRAY_TEST_BINARY")
 	if core == "" || xray == "" {
@@ -250,5 +312,21 @@ func TestNamedPoolThroughMihomoAndXray(t *testing.T) {
 		if s.ID == "openai" && (s.Target != pool.ID || !s.Blocked) || s.ID == "claude" && (s.Target != xkeen.ServiceTargetID(pinned) || s.Blocked) {
 			t.Fatal("unexpected active assignment", s.ID)
 		}
+	}
+	// Keep a duplicate endpoint for an unrelated service. Removing the
+	// source that supplied the manual default must block only that default.
+	alias := pinned
+	alias.SourceID = "duplicate"
+	servers = []models.Server{pinned, alias}
+	if err = c.SetDefaultSource(ctx, xkeen.ServiceTargetID(pinned), pinned.SourceID); err != nil {
+		t.Fatal(err)
+	}
+	servers = []models.Server{alias}
+	if err = c.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	live, err = p.api.selectors(ctx)
+	if err != nil || live[cardPrefix+defaultID].Now != "REJECT" || live[cardPrefix+"claude"].Now != nodePrefix+xkeen.ServiceTargetID(alias) {
+		t.Fatal("source removal affected the wrong route", err)
 	}
 }

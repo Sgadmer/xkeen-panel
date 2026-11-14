@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"xkeen-panel/internal/keenetic"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
+	"xkeen-panel/internal/notifications"
 	"xkeen-panel/internal/sse"
 	"xkeen-panel/internal/updater"
 	"xkeen-panel/internal/xkeen"
@@ -23,21 +25,23 @@ import (
 )
 
 type Server struct {
-	Cards        *cardcontroller.Controller
-	CardsHost    string
-	CardsListen  string
-	config       *models.Config
-	userManager  *auth.UserManager
-	subscription *xkeen.SubscriptionManager
-	watchdog     *monitor.Watchdog
-	detector     *xkeen.Detector
-	pool         *xkeen.PoolStore
-	sites        *xkeen.SiteManager
-	geoip        *geoip.Matcher
-	eventBus     *sse.EventBus
-	updater      *updater.Updater
-	settings     *api.PanelSettingsHandler
-	frontendFS   fs.FS
+	Notifications *notifications.Manager
+	Lifetime      context.Context
+	Cards         *cardcontroller.Controller
+	CardsHost     string
+	CardsListen   string
+	config        *models.Config
+	userManager   *auth.UserManager
+	subscription  *xkeen.SubscriptionManager
+	watchdog      *monitor.Watchdog
+	detector      *xkeen.Detector
+	pool          *xkeen.PoolStore
+	sites         *xkeen.SiteManager
+	geoip         *geoip.Matcher
+	eventBus      *sse.EventBus
+	updater       *updater.Updater
+	settings      *api.PanelSettingsHandler
+	frontendFS    fs.FS
 }
 
 func New(cfg *models.Config, um *auth.UserManager, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore, sites *xkeen.SiteManager, matcher *geoip.Matcher, bus *sse.EventBus, upd *updater.Updater, settings *api.PanelSettingsHandler, frontendFS fs.FS) *Server {
@@ -69,6 +73,10 @@ func (f *pathLogFormatter) NewLogEntry(r *http.Request) middleware.LogEntry {
 
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
+	lifetime := s.Lifetime
+	if lifetime == nil {
+		lifetime = context.Background()
+	}
 
 	// Middleware
 	r.Use(middleware.RequestLogger(&pathLogFormatter{middleware.DefaultLogFormatter{Logger: log.Default(), NoColor: true}}))
@@ -86,6 +94,26 @@ func (s *Server) Handler() http.Handler {
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool, s.geoip)
 	handlers.Cards = s.Cards
+	handlers.Checks = sse.NewProbeJobs(s.subscription, xkeen.ProbeOptions{Context: lifetime, StateDir: s.config.DataDir, Concurrency: s.config.ProbeConcurrency, Timeout: time.Duration(s.config.ProbeTimeoutMs) * time.Millisecond}, func(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
+		if s.Cards != nil {
+			return s.Cards.CheckServers(servers, options)
+		}
+		rt := s.detector.Runtime()
+		if rt.Core == xkeen.CoreMihomo {
+			return xkeen.CheckCardServersHTTPS(rt, servers, options)
+		}
+		return xkeen.CheckServersHTTPS(rt, servers, options)
+	}, func(ctx context.Context, checked []models.Server) error {
+		s.watchdog.LockChanges()
+		defer s.watchdog.UnlockChanges()
+		if err := s.subscription.UpdateLatencies(checked); err != nil {
+			return err
+		}
+		if s.Cards != nil && s.Cards.Reconcile(ctx) != nil {
+			return sse.ErrPoolUpdate
+		}
+		return nil
+	})
 	if s.Cards != nil {
 		handlers.FaceID = api.NewPanelFaceID(s.config, s.CardsListen, devicesHandler)
 		webAuthnHandler.FaceID = handlers.FaceID
@@ -113,7 +141,7 @@ func (s *Server) Handler() http.Handler {
 			r.Use(api.AuthMiddleware(s.userManager))
 
 			r.Get("/events", sse.HandleEvents(s.eventBus, s.watchdog))
-			r.Get("/servers/check", sse.HandleStreamHTTPSLatency(s.subscription, s.detector, s.config.DataDir, s.config.ProbeConcurrency, time.Duration(s.config.ProbeTimeoutMs)*time.Millisecond))
+			r.Get("/servers/check", handlers.Checks.Stream)
 		})
 
 		// Protected REST routes: JWT and a timeout
@@ -122,8 +150,11 @@ func (s *Server) Handler() http.Handler {
 			r.Use(middleware.Timeout(120 * time.Second))
 
 			r.Get("/status", handlers.HandleStatus)
-			r.Get("/diagnostics", api.NewDiagnosticsHandler(s.Cards))
+			r.Get("/diagnostics", api.NewDiagnosticsHandler(lifetime, s.Cards))
 			r.Get("/access", handlers.HandlePanelAccess)
+			if s.Notifications != nil {
+				s.Notifications.Mount(r)
+			}
 			r.Get("/access/face-id/plan", handlers.HandlePlanFaceID)
 			r.Post("/access/face-id/prepare", handlers.HandlePrepareFaceID)
 			r.Post("/sources/import", handlers.HandleImportSource)
@@ -159,6 +190,8 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/servers", handlers.HandleGetServers)
 			r.Post("/servers/select", handlers.HandleSelectServer)
 			r.Post("/servers/check", handlers.HandleCheckServers)
+			r.Get("/servers/check/job", handlers.HandleProbeJob)
+			r.Post("/servers/check/job", handlers.HandleProbeJob)
 			r.Post("/servers/country", handlers.HandleSetCountry)
 
 			// Passkey management

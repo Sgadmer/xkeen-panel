@@ -16,14 +16,17 @@ import (
 
 // SourceSummary contains only information that can be sent to a browser.
 type SourceSummary struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Kind           string    `json:"kind"`
-	Host           string    `json:"host,omitempty"`
-	ServerCount    int       `json:"server_count"`
-	LastUpdated    time.Time `json:"last_updated"`
-	CanRefresh     bool      `json:"can_refresh"`
-	NativeProvider bool      `json:"native_provider,omitempty"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Kind               string    `json:"kind"`
+	Host               string    `json:"host,omitempty"`
+	ServerCount        int       `json:"server_count"`
+	LastUpdated        time.Time `json:"last_updated"`
+	CanRefresh         bool      `json:"can_refresh"`
+	NativeProvider     bool      `json:"native_provider,omitempty"`
+	ImportedProfiles   int       `json:"imported_profiles,omitempty"`
+	SkippedComposite   int       `json:"skipped_composite,omitempty"`
+	SkippedUnsupported int       `json:"skipped_unsupported,omitempty"`
 }
 
 type SourceInput struct {
@@ -91,7 +94,11 @@ func SourceSummaries(data models.SubscriptionData) []SourceSummary {
 	}
 	sources := make([]SourceSummary, 0, len(data.Sources))
 	for _, s := range data.Sources {
-		sources = append(sources, SourceSummary{ID: s.ID, Name: s.Name, Kind: s.Kind, Host: sourceHost(s.URL), ServerCount: counts[s.ID], LastUpdated: s.LastUpdated, CanRefresh: s.Kind == "subscription" && s.URL != ""})
+		sources = append(sources, SourceSummary{
+			ID: s.ID, Name: s.Name, Kind: s.Kind, Host: sourceHost(s.URL),
+			ServerCount: counts[s.ID], LastUpdated: s.LastUpdated, CanRefresh: s.Kind == "subscription" && s.URL != "",
+			ImportedProfiles: s.Report.ImportedProfiles, SkippedComposite: s.Report.SkippedComposite, SkippedUnsupported: s.Report.SkippedUnsupported,
+		})
 	}
 	return sources
 }

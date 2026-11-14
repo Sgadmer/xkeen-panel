@@ -4,6 +4,7 @@ import {
     IconCheck,
     IconChevronRight,
     IconLink,
+    IconLoader2,
     IconLayersLinked,
     IconPencil,
     IconPlus,
@@ -20,6 +21,7 @@ import {
     Segmented,
     Switch,
 } from '@/components/ios'
+import { ServerAutomation } from '@/components/serverAutomation'
 import { MultiPoolsSheet, SourcesSheet } from '@/components/serverCatalogSheets'
 import { Badge } from '@/components/ui/badge'
 import { AddSiteSheet, SiteSheet, siteSummary } from '@/components/siteSheets'
@@ -39,6 +41,7 @@ import {
     countryName,
     countryLabel,
     latencyTone,
+    scopeLabel,
     serverCountry,
     timeAgo,
     toneText,
@@ -73,8 +76,11 @@ export function ServersPage() {
     const sources = useServerSources().data
     const status = useStatus().data
     const mihomo = status?.core === 'mihomo' || pool?.core === 'mihomo'
-    const multipools = useMultiPools(mihomo).data
-    const activeMultiPool = multipools?.find(item => item.id === pool?.pinned_tag)
+    const poolCatalog = useMultiPools(mihomo)
+    const multipools = poolCatalog.data?.pools ?? []
+    const scopes = poolCatalog.data?.scopes ?? []
+    const selectedScope = scopes.find(item => item.id === pool?.auto_scope_id)
+    const providerModes = servers.filter(s => s.protocol === 'xray-profile')
     const avoidCountries = usePanelSettings().data?.avoid_countries ?? []
     const sites = useSites().data
     const subscription = useSubscription().data
@@ -84,11 +90,13 @@ export function ServersPage() {
         auto,
         refreshSubscription,
         setCountry,
+        setScope,
     } = useServerActions()
-    const { check, checking, error: checkError, progress } = useStreamLatency()
+    const { check, checking, error: checkError, progress, isPendingServer, latencyFor } = useStreamLatency()
     const [query, setQuery] = useState('')
     const [country, setCountryFilter] = useState('all')
     const [catalogSheet, setCatalogSheet] = useState<'sources' | 'pools' | null>(null)
+    const [editingPool, setEditingPool] = useState<string | null>(null)
     const [tab, setTabState] = useState<Tab>(savedTab)
     const [addingSite, setAddingSite] = useState(false)
     const [siteId, setSiteId] = useState<number | null>(null)
@@ -100,6 +108,7 @@ export function ServersPage() {
             refreshSubscription.data?.import_report,
     )
     const rawActionError =
+        setScope.error?.message ?? poolCatalog.error?.message ??
         select.error?.message ??
         pin.error?.message ??
         auto.error?.message ??
@@ -113,7 +122,8 @@ export function ServersPage() {
         : ''
 
     const isPool = pool?.mode === 'pool'
-    const view: Tab = isPool ? tab : 'all'
+    const canChoosePool = isPool || (mihomo && scopes.length > 0)
+    const view: Tab = canChoosePool ? tab : 'all'
     const setTab = (next: Tab) => {
         setTabState(next)
         try {
@@ -124,6 +134,7 @@ export function ServersPage() {
     const countries = useMemo(() => {
         const counts = new Map<string, number>()
         servers.forEach(s => {
+            if (s.protocol === 'xray-profile') return
             const c = serverCountry(s) || OTHER
             counts.set(c, (counts.get(c) ?? 0) + 1)
         })
@@ -133,6 +144,7 @@ export function ServersPage() {
     const groups = useMemo(() => {
         const byCountry = new Map<string, Server[]>()
         servers.forEach(s => {
+            if (s.protocol === 'xray-profile') return
             const c = serverCountry(s) || OTHER
             if (country !== 'all' && c !== country) return
             if (!matches(query, s.name, c, s.source_name)) return
@@ -184,13 +196,15 @@ export function ServersPage() {
     const rowProps = (s: Server) => ({
         server: s,
         countryExcluded: avoidCountries.includes(serverCountry(s)),
-        busy: select.isPending,
+        busy: select.isPending || pin.isPending || auto.isPending || setScope.isPending,
+        measuring: isPendingServer(s.id),
+        liveLatency: latencyFor(s.id),
         onSelect: () => select.mutate(s.id),
         onSetCountry: (c: string) =>
             setCountry.mutate({ id: s.id, country: c }),
     })
 
-    const isAuto = isPool && !pool?.pin_manual
+    const isAuto = pool?.selection_kind ? pool.selection_kind === 'auto' : isPool && !pool?.pin_manual
     const pickNode = (tag: string, serverId: number) =>
         serverId >= 0 ? select.mutate(serverId) : pin.mutate(tag)
 
@@ -222,7 +236,7 @@ export function ServersPage() {
             {mihomo && <div className={TILE}>
                 <Row icon={<IconTile color='#5856d6'><IconLayersLinked className='size-[17px]' stroke={2.2} /></IconTile>}
                     label='Мультипулы' hint={multipools?.length ? 'Пулов: ' + multipools.length : 'Объединить серверы из разных подписок'}
-                    onClick={() => setCatalogSheet('pools')} trailing={<IconChevronRight className='size-4 shrink-0 text-label-tertiary' />} />
+                    onClick={() => { setEditingPool(null); setCatalogSheet('pools') }} trailing={<IconChevronRight className='size-4 shrink-0 text-label-tertiary' />} />
             </div>}
             {hasSubscription && (
                 <div className={TILE}>
@@ -249,6 +263,20 @@ export function ServersPage() {
                 </div>
             )}
         </div>
+    )
+
+    const profiles = providerModes.filter(s => matches(query, s.name, serverCountry(s), s.source_name))
+    const providerCard = profiles.length > 0 && (
+        <Group title='Режимы провайдера' footer='Состав серверов и правила каждого сборного профиля задаёт его подписка.'>
+            {profiles.map(server => {
+                const ms = latencyFor(server.id) ?? server.latency_ms
+                const measured = server.probe_kind === 'https' || latencyFor(server.id) !== undefined
+                return <Row key={server.id} label={server.name}
+                    hint={[server.source_name, `${server.profile_nodes ?? 0} серверов`, server.active && 'Выбран'].filter(Boolean).join(' · ')}
+                    onClick={() => select.mutate(server.id)} disabled={select.isPending || pin.isPending || auto.isPending || setScope.isPending || server.active}
+                    trailing={<Latency measuring={isPendingServer(server.id)} ms={measured ? ms : 0} />} />
+            })}
+        </Group>
     )
 
     return (
@@ -305,7 +333,7 @@ export function ServersPage() {
                 </p>
             )}
 
-            {isPool && (
+            {canChoosePool && (
                 <div className='lg:max-w-sm'>
                     <Segmented
                         label='Список серверов'
@@ -322,83 +350,89 @@ export function ServersPage() {
                 </div>
             )}
 
-            {servers.some(s => s.protocol === 'xray-profile') && (
-                <Group title='Режимы провайдера' footer='Состав и маршруты сборного профиля задаёт провайдер. Список исключённых стран применяется к автовыбору панели.'>
-                    {servers.filter(s => s.protocol === 'xray-profile').map(server => (
-                        <Row key={server.id} label={server.name}
-                            hint={[server.source_name, server.check_error || `${server.profile_nodes ?? 0} серверов · ${server.active ? 'Выбран' : server.latency_ms > 0 ? `HTTPS ${server.latency_ms} мс` : 'Не прошёл проверку'}`].filter(Boolean).join(' · ')}
-                            onClick={() => select.mutate(server.id)}
-                            disabled={select.isPending || pin.isPending || auto.isPending || server.active}
-                            trailing={server.active ? <IconCheck className='size-5 text-tint' /> : <IconChevronRight className='size-4 text-label-tertiary' />}
-                        />
-                    ))}
-                </Group>
-            )}
-
             {view === 'pool' && (
                 <div className='flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start'>
-                    <Group
-                        title='Автовыбор'
-                        footer={
-                            isAuto
-                                ? 'Панель держит трафик на самом быстром сервере пула и сама переключается, если он перестал работать.'
-                                : activeMultiPool ? 'Основной маршрут использует мультипул «' + activeMultiPool.name + '».'
-                                : 'Трафик закреплён за выбранным сервером. Включите автовыбор, чтобы панель снова выбирала сама.'
-                        }
-                    >
-                        <div className='flex min-h-[52px] items-center gap-3 py-2'>
-                            <span className='min-w-0 flex-1'>
-                                <span className='block text-[17px] tracking-[-0.43px]'>
-                                    Выбирать сервер сам
-                                </span>
-                                {pool?.pin_note && (
-                                    <span className='mt-0.5 block text-[13px] text-muted-foreground'>
-                                        {pool.pin_note}
+                    <div className='flex min-w-0 flex-col gap-4'>
+                        <Group
+                            title='Автовыбор'
+                            footer={
+                                isAuto
+                                    ? 'Панель держит трафик на самом быстром сервере пула и сама переключается, если он перестал работать.'
+                                    : mihomo ? 'Выбор пула включит автоматический режим.' : 'Включите автовыбор, чтобы панель снова выбирала сервер сама.'
+                            }
+                        >
+                            <div className='flex min-h-[52px] items-center gap-3 py-2'>
+                                <span className='min-w-0 flex-1'>
+                                    <span className='block text-[17px] tracking-[-0.43px]'>
+                                        Автоматически выбирать сервер
                                     </span>
-                                )}
-                            </span>
-                            <Switch
-                                checked={isAuto}
-                                onChange={next =>
-                                    next
-                                        ? auto.mutate()
-                                        : pool?.current_tag &&
-                                          pin.mutate(pool.current_tag)
-                                }
-                                label='Выбирать сервер сам'
-                                disabled={
-                                    auto.isPending ||
-                                    pin.isPending ||
-                                    !pool?.api_available
-                                }
-                            />
-                        </div>
-                        {poolRows.map(r => (
-                            <PoolRow
-                                key={r.node.tag}
-                                name={r.node.name}
-                                country={r.country}
-                                protocol={r.protocol}
-                                source={r.source}
-                                latency={r.latency}
-                                current={r.current}
-                                excludedUntil={r.node.excluded_until}
-                                countryExcluded={avoidCountries.includes(r.country ?? '')}
-                                busy={select.isPending || pin.isPending}
-                                onSelect={() =>
-                                    pickNode(r.node.tag, r.node.server_id)
-                                }
-                            />
-                        ))}
-                        {poolRows.length === 0 && (
-                            <p className='py-4 text-[15px] text-muted-foreground'>
-                                {query ? 'Ничего не нашлось' : 'Доступных серверов для автовыбора нет'}
-                            </p>
-                        )}
-                    </Group>
+                                    {pool?.pin_note && (
+                                        <span className='mt-0.5 block text-[13px] text-muted-foreground'>
+                                            {pool.pin_note}
+                                        </span>
+                                    )}
+                                </span>
+                                <Switch
+                                    checked={isAuto}
+                                    onChange={next =>
+                                        next
+                                            ? auto.mutate()
+                                            : pool?.current_tag &&
+                                              pin.mutate(pool.current_tag)
+                                    }
+                                    label='Автоматически выбирать сервер'
+                                    disabled={
+                                        auto.isPending || pin.isPending || setScope.isPending ||
+                                        (!isAuto && !pool?.api_available) || (isAuto && !pool?.current_tag)
+                                    }
+                                />
+                            </div>
+                            {mihomo && scopes.length > 0 && <label className='flex min-h-[52px] flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2'>
+                                <span className='text-[15px] font-medium'>Пул автовыбора</span>
+                                <select className='min-h-10 min-w-0 max-w-full flex-1 rounded-xl border border-white/10 bg-fill px-2 text-[15px] sm:max-w-72'
+                                    value={setScope.isPending ? setScope.variables : isAuto ? (selectedScope?.id ?? scopes.find(item => item.kind === 'all')?.id ?? '') : ''}
+                                    disabled={setScope.isPending || pin.isPending || auto.isPending || select.isPending || !pool?.api_available}
+                                    onChange={e => setScope.mutate(e.target.value)}>
+                                    {!isAuto && <option value='' disabled>Выберите пул…</option>}
+                                    {scopes.filter(item => item.kind === 'all').map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)}</option>)}
+                                    {(['country', 'custom'] as const).map(kind => {
+                                        const options = scopes.filter(item => item.kind === kind)
+                                        return options.length > 0 && <optgroup key={kind} label={kind === 'country' ? 'Страны' : 'Мультипулы'}>
+                                            {options.map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)} · {item.member_count}</option>)}
+                                        </optgroup>
+                                    })}
+                                </select>
+                            </label>}
+                            {poolRows.map(r => (
+                                <PoolRow
+                                    key={r.node.tag}
+                                    name={r.node.name}
+                                    country={r.country}
+                                    protocol={r.protocol}
+                                    source={r.source}
+                                    latency={latencyFor(r.node.server_id) ?? r.latency}
+                                    measuring={isPendingServer(r.node.server_id)}
+                                    current={r.current}
+                                    excludedUntil={r.node.excluded_until}
+                                    countryExcluded={avoidCountries.includes(r.country ?? '')}
+                                    busy={select.isPending || pin.isPending || auto.isPending || setScope.isPending}
+                                    onSelect={() =>
+                                        pickNode(r.node.tag, r.node.server_id)
+                                    }
+                                />
+                            ))}
+                            {poolRows.length === 0 && (
+                                <p className='py-4 text-[15px] text-muted-foreground'>
+                                    {query ? 'Ничего не нашлось' : 'Доступных серверов для автовыбора нет'}
+                                </p>
+                            )}
+                        </Group>
+                    {providerCard}
+                    </div>
 
                     <div className='flex flex-col gap-4'>
-                        <Group
+                        <ServerAutomation />
+                        {!mihomo && <Group
                             title='Сайты'
                             footer={
                                 sites?.unavailable ||
@@ -441,7 +475,7 @@ export function ServersPage() {
                                 disabled={!!sites?.unavailable}
                                 onClick={() => setAddingSite(true)}
                             />
-                        </Group>
+                        </Group>}
                         {tiles}
                     </div>
                 </div>
@@ -450,6 +484,8 @@ export function ServersPage() {
             {view === 'all' && (
                 <>
                     {tiles}
+                    <ServerAutomation />
+                    {providerCard}
 
                     {servers.length > 0 && (
                         <div className='flex flex-col gap-3'>
@@ -499,7 +535,15 @@ export function ServersPage() {
                         ))}
                     </div>
 
-                    {servers.length > 0 && groups.length === 0 && (
+                    {mihomo && multipools.some(item => matches(query, item.name)) && (
+                        <Group title='Мультипулы'>
+                            {multipools.filter(item => matches(query, item.name)).map(item => <Row key={item.id} label={item.name}
+                                hint={`${item.member_count} серверов${pool?.auto_scope_id === item.id && isAuto ? ' · Основной маршрут' : ''}`}
+                                onClick={() => { setEditingPool(item.id); setCatalogSheet('pools') }}
+                                trailing={<IconChevronRight className='size-4 text-label-tertiary' />} />)}
+                        </Group>
+                    )}
+                    {servers.length > 0 && groups.length === 0 && !profiles.length && !multipools.some(item => matches(query, item.name)) && (
                         <p className='px-4 text-[15px] text-muted-foreground'>
                             Ничего не нашлось
                         </p>
@@ -508,7 +552,7 @@ export function ServersPage() {
             )}
 
             <SourcesSheet open={catalogSheet === 'sources'} onClose={() => setCatalogSheet(null)} />
-            <MultiPoolsSheet open={catalogSheet === 'pools'} onClose={() => setCatalogSheet(null)} />
+            <MultiPoolsSheet initialId={editingPool} open={catalogSheet === 'pools'} onClose={() => setCatalogSheet(null)} />
             <AddSiteSheet
                 open={addingSite}
                 onClose={() => setAddingSite(false)}
@@ -551,6 +595,7 @@ function PoolRow({
     protocol,
     source,
     latency,
+    measuring,
     current,
     excludedUntil,
     countryExcluded,
@@ -562,6 +607,7 @@ function PoolRow({
     protocol?: string
     source?: string
     latency: number
+    measuring: boolean
     current: boolean
     excludedUntil?: string
     countryExcluded: boolean
@@ -571,7 +617,7 @@ function PoolRow({
     const notes = [
         countryName(country),
         source,
-        countryExcluded && 'Страна запрещена в настройках, но ядро включило сервер в автовыбор',
+        countryExcluded && 'Страна исключена в разделе «Автоматика»',
         excludedUntil &&
             `не отвечал, вернётся в ${new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`,
     ].filter(Boolean)
@@ -599,14 +645,7 @@ function PoolRow({
                     </span>
                 )}
             </span>
-            <span
-                className={cn(
-                    'shrink-0 text-right text-[15px] tabular-nums',
-                    toneText[latencyTone(latency)],
-                )}
-            >
-                {latency === 0 ? '' : latency < 0 ? '—' : `${latency} мс`}
-            </span>
+            <Latency measuring={measuring} ms={latency} />
             <span className='flex w-6 justify-center'>
                 {current && (
                     <IconCheck
@@ -618,6 +657,15 @@ function PoolRow({
             </span>
         </button>
     )
+}
+
+function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
+    if (measuring) return <span className='inline-flex shrink-0 items-center text-tint' role='img' aria-label='Проверяем задержку'>
+        <IconLoader2 aria-hidden className='size-4 motion-safe:animate-spin' />
+    </span>
+    return <span className={cn('shrink-0 text-right text-[15px] tabular-nums', toneText[latencyTone(ms)])}>
+        {ms > 0 ? `${ms} мс` : ms < 0 ? <span aria-label='Нет ответа' title='Нет ответа'>—</span> : ''}
+    </span>
 }
 
 function groupTitle(g: CountryGroup) {
@@ -687,12 +735,16 @@ function SearchField({
 
 function ServerRow({
     server,
+    liveLatency,
+    measuring,
     countryExcluded,
     busy,
     onSelect,
     onSetCountry,
 }: {
     server: Server
+    measuring: boolean
+    liveLatency?: number
     countryExcluded: boolean
     busy: boolean
     onSelect: () => void
@@ -700,9 +752,8 @@ function ServerRow({
 }) {
     const [editing, setEditing] = useState(false)
     const [value, setValue] = useState(serverCountry(server))
-    const status = statusOf(server, countryExcluded)
-    const measured = server.probe_kind === 'https' ? server.latency_ms : 0
-    const ping = measured === 0 ? '' : measured < 0 ? '—' : `${measured} мс`
+    const status = statusOf(liveLatency === undefined ? server : { ...server, probe_kind: 'https', latency_ms: liveLatency, check_error: undefined }, countryExcluded)
+    const measured = liveLatency ?? (server.probe_kind === 'https' ? server.latency_ms : 0)
 
     if (editing) {
         return (
@@ -758,7 +809,7 @@ function ServerRow({
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
                     {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
-                    {status && (
+                    {!measuring && status && (
                         <span
                             className={cn(
                                 'mt-0.5 block text-[13px]',
@@ -774,14 +825,7 @@ function ServerRow({
                         </span>
                     )}
                 </span>
-                <span
-                    className={cn(
-                        'shrink-0 text-right text-[15px] tabular-nums',
-                        toneText[latencyTone(measured)],
-                    )}
-                >
-                    {ping}
-                </span>
+                <Latency measuring={measuring} ms={measured} />
                 <span className='flex w-6 justify-center'>
                     {server.active && (
                         <IconCheck

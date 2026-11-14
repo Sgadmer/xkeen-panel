@@ -1,6 +1,28 @@
 package api
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestRouterTemperatureUsesHottestReadableMillidegreeSensor(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{filepath.Join(root, "missing")}
+	for name, raw := range map[string]string{"cpu": "48300\n", "wifi": "57210", "broken": "999999", "invalid": "-"} {
+		p := filepath.Join(root, name)
+		if err := os.WriteFile(p, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	if got := routerTemperature(paths); got == nil || *got != 57.21 {
+		t.Fatalf("unexpected temperature: %v", got)
+	}
+	if routerTemperature(paths[:1]) != nil {
+		t.Fatal("missing sensor rendered as a reading")
+	}
+}
 
 func TestRouterLoadFromProc(t *testing.T) {
 	prev := readCPU("cpu 10 2 10 100 3 1 1 0 4 1\ncpu0 10 2 10 100\n")

@@ -26,6 +26,12 @@ export function withCountryFlag(name: string, code?: string) {
     return flag && !/\p{Regional_Indicator}{2}/u.test(name) ? flag + ' ' + name : name
 }
 
+export function scopeLabel(scope: { kind: string; country?: string; name: string }) {
+    if (scope.kind === 'all') return 'Все локации'
+    if (scope.kind === 'country' && scope.country) return countryLabel(scope.country)
+    return scope.name
+}
+
 export function serverCountry(server?: Server) {
     return (server?.country_override || server?.country || '').toUpperCase()
 }

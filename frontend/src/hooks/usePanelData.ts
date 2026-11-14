@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type {
+    AutoScope,
     DevicesResponse,
     MultiPool,
     PanelSettings,
@@ -69,7 +70,7 @@ export function useMultiPools(enabled = true) {
     return useQuery({
         queryKey: ['multipools'],
         enabled,
-        queryFn: () => api.get<{ pools: MultiPool[] }>('/api/multipools').then(data => data.pools ?? []),
+        queryFn: () => api.get<{ pools: MultiPool[]; scopes: AutoScope[] }>('/api/multipools'),
     })
 }
 

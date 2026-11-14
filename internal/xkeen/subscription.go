@@ -104,7 +104,7 @@ func (sm *SubscriptionManager) GetServers() []models.Server {
 }
 
 // UpdateLatencies stores measured latencies by stable server identity.
-func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) {
+func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -117,6 +117,8 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) {
 	}
 
 	now := time.Now()
+	previous := sm.data.Servers
+	sm.data.Servers = append([]models.Server(nil), previous...)
 	for i := range sm.data.Servers {
 		s := &sm.data.Servers[i]
 		identity := ServerIdentity(*s)
@@ -128,14 +130,22 @@ func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) {
 			if sm.data.Servers[i].ProbeKind == "https" && result.ProbeKind != "https" {
 				continue
 			}
-			sm.data.Servers[i].Latency = result.Latency
-			sm.data.Servers[i].ProbeKind = result.ProbeKind
-			sm.data.Servers[i].CheckError = result.CheckError
-			sm.data.Servers[i].LastChecked = now
+			at := result.LastChecked
+			if at.IsZero() || result.ProbeKind != "https" {
+				at = now
+			}
+			if s.LastChecked.After(at) {
+				continue
+			}
+			s.Latency, s.ProbeKind, s.CheckError, s.LastChecked = result.Latency, result.ProbeKind, result.CheckError, at
 		}
 	}
 
-	_ = sm.saveLocked()
+	if err := sm.saveLocked(); err != nil {
+		sm.data.Servers = previous
+		return err
+	}
+	return nil
 }
 
 // SetCountryOverride sets a server's country by hand — needed in strict mode when

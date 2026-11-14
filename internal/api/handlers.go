@@ -13,6 +13,7 @@ import (
 	"xkeen-panel/internal/mihomo"
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
+	"xkeen-panel/internal/sse"
 	"xkeen-panel/internal/xkeen"
 
 	"github.com/go-chi/chi/v5"
@@ -21,6 +22,7 @@ import (
 type Handlers struct {
 	Cards        *cardcontroller.Controller
 	FaceID       *PanelFaceID
+	Checks       *sse.ProbeJobs
 	config       *models.Config
 	subscription *xkeen.SubscriptionManager
 	watchdog     *monitor.Watchdog
@@ -242,7 +244,8 @@ func (h *Handlers) refreshPool(servers []models.Server) (xkeen.SyncResult, error
 // HandleGetServers — GET /api/servers
 type serverView struct {
 	models.Server
-	PoolTag string `json:"pool_tag,omitempty"`
+	PoolTag  string `json:"pool_tag,omitempty"`
+	TargetID string `json:"target_id,omitempty"`
 }
 
 func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +260,8 @@ func (h *Handlers) HandleGetServers(w http.ResponseWriter, r *http.Request) {
 		state, _ := h.Cards.Default(r.Context())
 		for i := range views {
 			key := xkeen.ServiceTargetID(servers[i])
-			views[i].Active = key != "" && state.Current == key
+			views[i].TargetID = key
+			views[i].Active = key != "" && state.Current == key && (state.CurrentSource == "" || state.CurrentSource == servers[i].SourceID)
 		}
 		tags := map[int]string{}
 		for _, node := range state.Nodes {
@@ -322,7 +326,7 @@ func (h *Handlers) HandleSelectServer(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": "тип сервера не поддерживается"})
 			return
 		}
-		h.setMihomoDefault(w, r, key)
+		h.setMihomoDefaultSource(w, r, key, server.SourceID)
 		return
 	}
 
@@ -486,9 +490,13 @@ func (h *Handlers) HandleMihomoSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) setMihomoDefault(w http.ResponseWriter, r *http.Request, key string) {
+	h.setMihomoDefaultSource(w, r, key, "")
+}
+
+func (h *Handlers) setMihomoDefaultSource(w http.ResponseWriter, r *http.Request, key, source string) {
 	h.watchdog.LockChanges()
 	defer h.watchdog.UnlockChanges()
-	if err := h.Cards.SetDefault(r.Context(), key); err != nil {
+	if err := h.Cards.SetDefaultSource(r.Context(), key, source); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -518,24 +526,22 @@ func (h *Handlers) reconcileCards(w http.ResponseWriter, r *http.Request) {
 
 // HandleCheckServers — POST /api/servers/check
 func (h *Handlers) HandleCheckServers(w http.ResponseWriter, r *http.Request) {
-	servers := h.subscription.GetServers()
-	timeout := time.Duration(h.config.ProbeTimeoutMs) * time.Millisecond
-	options := xkeen.ProbeOptions{Context: r.Context(), Timeout: timeout, Concurrency: h.config.ProbeConcurrency, StateDir: h.config.DataDir}
-	var checked []models.Server
-	var err error
-	if h.Cards != nil {
-		checked, err = h.Cards.CheckServers(servers, options)
-	} else {
-		checked, err = xkeen.CheckServersHTTPS(h.detector.Runtime(), servers, options)
-	}
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	checked, message := h.Checks.Wait(r.Context())
+	if message != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": message})
 		return
 	}
-	h.subscription.UpdateLatencies(checked)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"servers": publicServers(checked),
 	})
+}
+
+func (h *Handlers) HandleProbeJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		writeJSON(w, http.StatusAccepted, h.Checks.Start())
+		return
+	}
+	writeJSON(w, http.StatusOK, h.Checks.Snapshot())
 }
 
 // HandleSetCountry — POST /api/servers/country (manual country override)
@@ -664,7 +670,12 @@ func (h *Handlers) HandlePoolStatus(w http.ResponseWriter, r *http.Request) {
 		if state.Auto != "" {
 			mode = "pool"
 		}
-		writeJSON(w, 200, map[string]interface{}{"mode": mode, "balancer_tag": state.Auto, "pool_tags": tags, "nodes": state.Nodes, "pinned_tag": state.Pinned, "pin_manual": state.Pinned != "", "current_tag": state.Current, "api_available": true, "core": xkeen.CoreMihomo})
+		current := state.Current
+		if current == state.ScopeID {
+			current = ""
+		}
+		writeJSON(w, 200, map[string]interface{}{"mode": mode, "balancer_tag": state.Auto, "pool_tags": tags, "nodes": state.Nodes, "pinned_tag": state.Pinned, "pin_manual": state.Pinned != "", "current_tag": current, "api_available": true, "core": xkeen.CoreMihomo,
+			"auto_scope_id": state.ScopeID, "selection_kind": state.SelectionKind, "selection_name": state.SelectionName, "source_name": state.SourceName})
 		return
 	}
 	rt := h.detector.Runtime()
@@ -827,7 +838,7 @@ func (h *Handlers) HandlePoolAuto(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) HandlePoolDisable(w http.ResponseWriter, r *http.Request) {
 	if h.Cards != nil {
 		state, err := h.Cards.Default(r.Context())
-		if err != nil || state.Current == "" {
+		if err != nil || state.Current == "" || state.Current == state.ScopeID {
 			writeJSON(w, 409, map[string]string{"error": "текущий узел отсутствует в подписке"})
 			return
 		}

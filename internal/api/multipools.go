@@ -11,18 +11,35 @@ import (
 
 func (h *Handlers) mountMultiPools(router chi.Router) {
 	router.Get("/multipools", func(w http.ResponseWriter, r *http.Request) {
-		pools, err := h.Cards.MultiPools()
+		pools, scopes, err := h.Cards.PoolCatalog()
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"pools": pools})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"pools": pools, "scopes": scopes})
+	})
+	router.Post("/pool/scope", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			ID string `json:"id"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&input) != nil || input.ID == "" || dec.Decode(&struct{}{}) != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Укажите пул автовыбора."})
+			return
+		}
+		if err := h.Cards.SetScope(r.Context(), input.ID); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		h.watchdog.CheckNow()
+		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 	})
 	edit := func(w http.ResponseWriter, r *http.Request) {
 		var spec *cardcontroller.PoolSpec
 		var sources []string
 		if r.Method != http.MethodDelete {
-			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768))
+			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 96<<10))
 			dec.DisallowUnknownFields()
 			if dec.Decode(&spec) != nil || spec == nil || dec.Decode(&struct{}{}) != io.EOF || spec.SourceIDs == nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Укажите название и список подписок мультипула."})

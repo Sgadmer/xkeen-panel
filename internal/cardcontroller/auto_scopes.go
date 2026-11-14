@@ -1,0 +1,156 @@
+package cardcontroller
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"sort"
+	"strings"
+
+	"xkeen-panel/internal/models"
+	"xkeen-panel/internal/xkeen"
+)
+
+const autoScopeKey = "x-xkeen-panel-auto-scope"
+
+func scopeHash(key string) string {
+	sum := sha256.Sum256([]byte("xkeen-panel-scope-v1:" + key))
+	return hex.EncodeToString(sum[:])
+}
+
+var allPoolID = scopeHash("all")
+
+// Keep the identity of an assigned country pool even after its last server
+// disappears. Rendering an empty pool then produces the existing REJECT guard.
+var countryPoolCodes = func() map[string]string {
+	result := make(map[string]string, 26*26)
+	for a := 'A'; a <= 'Z'; a++ {
+		for b := 'A'; b <= 'Z'; b++ {
+			code := string([]rune{a, b})
+			result[scopeHash("country:"+code)] = code
+		}
+	}
+	return result
+}()
+
+func builtinPool(id string) *MultiPool {
+	if id == allPoolID {
+		return &MultiPool{ID: id, PoolSpec: PoolSpec{Name: "Все локации"}}
+	}
+	if code, ok := countryPoolCodes[id]; ok {
+		return &MultiPool{ID: id, PoolSpec: PoolSpec{Name: code, Countries: []string{code}}}
+	}
+	return nil
+}
+
+type AutoScope struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Country     string `json:"country,omitempty"`
+	MemberCount int    `json:"member_count"`
+}
+
+func scopes(p profile, nodes []poolNode) []AutoScope {
+	ids := map[string]bool{}
+	for _, node := range nodes {
+		code := strings.ToUpper(xkeen.ServerCountry(node.server))
+		if len(code) == 2 {
+			ids[scopeHash("country:"+code)] = true
+		}
+	}
+	for _, id := range p.assigned {
+		ids[id] = true
+	}
+	ids[p.scopeID()] = true
+	countries := make([]string, 0, len(ids))
+	for id := range ids {
+		if code := countryPoolCodes[id]; code != "" {
+			countries = append(countries, code)
+		}
+	}
+	sort.Strings(countries)
+	all := builtinPool(allPoolID)
+	all.members(nodes)
+	result := []AutoScope{{ID: all.ID, Name: all.Name, Kind: "all", MemberCount: all.MemberCount}}
+	for _, code := range countries {
+		pool := builtinPool(scopeHash("country:" + code))
+		pool.members(nodes)
+		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "country", Country: code, MemberCount: pool.MemberCount})
+	}
+	for _, pool := range p.pools {
+		pool.members(nodes)
+		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "custom", MemberCount: pool.MemberCount})
+	}
+	return result
+}
+
+func (p profile) scopeID() string {
+	if id := str(p.doc[autoScopeKey]); id != "" {
+		return id
+	}
+	// Older panels could already use an explicitly selected custom multipool.
+	if id := p.assigned[defaultID]; p.pool(id) != nil {
+		return id
+	}
+	return allPoolID
+}
+
+func (c *Controller) PoolCatalog() ([]MultiPool, []AutoScope, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return nil, nil, err
+	}
+	nodes := c.poolNodes(c.catalog())
+	for i := range p.pools {
+		p.pools[i].members(nodes)
+	}
+	return p.pools, scopes(p, nodes), nil
+}
+
+func (c *Controller) SetScope(ctx context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.setScope(ctx, id)
+}
+
+func (c *Controller) setScope(ctx context.Context, id string) error {
+	p, err := c.read()
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		id = p.scopeID()
+	}
+	pool := p.pool(id)
+	if pool == nil {
+		return errors.New("пул не найден")
+	}
+	if len(pool.members(c.poolNodes(c.catalog()))) == 0 {
+		return errors.New("в выбранном пуле нет доступных узлов")
+	}
+	result, err := c.apply(ctx, defaultID, id, func(next *profile) error {
+		next.doc[autoScopeKey] = id
+		delete(next.doc, defaultSourceKey)
+		delete(next.doc, replacementKey)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !result.Active || c.pending[defaultID] {
+		return errors.New("маршрут применён, завершение прежних соединений ещё не подтверждено")
+	}
+	return nil
+}
+
+func poolViews(servers []models.Server) []xkeen.PoolNodeView {
+	result := make([]xkeen.PoolNodeView, 0, len(servers))
+	for _, s := range servers {
+		result = append(result, xkeen.PoolNodeView{Tag: xkeen.ServiceTargetID(s), ServerID: s.ID, Name: s.Name, Address: s.Address, Port: s.Port, Country: xkeen.ServerCountry(s), Latency: s.Latency})
+	}
+	return result
+}

@@ -47,7 +47,12 @@ type Controller struct {
 	avoidCountries     func() []string
 	autoAllowed        func(models.Server) bool
 	sourceProviderURLs func() map[string]string
+	autoPoolLimit      int
 }
+
+// SetAutoPoolLimit uses the panel's existing router-wide capacity setting.
+// Called once during setup before HTTP and monitoring start.
+func (c *Controller) SetAutoPoolLimit(n int) { c.autoPoolLimit = n }
 
 func New(configPath, stateDir string, rt xkeen.Runtime, catalog func() []models.Server) *Controller {
 	// PrepareCardProxy owns its isolated runtime namespace and still has
@@ -208,13 +213,14 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	view, err := xkeen.ReadServiceRoutes(c.rt, c.catalog())
+	servers := c.catalog()
+	view, err := xkeen.ReadServiceRoutes(c.rt, servers)
 	if err != nil {
 		return View{}, err
 	}
 	result := View{ServiceRoutesView: view, Scope: "mihomo", ActiveConnectionsPending: len(c.pending) > 0}
-	for _, pool := range p.pools {
-		result.Targets = append(result.Targets, xkeen.ServiceTarget{ID: pool.ID, Name: pool.Name, Kind: "pool"})
+	for _, pool := range scopes(p, c.poolNodes(servers)) {
+		result.Targets = append(result.Targets, xkeen.ServiceTarget{ID: pool.ID, Name: pool.Name, Kind: "pool", Country: pool.Country})
 	}
 	result.GuardReady = false // packet-level fail-closed is independently verified.
 	live, err := p.api.selectors(ctx)
@@ -320,6 +326,18 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// An existing manual or provider-specific choice stays owned by its
+	// selector. Migrate only a positively identified, active automatic group.
+	if p.assigned[defaultID] == "" && str(p.doc[autoScopeKey]) == "" && configuredAuto(p) {
+		live, err := p.api.selectors(ctx)
+		if err != nil {
+			return err
+		}
+		group, auto := nativeDefault(p, live)
+		if auto != "" && (group == auto || live[group].Now == auto) && len(builtinPool(allPoolID).members(c.poolNodes(c.catalog()))) > 0 {
+			return c.setScope(ctx, allPoolID)
+		}
+	}
 	if _, enabled := p.doc[stateKey]; !enabled {
 		return c.reconcileCountryGroups(ctx, p)
 	}
@@ -353,9 +371,14 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	}
 	servers := c.catalog()
 	catalog := map[string]models.Server{}
+	requiredSource := str(p.doc[defaultSourceKey])
+	defaultSourceAvailable := requiredSource == ""
 	for _, s := range servers {
 		if key := xkeen.ServiceTargetID(s); key != "" {
 			catalog[key] = s
+			if key == p.assigned[defaultID] && s.SourceID == requiredSource {
+				defaultSourceAvailable = true
+			}
 		}
 	}
 	if target != "" && target != directTarget {
@@ -367,7 +390,10 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	workers := map[string]xkeen.CardProxy{}
 	var nodes []poolNode
 	keys := []string{}
-	for _, key := range p.assigned {
+	for service, key := range p.assigned {
+		if service == defaultID && !defaultSourceAvailable {
+			continue
+		}
 		if key != directTarget {
 			keys = append(keys, key)
 		}
@@ -416,7 +442,7 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	if err != nil {
 		return View{}, err
 	}
-	expected, err := render(&p, view.Services, peers)
+	expected, err := render(&p, view.Services, peers, defaultSourceAvailable)
 	if err != nil {
 		return View{}, err
 	}

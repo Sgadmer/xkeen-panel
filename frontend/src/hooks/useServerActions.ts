@@ -39,6 +39,11 @@ export function useServerActions() {
         onSettled: refreshAll,
     })
 
+    const setScope = useMutation({
+        mutationFn: (id: string) => api.post('/api/pool/scope', { id }),
+        onSettled: refreshAll,
+    })
+
     const refreshSubscription = useMutation({
         mutationFn: () =>
             api.post<SubscriptionUpdateResponse>('/api/subscription/refresh'),
@@ -57,5 +62,6 @@ export function useServerActions() {
         pin,
         refreshSubscription,
         setCountry,
+        setScope,
     }
 }

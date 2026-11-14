@@ -13,14 +13,15 @@ import (
 // Connection contains only the metadata needed by the local diagnostics view.
 // The core can also return process paths, proxy credentials and process names.
 type Connection struct {
-	ID      string    `json:"id"`
-	Device  string    `json:"device"`
-	Host    string    `json:"host"`
-	Port    string    `json:"port,omitempty"`
-	Network string    `json:"network,omitempty"`
-	Rule    string    `json:"rule,omitempty"`
-	Route   []string  `json:"route"`
-	Start   time.Time `json:"start"`
+	ServiceID string    `json:"service_id,omitempty"`
+	ID        string    `json:"id"`
+	Device    string    `json:"device"`
+	Host      string    `json:"host"`
+	Port      string    `json:"port,omitempty"`
+	Network   string    `json:"network,omitempty"`
+	Rule      string    `json:"rule,omitempty"`
+	Route     []string  `json:"route"`
+	Start     time.Time `json:"start"`
 }
 
 type connectionTracker struct {
@@ -64,6 +65,9 @@ func (f connectionTracker) project(names map[string]string) Connection {
 	// Mihomo records the final outbound first. Show the order seen by the packet.
 	for i := len(f.Chains) - 1; i >= 0; i-- {
 		tag := f.Chains[i]
+		if row.ServiceID == "" {
+			row.ServiceID = diagnosticServiceTags[tag]
+		}
 		if pretty := names[tag]; pretty != "" {
 			tag = pretty
 		} else if strings.HasPrefix(tag, nodePrefix) {
@@ -73,8 +77,23 @@ func (f connectionTracker) project(names map[string]string) Connection {
 			row.Route = append(row.Route, tag)
 		}
 	}
+	if row.ServiceID == "" || row.ServiceID == "ai" {
+		if service := xkeen.ServiceForHost(host); service != "" {
+			row.ServiceID = service
+		}
+	}
 	return row
 }
+
+var diagnosticServiceTags = func() map[string]string {
+	tags := map[string]string{}
+	for id, name := range groupNames {
+		for _, tag := range []string{name, cardPrefix + id, cardPrefix + id + "-inherited", dedicatedGroup(id)} {
+			tags[tag] = id
+		}
+	}
+	return tags
+}()
 
 func (c *Controller) Connections(ctx context.Context) ([]Connection, error) {
 	// Config changes use atomic renames. Read one coherent snapshot without

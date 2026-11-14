@@ -23,7 +23,7 @@ var errFormatUnsupported = errors.New("unsupported subscription endpoint paramet
 var errFormatComposite = errors.New("dependent subscription endpoint")
 var clashYAMLKey = regexp.MustCompile(`(?m)^[ \t]*(?:proxies|proxy-groups|proxy-providers)\s*:`)
 
-const foreignPolicyWarning = "Импортированы самостоятельные серверы. Группы, маршрутизация, DNS и локальные политики исходного приложения не переносятся; используются настройки роутера."
+const foreignPolicyWarning = "Маршрутизация, DNS и локальные политики исходного приложения не переносятся. Панель сохраняет совместимые серверы и сборные профили."
 
 func looksLikeClashYAML(body string) bool { return clashYAMLKey.MatchString(body) }
 
@@ -75,7 +75,8 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 		return nil, false, nil
 	}
 
-	var entries []interface{}
+	var entries, clashGroups []interface{}
+	var clashEndpoints map[string]clashGroupEndpoint
 	var convert func(map[string]interface{}) (map[string]interface{}, string, error)
 	switch object := root.(type) {
 	case map[string]interface{}:
@@ -87,7 +88,11 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 			}
 			convert = convertClashEndpoint
 			if groups, ok := object["proxy-groups"].([]interface{}); ok {
-				report.SkippedComposite += len(groups)
+				if unified, present := object["unified-delay"]; present && unified != false {
+					report.SkippedComposite += len(groups)
+				} else {
+					clashGroups = groups
+				}
 			}
 			if providers, ok := object["proxy-providers"].(map[string]interface{}); ok {
 				report.SkippedUnsupported += len(providers)
@@ -112,6 +117,9 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 		return nil, false, nil
 	}
 	addFormatWarning(report, foreignPolicyWarning)
+	if len(clashGroups) > 0 {
+		clashEndpoints = make(map[string]clashGroupEndpoint)
+	}
 	capacity := len(entries)
 	if capacity > 4096 {
 		capacity = 4096
@@ -127,6 +135,17 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 		if !ok {
 			report.SkippedUnsupported++
 			continue
+		}
+		var ref string
+		if clashEndpoints != nil {
+			ref, _ = object["name"].(string)
+			if _, exists := clashEndpoints[ref]; exists {
+				// A repeated (even unsupported) endpoint makes this reference ambiguous.
+				clashEndpoints[ref] = clashGroupEndpoint{}
+				ref = ""
+			} else if ref != "" {
+				clashEndpoints[ref] = clashGroupEndpoint{}
+			}
 		}
 		outbound, name, err := convert(object)
 		if errors.Is(err, errFormatComposite) {
@@ -150,12 +169,24 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 			report.SkippedUnsupported++
 			continue
 		}
+		if ref != "" {
+			udp, _ := object["udp"].(bool)
+			clashEndpoints[ref] = clashGroupEndpoint{server: server, udp: (udp && server.Protocol != "http") || server.Protocol == "hysteria2"}
+		}
 		identity := ServerIdentity(server)
 		if identity == "" || seen[identity] {
 			continue
 		}
 		seen[identity] = true
 		servers = append(servers, server)
+	}
+	if len(clashGroups) > 0 {
+		// Unindexed entries could duplicate a referenced name.
+		if len(entries) > 4096 {
+			report.SkippedComposite += len(clashGroups)
+		} else {
+			servers = appendClashGroups(servers, clashGroups, clashEndpoints, report)
+		}
 	}
 	return servers, true, nil
 }

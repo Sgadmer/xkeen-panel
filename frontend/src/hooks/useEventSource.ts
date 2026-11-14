@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { getToken, clearToken } from '@/lib/api'
 import type { Status } from '@/types'
+import type { UpdateState } from '@/types'
+import { observeTabNotification } from '@/lib/notifications'
 
 export function useEventSource() {
     const qc = useQueryClient()
@@ -26,6 +28,7 @@ export function useEventSource() {
             es.addEventListener('status', e => {
                 const status: Status = JSON.parse(e.data)
                 qc.setQueryData(['status'], status)
+                observeTabNotification(status)
             })
 
             es.addEventListener('log', e => {
@@ -56,7 +59,9 @@ export function useEventSource() {
             })
 
             es.addEventListener('update', e => {
-                qc.setQueryData(['update'], JSON.parse(e.data))
+                const state: UpdateState = JSON.parse(e.data)
+                qc.setQueryData(['update'], state)
+                observeTabNotification(undefined, state)
             })
 
             es.addEventListener('pool', () => {

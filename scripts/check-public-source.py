@@ -15,7 +15,7 @@ if not args.tracked_only:
     command += ['--cached', '--others', '--exclude-standard']
 names = set(subprocess.check_output(command, cwd=root).decode().split('\0')) - {''}
 forbidden = {'.git', 'node_modules', 'data', 'build', '__pycache__'}
-private = {'user.json', 'subscription.json', 'subscription-client.json', 'exclusions.json', 'face-id-origin.json', 'key.txt', '.env', 'config.dev.yaml'}
+private = {'user.json', 'subscription.json', 'subscription-client.json', 'exclusions.json', 'face-id-origin.json', 'web-push.json', 'key.txt', '.env', 'config.dev.yaml'}
 router_domain = re.compile(
     rb'(?<![a-z0-9-])xk-[0-9a-f]{10}\.(?:netcraze\.(?:link|pro|club)|crazedns\.ru)(?![a-z0-9-]|\.[a-z0-9-])',
     re.IGNORECASE,
@@ -28,7 +28,7 @@ for name in sorted(names):
     if router_domain.search(name.encode()):
         failures.append(('[redacted path]', 'personal router domain in filename'))
         continue
-    if forbidden.intersection(Path(name).parts) or p.name in private or p.name.endswith(('.dpapi.json', '.log', '.tsbuildinfo')):
+    if forbidden.intersection(Path(name).parts) or p.name in private or p.name.startswith('.web-push-') or p.name.endswith(('.dpapi.json', '.log', '.tsbuildinfo')):
         failures.append((name, 'private/generated path'))
         continue
     if not p.is_file() or p.is_symlink():

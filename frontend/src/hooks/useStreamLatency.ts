@@ -1,108 +1,55 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { getToken, clearToken } from '@/lib/api'
-import type { Server } from '@/types'
+import { useEffect } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+
+type ProbeJob = {
+    run: number
+    running: boolean
+    ids: number[]
+    results: { id: number; latency_ms: number }[]
+    error?: string
+}
+
+const path = '/api/servers/check/job'
+const key = ['server-check-job']
 
 export function useStreamLatency() {
     const qc = useQueryClient()
-    const [checking, setChecking] = useState(false)
-    const [error, setError] = useState('')
-    const [progress, setProgress] = useState({ completed: 0, total: 0 })
-    const esRef = useRef<EventSource | null>(null)
-
-    useEffect(
-        () => () => {
-            esRef.current?.close()
-            esRef.current = null
-        },
-        [],
+    const status = useQuery({
+        queryKey: key,
+        queryFn: () => api.get<ProbeJob>(path),
+        staleTime: 0,
+        refetchOnMount: 'always',
+        refetchInterval: query => (query.state.data?.running ? 1000 : 8000),
+        refetchIntervalInBackground: false,
+    })
+    const start = useMutation({
+        mutationFn: () => api.post<ProbeJob>(path),
+        onSuccess: job => qc.setQueryData(key, job),
+        onSettled: () => qc.invalidateQueries({ queryKey: key }),
+    })
+    const job = status.data
+    const run = job?.run
+    const running = job?.running
+    useEffect(() => {
+        if (!run || running) return
+        for (const name of ['servers', 'pool', 'multipools', 'status']) {
+            void qc.invalidateQueries({ queryKey: [name] })
+        }
+    }, [qc, run, running])
+    const measured = new Map(job?.results.map(m => [m.id, m.latency_ms]))
+    const pending = new Set(
+        job?.running ? job.ids.filter(id => !measured.has(id)) : [],
     )
-
-    const check = useCallback(() => {
-        if (esRef.current) return
-
-        const token = getToken()
-        if (!token) return
-
-        setChecking(true)
-        setError('')
-        setProgress({ completed: 0, total: 0 })
-        const es = new EventSource(
-            `/api/servers/check?token=${encodeURIComponent(token)}`,
-        )
-        esRef.current = es
-
-        const finish = () => {
-            setChecking(false)
-            es.close()
-            esRef.current = null
-        }
-
-        es.addEventListener('progress', e => {
-            try {
-                const value = JSON.parse(e.data)
-                if (
-                    Number.isInteger(value.completed) &&
-                    Number.isInteger(value.total)
-                ) {
-                    setProgress({
-                        completed: value.completed,
-                        total: value.total,
-                    })
-                }
-            } catch {
-                // A heartbeat or interrupted frame carries no measurement.
-            }
-        })
-
-        es.addEventListener('latency', e => {
-            let value: { id: number; latency_ms: number; last_checked?: string }
-            try {
-                value = JSON.parse(e.data)
-            } catch {
-                return
-            }
-            const { id, latency_ms, last_checked } = value
-            if (!Number.isInteger(id) || !Number.isFinite(latency_ms)) return
-            qc.setQueryData<Server[]>(['servers'], old =>
-                old?.map(s =>
-                    s.id === id
-                        ? {
-                              ...s,
-                              latency_ms,
-                              probe_kind: 'https',
-                              last_checked,
-                          }
-                        : s,
-                ),
-            )
-        })
-
-        es.addEventListener('done', () => {
-            finish()
-            qc.invalidateQueries({ queryKey: ['servers'] })
-            qc.invalidateQueries({ queryKey: ['pool'] })
-        })
-
-        es.addEventListener('failure', () => {
-            setError('Не удалось выполнить HTTPS-проверку. Повторите попытку.')
-            finish()
-        })
-
-        es.addEventListener('close', () => {
-            finish()
-        })
-
-        es.onerror = () => {
-            setError('Связь с HTTPS-проверкой прервалась. Повторите попытку.')
-            finish()
-
-            if (!getToken()) {
-                clearToken()
-                window.location.href = '/login'
-            }
-        }
-    }, [qc])
-
-    return { check, checking, error, progress }
+    return {
+        check: () => {
+            if (!start.isPending && !running) start.mutate()
+        },
+        checking: start.isPending || !!running || status.isLoading,
+        error:
+            start.error?.message || status.error?.message || job?.error || '',
+        progress: { completed: measured.size, total: job?.ids.length ?? 0 },
+        isPendingServer: (id: number) => pending.has(id),
+        latencyFor: (id: number) => (running ? measured.get(id) : undefined),
+    }
 }

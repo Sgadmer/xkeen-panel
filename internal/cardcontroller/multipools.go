@@ -23,9 +23,16 @@ import (
 const poolsKey = "x-xkeen-panel-multipools"
 
 type PoolSpec struct {
-	Name      string   `json:"name" yaml:"name"`
-	SourceIDs []string `json:"source_ids" yaml:"source_ids"`
-	Countries []string `json:"countries" yaml:"countries"`
+	Name            string       `json:"name" yaml:"name"`
+	SourceIDs       []string     `json:"source_ids" yaml:"source_ids"`
+	Countries       []string     `json:"countries" yaml:"countries"`
+	IncludeFiltered *bool        `json:"include_filtered,omitempty" yaml:"include_filtered,omitempty"`
+	Members         []PoolMember `json:"members,omitempty" yaml:"members,omitempty"`
+}
+
+type PoolMember struct {
+	SourceID string `json:"source_id" yaml:"source_id"`
+	TargetID string `json:"target_id" yaml:"target_id"`
 }
 
 type MultiPool struct {
@@ -60,9 +67,10 @@ func readPools(doc map[string]interface{}) ([]MultiPool, error) {
 // Group eligibility by the complete outbound identity. A blocked alias must
 // never reintroduce the same VPN endpoint under a different country or name.
 type poolNode struct {
-	id      string
-	server  models.Server
-	allowed bool
+	id        string
+	server    models.Server
+	allowed   bool
+	autoLimit int
 }
 
 func (c *Controller) poolNodes(servers []models.Server) []poolNode {
@@ -80,36 +88,74 @@ func (c *Controller) poolNodes(servers []models.Server) []poolNode {
 		if filter && (c.autoAllowed == nil || !c.autoAllowed(s)) {
 			denied[id] = true
 		}
-		nodes = append(nodes, poolNode{id: id, server: s})
+		nodes = append(nodes, poolNode{id: id, server: s, autoLimit: c.autoPoolLimit})
 	}
 	for i := range nodes {
 		nodes[i].allowed = !denied[nodes[i].id]
 	}
-	sort.SliceStable(nodes, func(i, j int) bool { return nodes[i].id < nodes[j].id })
+	sort.SliceStable(nodes, func(i, j int) bool {
+		a, b := nodes[i], nodes[j]
+		ai, bi := probeRank(a.server), probeRank(b.server)
+		if ai != bi {
+			return ai < bi
+		}
+		if ai == 0 && a.server.Latency != b.server.Latency {
+			return a.server.Latency < b.server.Latency
+		}
+		if a.id != b.id {
+			return a.id < b.id
+		}
+		return a.server.ID < b.server.ID
+	})
 	return nodes
+}
+
+func probeRank(s models.Server) int {
+	if s.ProbeKind == "https" && s.Latency < 0 {
+		return 2
+	}
+	if s.Latency > 0 || s.ProbeKind == "https" {
+		return 0
+	}
+	return 1
+}
+
+func memberKey(n poolNode) PoolMember {
+	source := n.server.SourceID
+	if source == "" {
+		source = "legacy"
+	}
+	return PoolMember{SourceID: source, TargetID: n.id}
 }
 
 func (pool *MultiPool) members(nodes []poolNode) []models.Server {
 	result := []models.Server{}
 	pool.EligibleCount = 0
-	var previous string
+	seen := map[string]bool{}
+	explicit := map[PoolMember]bool{}
+	for _, ref := range pool.Members {
+		explicit[ref] = true
+	}
+	limit := xkeen.MaxMultiPoolMembers
+	if pool.ID == allPoolID {
+		limit = xkeen.DefaultPoolMaxNodes
+		if len(nodes) > 0 && nodes[0].autoLimit > 0 {
+			limit = min(nodes[0].autoLimit, xkeen.MaxMultiPoolMembers)
+		}
+	}
 	for _, n := range nodes {
-		if !n.allowed || n.id == previous {
+		if !n.allowed || seen[n.id] || probeRank(n.server) == 2 && pool.ID == allPoolID {
 			continue
 		}
-		source := n.server.SourceID
-		if source == "" {
-			source = "legacy"
-		}
-		if len(pool.SourceIDs) > 0 && !slices.Contains(pool.SourceIDs, source) {
+		member := memberKey(n)
+		include := pool.IncludeFiltered == nil || *pool.IncludeFiltered
+		if !explicit[member] && (!include || len(pool.SourceIDs) > 0 && !slices.Contains(pool.SourceIDs, member.SourceID) ||
+			len(pool.Countries) > 0 && !slices.Contains(pool.Countries, strings.ToUpper(xkeen.ServerCountry(n.server)))) {
 			continue
 		}
-		if len(pool.Countries) > 0 && !slices.Contains(pool.Countries, strings.ToUpper(xkeen.ServerCountry(n.server))) {
-			continue
-		}
-		previous = n.id
+		seen[n.id] = true
 		pool.EligibleCount++
-		if len(result) < xkeen.MaxMultiPoolMembers {
+		if len(result) < limit {
 			result = append(result, n.server)
 		}
 	}
@@ -139,7 +185,7 @@ func (p profile) pool(id string) *MultiPool {
 			return &p.pools[i]
 		}
 	}
-	return nil
+	return builtinPool(id)
 }
 
 func (p profile) endpointName(id, name string) bool {
@@ -198,6 +244,9 @@ func (c *Controller) EditMultiPool(ctx context.Context, id string, spec *PoolSpe
 	if err != nil {
 		return MultiPool{}, err
 	}
+	if builtinPool(id) != nil {
+		return MultiPool{}, errors.New("встроенный пул нельзя изменить")
+	}
 	pool := p.pool(id)
 	if id != "" && pool == nil {
 		return MultiPool{}, errors.New("мультипул не найден")
@@ -232,6 +281,32 @@ func (c *Controller) EditMultiPool(ctx context.Context, id string, spec *PoolSpe
 		if err != nil {
 			return result, err
 		}
+		nodes := c.poolNodes(c.catalog())
+		known := make(map[PoolMember]bool)
+		for _, ref := range pool.Members {
+			known[ref] = true
+		}
+		for _, n := range nodes {
+			known[memberKey(n)] = true
+		}
+		if len(clean.Members) > xkeen.MaxMultiPoolMembers {
+			return result, errors.New("слишком много отдельных конфигураций в мультипуле")
+		}
+		seen := make(map[PoolMember]bool)
+		unique := make([]PoolMember, 0, len(clean.Members))
+		for _, member := range clean.Members {
+			if !validHash(member.TargetID) || member.SourceID == "" || !known[member] {
+				return result, errors.New("одна из выбранных конфигураций отсутствует в подписке")
+			}
+			if !seen[member] {
+				unique = append(unique, member)
+				seen[member] = true
+			}
+		}
+		clean.Members = unique
+		if clean.IncludeFiltered != nil && !*clean.IncludeFiltered && len(clean.Members) == 0 {
+			return result, errors.New("выберите хотя бы одну конфигурацию")
+		}
 		for _, other := range p.pools {
 			if other.ID != id && strings.EqualFold(other.Name, clean.Name) {
 				return result, errors.New("мультипул с таким названием уже существует")
@@ -239,13 +314,16 @@ func (c *Controller) EditMultiPool(ctx context.Context, id string, spec *PoolSpe
 		}
 		pool.PoolSpec = clean
 		result = *pool
-		result.members(c.poolNodes(c.catalog()))
+		result.members(nodes)
 	}
 	write := func(next *profile) error {
 		if !bytes.Equal(next.raw, p.raw) {
 			return errors.New("конфигурация изменилась параллельно")
 		}
 		next.pools = p.pools
+		if spec == nil && str(next.doc[autoScopeKey]) == id {
+			delete(next.doc, autoScopeKey)
+		}
 		if len(next.pools) == 0 {
 			delete(next.doc, poolsKey)
 		} else {

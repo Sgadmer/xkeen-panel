@@ -122,6 +122,7 @@ type Server struct {
 	RawOutbound     json.RawMessage `json:"raw_outbound,omitempty"`
 	RawProfile      json.RawMessage `json:"raw_profile,omitempty"`
 	ProfileNodes    int             `json:"profile_nodes,omitempty"`
+	GeneratedPool   bool            `json:"-"`
 	ProbeKind       string          `json:"probe_kind,omitempty"`
 	CheckError      string          `json:"check_error,omitempty"`
 	LastChecked     time.Time       `json:"last_checked,omitempty"`

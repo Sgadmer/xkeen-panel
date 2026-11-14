@@ -2,6 +2,7 @@ export type Server = {
     id: number
     name: string
     source_id?: string
+    target_id?: string
     source_name?: string
     address: string
     port: number
@@ -49,6 +50,10 @@ export type Status = {
 export type PoolStatus = {
     mode: 'single' | 'pool'
     core: string
+    auto_scope_id?: string
+    selection_kind?: 'auto' | 'manual' | 'profile' | 'native' | 'replacement'
+    selection_name?: string
+    source_name?: string
     balancer_tag?: string
     pool_tags?: string[]
     proxy_tags?: string[]
@@ -148,10 +153,25 @@ export type ServerSource = {
     server_count: number
     last_updated?: string
     can_refresh: boolean
+    imported_profiles?: number
+    skipped_composite?: number
+    skipped_unsupported?: number
     native_provider?: boolean
 }
 
+export type PoolMember = { source_id: string; target_id: string }
+
+export type AutoScope = {
+    id: string
+    name: string
+    kind: 'all' | 'country' | 'custom'
+    country?: string
+    member_count: number
+}
+
 export type MultiPool = {
+    members?: PoolMember[]
+    include_filtered?: boolean
     id: string
     name: string
     source_ids: string[]

@@ -76,6 +76,31 @@ func serviceGeosites(rt Runtime) map[string]bool {
 	return c.groups
 }
 
+var serviceDomainNames = func() map[string]string {
+	domains := make(map[string]string)
+	for _, service := range serviceCatalog {
+		for _, suffix := range strings.Fields(service.suffixes) {
+			if domains[suffix] == "" {
+				domains[suffix] = service.id
+			}
+		}
+	}
+	return domains
+}()
+
+// ServiceForHost labels diagnostics even when a known site matched a DIRECT rule.
+func ServiceForHost(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for host != "" {
+		if id := serviceDomainNames[host]; id != "" {
+			return id
+		}
+		_, rest, _ := strings.Cut(host, ".")
+		host = rest
+	}
+	return ""
+}
+
 func knownService(id string) bool {
 	for _, service := range serviceCatalog {
 		if id == service.id {

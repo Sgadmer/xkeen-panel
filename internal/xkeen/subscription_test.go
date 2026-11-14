@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"xkeen-panel/internal/models"
 )
 
@@ -151,6 +152,19 @@ func TestUpdateLatencies(t *testing.T) {
 	b := findByURI(got, uriB)
 	if b == nil || !b.LastChecked.IsZero() {
 		t.Errorf("B must not have been updated: %+v", b)
+	}
+	c0.ProbeKind, c0.LastChecked, c0.Latency = "https", time.Now().Add(time.Second).UTC(), 24
+	if err := sm.UpdateLatencies([]models.Server{c0}); err != nil {
+		t.Fatal(err)
+	}
+	stale := c0
+	stale.Latency, stale.LastChecked = 300, c0.LastChecked.Add(-time.Minute)
+	if err := sm.UpdateLatencies([]models.Server{stale}); err != nil {
+		t.Fatal(err)
+	}
+	latest := findByURI(sm.GetServers(), uriA)
+	if latest.Latency != c0.Latency || !latest.LastChecked.Equal(c0.LastChecked) {
+		t.Fatal("late completion replaced a newer HTTPS measurement")
 	}
 }
 

@@ -1,17 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-    IconAsterisk, IconBrain, IconBrandAmazon, IconBrandDiscord, IconBrandDisney,
-    IconBrandFacebook, IconBrandGithub, IconBrandGoogle, IconBrandHbo, IconBrandInstagram,
-    IconBrandLine, IconBrandNetflix, IconBrandOpenai, IconBrandSpotify, IconBrandSteam,
-    IconBrandTelegram, IconBrandTwitch, IconBrandTwitter, IconBrandWhatsapp,
-    IconBrandXbox, IconBrandYoutube, IconDeviceGamepad2, IconLetterH, IconPlayerPlay,
-    IconShield, IconWorld, type Icon,
-} from '@tabler/icons-react'
+import { IconShield, IconWorld } from '@tabler/icons-react'
+import { serviceIcons } from '@/lib/serviceIcons'
 import { PageTitle } from '@/components/ios'
-import { usePanelSettings } from '@/hooks/usePanelData'
+import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
-import { withCountryFlag } from '@/lib/format'
+import { countryLabel, scopeLabel, withCountryFlag } from '@/lib/format'
 
 interface InheritedRoute {
     group: string
@@ -39,17 +33,6 @@ interface ServiceRoutes {
     scope?: string
     services: Service[]
     targets: { id: string; name: string; kind: 'server' | 'profile' | 'pool'; country?: string; sources?: string[] }[]
-}
-
-const icons: Record<string, Icon> = {
-    claude: IconAsterisk, ai: IconBrain, openai: IconBrandOpenai,
-    youtube: IconBrandYoutube, telegram: IconBrandTelegram, discord: IconBrandDiscord,
-    spotify: IconBrandSpotify, github: IconBrandGithub, steam: IconBrandSteam,
-    playstation: IconDeviceGamepad2, xbox: IconBrandXbox, instagram: IconBrandInstagram,
-    whatsapp: IconBrandWhatsapp, facebook: IconBrandFacebook, netflix: IconBrandNetflix,
-    twitch: IconBrandTwitch, disney: IconBrandDisney, primevideo: IconPlayerPlay,
-    amazon: IconBrandAmazon, twitter: IconBrandTwitter, hulu: IconLetterH,
-    hbo: IconBrandHbo, line: IconBrandLine, google: IconBrandGoogle,
 }
 
 function InheritedRouteInfo({route}: {route: InheritedRoute}) {
@@ -153,7 +136,9 @@ export function ServiceRoutesPage() {
     const change = useMutation({
         mutationFn: (selection: { service_id: string; target_id: string }) =>
             api.put<ServiceRoutes>('/api/service-routes', selection),
-        onSuccess: (view, selection) => {
+        onMutate: async () => { await qc.cancelQueries({ queryKey: key }) },
+        onSuccess: async (view, selection) => {
+            await qc.cancelQueries({ queryKey: key })
             qc.setQueryData(key, view)
             const service = view.services.find(item => item.id === selection.service_id)
             setNotice(view.active_connections_pending
@@ -164,12 +149,34 @@ export function ServiceRoutesPage() {
     })
     const view = query.data
     const error = change.error ?? query.error
-    const showSources = new Set(view?.targets.flatMap(t => t.sources ?? [])).size > 1
-    const groups = { server: 'Серверы', profile: 'Сборные профили', pool: 'Мультипулы' }
+    const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
+    const scopeById = new Map(scopes?.map(scope => [scope.id, scope]))
+    const category = (target: ServiceRoutes['targets'][number]) =>
+        target.kind === 'pool' ? (scopeById.get(target.id)?.kind ?? (target.country ? 'country' : 'pool')) : target.kind
+    const groups = [
+        ['all', 'Автовыбор'], ['country', 'Пулы стран'], ['custom', 'Мультипулы'], ['pool', 'Пулы'],
+        ['profile', 'Режимы провайдера'], ['server', 'Отдельные серверы'],
+    ] as const
+    const options = groups.map(([kind, title]) => ({
+        kind, title, targets: (view?.targets ?? []).filter(target => category(target) === kind).map(target => {
+            const scope = scopeById.get(target.id)
+            const name = scope ? scopeLabel(scope) : kind === 'country' ? countryLabel(target.country) : withCountryFlag(target.name, target.country)
+            const label = [name, scope && String(scope.member_count), target.sources?.join(', '),
+                kind === 'server' && target.country && avoidCountries.includes(target.country) && 'только вручную'].filter(Boolean).join(' · ')
+            return { id: target.id, label }
+        }),
+    })).filter(group => group.targets.length)
+    for (const group of options) {
+        // A provider can reuse the same name for different configurations. Two
+        // user-defined subscriptions or pools can also have identical names.
+        const counts = new Map<string, number>()
+        for (const item of group.targets) counts.set(item.label, (counts.get(item.label) ?? 0) + 1)
+        for (const item of group.targets) if (counts.get(item.label)! > 1) item.label += ' · ' + item.id.slice(0, 8)
+    }
 
     return (
         <>
-            <PageTitle title='Маршруты сервисов' subtitle='Выберите для каждого сервиса сервер, профиль подписки или свой мультипул.' />
+            <PageTitle title='Маршруты сервисов' subtitle='Выберите для сервиса сервер, режим провайдера, страну или свой мультипул.' />
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
             {view && (
@@ -189,9 +196,9 @@ export function ServiceRoutesPage() {
                     </div>
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
                         {view.services.map(service => {
-                            const Glyph = icons[service.id] ?? IconWorld
+                            const Glyph = serviceIcons[service.id] ?? IconWorld
                             const isClaude = service.id === 'claude'
-                            const missing = !!service.target && service.target !== 'direct' && !view.targets.some(t => t.id === service.target)
+                            const missing = !!service.target && (isClaude || service.target !== 'direct') && !view.targets.some(t => t.id === service.target)
                             const busy = change.isPending && change.variables?.service_id === service.id
                             const label = 'service-' + service.id
                             return (
@@ -206,7 +213,7 @@ export function ServiceRoutesPage() {
                                     <select
                                         className='mt-1 min-h-11 w-full rounded-xl border border-white/10 bg-fill px-2 text-[15px] disabled:opacity-60'
                                         id={'vpn-' + service.id}
-                                        value={service.target || ''}
+                                        value={(busy ? change.variables?.target_id : service.target) || ''}
                                         disabled={change.isPending || !(view.guard_ready || (view.scope === 'mihomo' && view.controller_ready))}
                                         onChange={e => {
                                             setNotice('')
@@ -215,14 +222,10 @@ export function ServiceRoutesPage() {
                                     >
                                         <option value='' disabled={isClaude}>{isClaude ? 'Выберите VPN' : (view.scope === 'mihomo' ? 'По правилам сервиса в Mihomo' : 'По правилам Xray')}</option>
                                         {!isClaude && view.scope === 'mihomo' && <option value='direct'>Напрямую</option>}
-                                        {missing && <option value={service.target} disabled>Цель отсутствует в подписке</option>}
-                                        {(['server', 'profile', 'pool'] as const).filter(kind => view.targets.some(t => t.kind === kind)).map(kind => (
-                                            <optgroup key={kind} label={groups[kind]}>
-                                                {view.targets.filter(t => t.kind === kind).map(t => (
-                                                    <option key={t.id} value={t.id}>
-                                                        {withCountryFlag(t.name, t.country)}{showSources && t.sources?.length ? ' · ' + t.sources.join(', ') : ''}{kind === 'server' && t.country && avoidCountries.includes(t.country) ? ' · только вручную' : ''}
-                                                    </option>
-                                                ))}
+                                        {missing && <option value={service.target} disabled>Назначенный маршрут недоступен</option>}
+                                        {options.map(({kind, title, targets}) => (
+                                            <optgroup key={kind} label={title}>
+                                                {targets.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
                                             </optgroup>
                                         ))}
                                     </select>
