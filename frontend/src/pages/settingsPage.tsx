@@ -40,44 +40,26 @@ export function SettingsPage() {
         onSettled: () => qc.invalidateQueries({ queryKey: ['passkeys'] }),
     })
     const passkey = passkeys.data?.passkeys?.[0]
+    const faceIdSetupLink = passkeys.isSuccess && !passkey && !passkeySupported()
+    const passkeyError = addPasskey.error || removePasskey.error || passkeys.error
+    const core = status?.core === 'mihomo' ? 'Mihomo' : status?.core === 'xray' ? 'Xray' : status?.core
 
     return (
         <>
             <PageTitle title='Настройки' />
 
-            <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
+            <nav aria-label='Разделы настроек' className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <Group title='XKeen'>
                     <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint={status?.core === 'mihomo' ? 'По списку блокировок или по правилам профиля' : 'Выбранные сервисы или весь трафик'} to='/settings/routing' />
-                    <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint='Версии XKeen/Xray, обновления и геоданные' to='/settings/components' />
-                    <Row
-                        icon={icon('#6366f1', IconCpu)}
-                        label='Ядро'
-                        detail={
-                            status
-                                ? `${status.core === 'mihomo' ? 'Mihomo' : 'Xray'} · ${status.mode}`
-                                : '—'
-                        }
-                    />
+                    <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint={status?.core === 'mihomo' ? 'Установленные компоненты и базы Re:filter' : 'Версии XKeen/Xray, обновления и геоданные'} to='/settings/components' />
                     <Row
                         icon={icon('#0a84ff', IconAdjustmentsHorizontal)}
                         label='Порты и системные исключения'
-                        detail={status?.xkeen_version}
                         to='/settings/xkeen'
                     />
                 </Group>
 
-                <Group
-                    title='Панель'
-                    footer={
-                        addPasskey.error ? (
-                            <span className='text-destructive'>
-                                {addPasskey.error.message}
-                            </span>
-                        ) : (
-                            'Face ID и Touch ID работают только при входе через HTTPS-домен роутера.'
-                        )
-                    }
-                >
+                <Group title='Панель'>
                     <Row icon={icon('#ff9500', IconBell)} label='Уведомления' hint='Системные уведомления на этом устройстве' to='/settings/notifications' />
                     <Row icon={icon('#0a84ff', IconWand)} label='Вход с ПК и телефона' hint='HTTPS-адрес панели, QR-код и Face ID на iPhone' to='/settings/access' />
                     <Row
@@ -90,59 +72,46 @@ export function SettingsPage() {
                                 <span className='text-tint'>
                                     {update.latest.tag}
                                 </span>
-                            ) : (
-                                status?.panel_version
-                            )
+                            ) : undefined
                         }
                         to='/settings/update'
                     />
-                    {passkey ? (
-                        <Row
-                            icon={icon('#30d158', IconFingerprint)}
-                            label='Вход по Face ID'
-                            hint={`ключ ${passkey.slice(0, 8)}…`}
-                            trailing={
-                                <button
-                                    type='button'
-                                    onClick={() =>
-                                        removePasskey.mutate(passkey)
-                                    }
-                                    disabled={removePasskey.isPending}
-                                    className='min-h-9 cursor-pointer px-1 text-[15px] text-destructive'
-                                >
-                                    Удалить
-                                </button>
-                            }
-                        />
-                    ) : !passkeySupported() ? (
-                        <Row icon={icon('#30d158', IconFingerprint)} label='Настроить Face ID на iPhone'
-                            hint='Получить HTTPS-адрес панели для Safari' to='/settings/access#face-id' />
-                    ) : (
-                        <Row
-                            icon={icon('#30d158', IconFingerprint)}
-                            label={
-                                addPasskey.isPending
-                                    ? 'Создаю ключ…'
-                                    : 'Включить вход по Face ID'
-                            }
-                            tone='tint'
-                            onClick={() => addPasskey.mutate()}
-                            disabled={
-                                !passkeySupported() || addPasskey.isPending
-                            }
-                        />
-                    )}
-                    <Row
-                        icon={icon('#5856d6', IconWand)}
-                        label='Мастер настройки'
-                        to='/welcome'
-                    />
+                    {faceIdSetupLink && <Row icon={icon('#30d158', IconFingerprint)} label='Настроить Face ID на iPhone'
+                        hint='Получить HTTPS-адрес панели для Safari' to='/settings/access#face-id' />}
+                    <Row icon={icon('#5856d6', IconWand)} label='Мастер настройки' to='/welcome' />
                 </Group>
+            </nav>
 
-                {status?.core === 'mihomo' && <div id='kill-switch'><GlobalKillSwitch /></div>}
-                <Group>
-                    <Row label='Выйти' tone='destructive' onClick={logout} />
-                </Group>
+            <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
+                <div className='flex min-w-0 flex-col gap-5'>
+                    <Group title='Сведения'>
+                        <dl className='grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 py-3 text-sm'>
+                            <dt className='text-muted-foreground'>Ядро</dt><dd>{[core, status?.mode].filter(Boolean).join(' · ') || '—'}</dd>
+                            <dt className='text-muted-foreground'>Версия XKeen</dt><dd>{status?.xkeen_version || '—'}</dd>
+                            <dt className='text-muted-foreground'>Версия панели</dt><dd className='break-words'>{status?.panel_version || '—'}</dd>
+                        </dl>
+                    </Group>
+                    {status?.core === 'mihomo' && <div id='kill-switch'><GlobalKillSwitch /></div>}
+                </div>
+                <div className='flex min-w-0 flex-col gap-5'>
+                    {!faceIdSetupLink && (
+                        <Group title='Вход по Face ID' footer={passkeyError && <span role='alert' className='text-destructive'>{passkeyError.message}</span>}>
+                            {passkey ? (
+                                <Row icon={icon('#30d158', IconFingerprint)} label='Ключ доступа'
+                                    hint={`${passkey.slice(0, 8)}…`}
+                                    trailing={<button type='button' onClick={() => removePasskey.mutate(passkey)}
+                                        disabled={removePasskey.isPending}
+                                        className='min-h-9 cursor-pointer px-1 text-[15px] text-destructive'>Удалить</button>}
+                                />
+                            ) : passkeys.isSuccess ? (
+                                <Row icon={icon('#30d158', IconFingerprint)} tone='tint'
+                                    label={addPasskey.isPending ? 'Создаю ключ…' : 'Включить вход по Face ID'}
+                                    onClick={() => addPasskey.mutate()} disabled={addPasskey.isPending} />
+                            ) : passkeys.isPending ? <Row label='Загружаем ключи…' /> : null}
+                        </Group>
+                    )}
+                    <Group><Row label='Выйти' tone='destructive' onClick={logout} /></Group>
+                </div>
             </div>
         </>
     )

@@ -93,13 +93,16 @@ function ClaudeApiFirewall({ protectionEnabled }: { protectionEnabled?: boolean 
         onError: () => { void client.invalidateQueries({queryKey: key}) },
     })
     const error = install.error ?? state.error
+    if (state.data?.ready && !error) {
+        return <details className='mt-3 text-sm text-muted-foreground'>
+            <summary className='cursor-pointer'>Фильтр API на роутере · активен</summary>
+            <p className='mt-1'>Даже при остановке Mihomo роутер блокирует прямой выход к трём сетям Anthropic API и Console.</p>
+        </details>
+    }
     return (
-        <div className='mt-3 rounded-xl bg-fill p-3 text-sm'>
-            <p className='font-semibold'>Защита адресов Anthropic API</p>
-            {state.data && <p className='mt-1 text-muted-foreground'>{state.data.ready
-                ? 'Роутер блокирует прямые пакеты к трём опубликованным IPv4/IPv6-сетям API и Console.'
-                : protectionEnabled === false ? 'Kill switch Claude выключен. Прямой выход к адресам API разрешён.'
-                : 'Фильтр блокирует прямой выход к трём сетям API и Console при остановке перехвата. Другие адреса Claude требуют отдельной защиты.'}</p>}
+        <div className='mt-3 text-sm'>
+            <p className='text-muted-foreground'>Фильтр API на роутере · {error ? 'ошибка проверки' : !state.data ? 'проверяем…'
+                : !state.data.available ? 'недоступен' : protectionEnabled === false ? 'выключен' : 'не активен'}</p>
             {state.data?.available && !state.data.ready && protectionEnabled !== false && <button type='button' disabled={install.isPending}
                 className='mt-2 min-h-11 rounded-xl px-3 font-semibold text-tint disabled:opacity-60'
                 onClick={() => install.mutate()}>{install.isPending ? 'Проверяем правила…' : (state.data.installed ? 'Восстановить фильтр API' : 'Включить фильтр API')}</button>}
@@ -174,7 +177,7 @@ export function ServiceRoutesPage() {
                             <p className='font-semibold'>{view.scope === 'mihomo' && view.active ? 'Маршруты Mihomo' : (view.active && view.guard_ready ? 'Защита маршрутов включена' : 'Защита маршрутов не подтверждена')}</p>
                             <p className='mt-1 text-sm text-muted-foreground'>
                                 {view.scope === 'mihomo'
-                                    ? 'Kill switch блокирует прямой выход при отказе VPN в работающем Mihomo. При полной остановке ядра продолжают действовать отдельные фильтры роутера. Фильтр адресов Anthropic API показан в карточке Claude.'
+                                    ? 'Kill switch блокирует прямой выход при отказе VPN в работающем Mihomo.'
                                     : view.guard_ready
                                     ? (view.active ? 'При потере назначенного VPN защищённый маршрут блокируется.' : 'Выберите VPN для Claude, чтобы включить маршруты сервисов.')
                                     : 'Для применения нужен работающий сетевой фильтр на роутере.'}
