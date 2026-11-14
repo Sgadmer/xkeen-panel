@@ -34,7 +34,7 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
     const error = update.error?.message || state.error?.message || data?.error
     return <div className='flex flex-col gap-5'>
         <Group title='Маршруты Mihomo' footer='При смене режима открытые соединения могут переподключиться по новым правилам. Выключение возвращает прежний порядок правил профиля.'>
-            <Row label='VPN по списку блокировок' hint='Сервисы с назначенным маршрутом сохраняют его. Совпадения с Re:filter идут через основной VPN, остальные сайты — напрямую.'
+            <Row label='VPN по списку блокировок' hint='Для обычного сайта роутер сверяет адрес со списком Re:filter. Адреса из списка открываются через основной VPN, остальные — напрямую. Если вы выбрали маршрут в карточке сервиса, действует ваш выбор.'
                 trailing={data ? <Switch label='VPN по списку блокировок' checked={data.enabled} disabled={update.isPending}
                     onChange={enabled => update.mutate(enabled)} /> : <span role='status' className='text-sm text-muted-foreground'>{state.isPending ? 'Загружаем…' : 'Нет данных'}</span>} />
         </Group>

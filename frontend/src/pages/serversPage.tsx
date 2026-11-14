@@ -259,7 +259,7 @@ export function ServersPage() {
 
     const profiles = providerModes.filter(s => matches(query, s.name, serverCountry(s), s.source_name))
     const providerCard = profiles.length > 0 && (
-        <Group title='Режимы провайдера' footer='Состав серверов и правила каждого сборного профиля задаёт его подписка.'>
+        <Group title='Режимы провайдера' footer='Это готовые варианты из вашей подписки. Какие серверы входят в каждый вариант и как они выбираются, решает поставщик VPN.'>
             {profiles.map(server => {
                 const ms = latencyFor(server.id) ?? server.latency_ms
                 const measured = server.probe_kind === 'https' || latencyFor(server.id) !== undefined
@@ -349,7 +349,7 @@ export function ServersPage() {
                             title='Автовыбор'
                             footer={
                                 isAuto
-                                    ? 'Панель держит трафик на самом быстром сервере пула и сама переключается, если он перестал работать.'
+                                    ? 'Пул — это список серверов для выбора. Роутер проверяет, какой из них быстрее отвечает, и переключается сам, если сервер перестал работать.'
                                     : mihomo ? 'Выбор пула включит автоматический режим.' : 'Включите автовыбор, чтобы панель снова выбирала сервер сама.'
                             }
                         >

@@ -156,10 +156,22 @@ type ServiceTarget struct {
 }
 type ServiceRouteView struct {
 	RoutingService
-	Target         string          `json:"target"`
-	Blocked        bool            `json:"blocked"`
-	RouteName      string          `json:"route_name,omitempty"`
-	InheritedRoute *InheritedRoute `json:"inherited_route,omitempty"`
+	Target         string               `json:"target"`
+	Blocked        bool                 `json:"blocked"`
+	RouteName      string               `json:"route_name,omitempty"`
+	InheritedRoute *InheritedRoute      `json:"inherited_route,omitempty"`
+	CurrentRoute   *CurrentServiceRoute `json:"current_route,omitempty"`
+}
+
+// CurrentServiceRoute describes the next selection reported by the live core.
+// For a conditional rule this is the VPN branch only.
+type CurrentServiceRoute struct {
+	Pool        string `json:"pool,omitempty"`
+	PoolCountry string `json:"pool_country,omitempty"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name,omitempty"`
+	Country     string `json:"country,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 // InheritedRoute describes the service's own active Mihomo group in rule mode.

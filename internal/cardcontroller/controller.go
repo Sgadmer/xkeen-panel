@@ -252,7 +252,8 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		rules, _ = p.api.rules(ctx)
 	}
 	_, managed := p.doc[stateKey]
-	result.Active = managed && result.ControllerReady && activeRulesMatch(rules, p.doc)
+	managedRulesLive := managed && result.ControllerReady && activeRulesMatch(rules, p.doc)
+	result.Active = managedRulesLive
 	groupRoutes := inheritedGroups(rules)
 	names := make(map[string]string, len(result.Targets))
 	for _, t := range result.Targets {
@@ -268,6 +269,25 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		}
 	}
 	var providerNodes map[string]selector
+	providerNode := func(name string) selector {
+		if providerNodes == nil {
+			providerNodes = p.api.providerNodes(ctx)
+		}
+		return providerNodes[name]
+	}
+	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	workers := newWorkerSnapshot(metricsCtx, c.rt, p, func() []models.Server { return servers }, xkeen.CardPoolMember)
+	currentRoutes := map[string]*xkeen.CurrentServiceRoute{}
+	current := func(group string) *xkeen.CurrentServiceRoute {
+		if !result.ControllerReady || !groupRoutes[group] || strings.HasPrefix(group, cardPrefix) && !managedRulesLive {
+			return nil
+		}
+		if _, found := currentRoutes[group]; !found {
+			currentRoutes[group] = workers.current(group, live, providerNode)
+		}
+		return currentRoutes[group]
+	}
 	policy, _ := readKillSwitch(p.doc)
 	registry, _ := readRefilter(p.doc)
 	for i := range result.Services {
@@ -276,6 +296,11 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 		s.Blocked = false
 		if registry.Enabled && s.Target == "" && s.ID != "claude" {
 			s.InheritedRoute = &xkeen.InheritedRoute{Kind: "conditional", Via: []string{}}
+			branch := cardPrefix + defaultID
+			if own := cardPrefix + s.ID + "-inherited"; groupRoutes[own] {
+				branch = own
+			}
+			s.CurrentRoute = current(branch)
 			continue
 		}
 		if !managed || s.ID != "claude" && s.Target == "" {
@@ -283,18 +308,17 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 			start := group
 			if own := cardPrefix + s.ID + "-inherited"; groupRoutes[own] {
 				start = live[own].Now
+				s.CurrentRoute = current(own)
 			} else if wrap := failoverName("native", group); groupRoutes[wrap] {
 				start = wrap
 			} else if !groupRoutes[group] {
 				group = ""
 				start = ""
 			}
-			s.InheritedRoute = inheritedRoute(start, live, names, func(name string) selector {
-				if providerNodes == nil {
-					providerNodes = p.api.providerNodes(ctx)
-				}
-				return providerNodes[name]
-			})
+			if s.CurrentRoute == nil {
+				s.CurrentRoute = current(start)
+			}
+			s.InheritedRoute = inheritedRoute(start, live, names, providerNode)
 			if start != group {
 				s.InheritedRoute.Group = group
 				if len(s.InheritedRoute.Via) > 0 && s.InheritedRoute.Via[0] == group {
@@ -310,6 +334,7 @@ func (c *Controller) view(ctx context.Context) (View, error) {
 			}
 			continue
 		}
+		s.CurrentRoute = current(cardPrefix + s.ID)
 		group := live[cardPrefix+s.ID]
 		oneMember := len(group.All) == 1 && group.All[0] == group.Now
 		group.Now = fallbackSelection(group.Now, live)

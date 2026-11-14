@@ -128,11 +128,9 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 		names[cardPrefix+id+"-inherited"] = display + " (по правилам)"
 		names[dedicatedGroup(id)] = display + " (прокси устройства)"
 	}
-	proxies := map[string]map[string]interface{}{}
-	for _, raw := range list(p.doc["proxies"]) {
-		proxy := object(raw)
-		proxies[str(proxy["name"])] = proxy
-	}
+	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	workers := newWorkerSnapshot(metricsCtx, c.rt, p, c.catalog, readMember)
 	leaves := map[string]bool{}
 	for _, f := range flows {
 		if len(f.Chains) > 0 {
@@ -143,24 +141,9 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 	unresolved := ConnectionExit{Kind: "unresolved"}
 	exits := map[string]ConnectionExit{}
 	poolNow := map[string]*ConnectionExit{}
-	type worker struct {
-		generation string
-		port       int
-	}
-	observations := map[worker]string{}
-	var catalog map[string]ConnectionExit
-	lookup := func(id string) ConnectionExit {
-		if catalog == nil {
-			catalog = diagnosticCatalog(c.catalog())
-		}
-		return catalog[id]
-	}
 	var providers map[string]selector
-	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
 	for tag := range leaves {
-		rest, managed := strings.CutPrefix(tag, nodePrefix)
-		if !managed {
+		if !strings.HasPrefix(tag, nodePrefix) {
 			if tag == "DIRECT" || tag == "REJECT" || tag == "REJECT-DROP" {
 				exits[tag] = nativeConnectionExit(tag, tag)
 				continue
@@ -168,7 +151,7 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 			if publicRouteName(tag, nil) == "" {
 				continue
 			}
-			typ := str(proxies[tag]["type"])
+			typ := str(workers.proxies[tag]["type"])
 			if typ == "" && len(object(p.doc["proxy-providers"])) > 0 {
 				if providers == nil {
 					providers = p.api.providerNodes(ctx)
@@ -179,43 +162,16 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 			continue
 		}
 
-		id, generation, grouped := strings.Cut(rest, "-")
-		if !validHash(id) {
-			continue
-		}
-		if !grouped {
-			endpoint := lookup(id)
-			if endpoint.Name != "" {
-				names[tag] = endpoint.Name
-				if endpoint.Kind == "server" {
-					exits[tag] = endpoint
-				} else {
-					names[tag] += " (профиль Xray)"
-				}
+		worker := workers.resolve(tag)
+		if worker.pool {
+			names[tag] = worker.label
+			if worker.exit.Kind == "server" {
+				poolNow[tag] = &worker.exit
 			}
-			continue
-		}
-
-		pool := p.pool(id)
-		if pool == nil || !validHash(generation) {
-			continue
-		}
-		names[tag] = pool.Name
-		proxy := proxies[tag]
-		port, _ := proxy["port"].(int)
-		if str(proxy["server"]) != "127.0.0.1" || port <= 0 || port > 65535 {
-			continue
-		}
-		key := worker{generation, port}
-		member, cached := observations[key]
-		if !cached && metricsCtx.Err() == nil {
-			member = readMember(metricsCtx, c.rt, generation, port)
-			observations[key] = member
-		}
-		if member != "" {
-			if current := lookup(member); current.Kind == "server" {
-				poolNow[tag] = &current
-			}
+		} else if worker.exit.Kind == "server" {
+			names[tag], exits[tag] = worker.exit.Name, worker.exit
+		} else if worker.label != "" {
+			names[tag] = worker.label + " (профиль Xray)"
 		}
 	}
 	rows := make([]Connection, 0, len(flows))
