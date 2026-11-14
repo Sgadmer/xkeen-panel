@@ -14,7 +14,7 @@ import (
 // Every node is probed separately by observatory, so a pool built from a large
 // subscription turns into constant VLESS handshakes on a router that has better
 // things to do. A handful of the closest live nodes is what leastPing needs.
-const DefaultPoolMaxNodes = 10
+const DefaultPoolMaxNodes = 8
 
 // PoolSelection decides which subscription servers a pool is built from.
 type PoolSelection struct {

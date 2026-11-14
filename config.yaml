@@ -43,7 +43,7 @@ subscription_refresh_interval: 3600
 # (observatory), so a pool of the whole subscription means constant handshakes
 # on the router. The panel takes the lowest-latency ones, excluding countries
 # from auto_switch_avoid_countries.
-pool_max_nodes: 10
+pool_max_nodes: 8
 
 # Traffic is pinned to one pool node: the balancer picks an outbound per
 # connection, so the external IP keeps moving — Telegram sessions drop and CDNs
