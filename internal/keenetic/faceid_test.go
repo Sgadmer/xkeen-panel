@@ -26,14 +26,14 @@ func TestFaceIDLANProvisioning(t *testing.T) {
 		switch strings.TrimPrefix(r.URL.Path, "/rci/") {
 		case "show/ndns":
 			if booked {
-				result = map[string]any{"name": label, "booked": label, "domain": panelDNSZone}
+				result = map[string]any{"name": label, "booked": true, "domain": panelDNSZone}
 			}
 		case "show/rc/ip/http":
-			config := map[string]any{"ssl": map[string]any{"enable": true, "port": "8443"}, "security-level": map[string]bool{"public": !private, "private": private}}
+			result = map[string]any{"ssl": map[string]any{"enable": true, "port": "8443"}, "security-level": map[string]bool{"public": !private, "private": private}}
+		case "show/sc/ip/http/proxy":
 			if proxy {
-				config["proxy"] = []any{map[string]any{"name": "panel", "upstream": map[string]any{"http": true, "ip": ip, "port": "3000"}, "domain": map[string]bool{"ndns": true}}}
+				result = map[string]any{"panel": map[string]any{"upstream": map[string]any{"proto": "http", "upstream": ip, "port": "3000"}, "domain": map[string]bool{"ndns": true}, "security-level": map[string]bool{"private": true}, "preserve-host": true}}
 			}
-			result = config
 		case "show/rc/ip/host":
 			result = []any{}
 			if host {
@@ -57,8 +57,12 @@ func TestFaceIDLANProvisioning(t *testing.T) {
 				booked = true
 			}
 		case "ip/http/proxy":
-			if args["security-level"].(map[string]any)["private"] != true {
+			if args["security-level"].(map[string]any)["private"] != "private" || args["domain"].(map[string]any)["ndns"] != true || args["preserve-host"] != true {
 				t.Error("not LAN-only")
+			}
+			u := args["upstream"].(map[string]any)
+			if u["upstream"] != ip || u["proto"] != "http" || u["port"] != "3000" {
+				t.Errorf("incorrect upstream: %v", u)
 			}
 			proxyCount++
 			proxy = true
@@ -91,6 +95,38 @@ func TestFaceIDLANProvisioning(t *testing.T) {
 	}
 	if bookCount != 1 || proxyCount != 1 {
 		t.Fatalf("duplicate provisioning %d %d", bookCount, proxyCount)
+	}
+}
+
+func TestProxyAccessAndPartialCreation(t *testing.T) {
+	for _, scope := range []string{`{"private":"private"}`, `{"private":true}`, `{"private":true,"public":false}`, `{}`, `{"private":false}`, `{"public":true}`, `{"private":true,"protected":true}`} {
+		var p proxyRule
+		if err := json.Unmarshal([]byte(scope), &p.Level); err != nil {
+			t.Fatal(err)
+		}
+		if expected := strings.HasPrefix(scope, `{"private":"private"`) || scope == `{"private":true}` || scope == `{"private":true,"public":false}`; expected != p.private() {
+			t.Errorf("scope %s private %t", scope, p.private())
+		}
+	}
+	for _, address := range []string{"", "192.168.2.3"} {
+		deleted := false
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				_ = json.NewEncoder(w).Encode(map[string]any{"panel": map[string]any{"security-level": map[string]bool{"private": true}, "domain": map[string]bool{"ndns": true}, "upstream": map[string]any{"upstream": address}}})
+				return
+			}
+			var args map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&args)
+			if args["no"] == true {
+				deleted = true
+			}
+			_ = json.NewEncoder(w).Encode([]any{})
+		}))
+		err := NewClient(srv.URL, "").createPanelProxy(context.Background(), "192.168.2.1", 3000)
+		srv.Close()
+		if err == nil || deleted != (address == "") {
+			t.Fatalf("address %q deleted %t err %v", address, deleted, err)
+		}
 	}
 }
 

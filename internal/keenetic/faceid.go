@@ -37,24 +37,21 @@ func (p *rciPort) UnmarshalJSON(raw []byte) error {
 }
 
 type proxyRule struct {
-	Name   string `json:"name"`
 	Domain struct {
-		NDNS bool `json:"ndns"`
+		NDNS   bool   `json:"ndns"`
+		Domain string `json:"domain"`
 	} `json:"domain"`
 	Upstream struct {
-		HTTP bool    `json:"http"`
-		IP   string  `json:"ip"`
-		Port rciPort `json:"port"`
+		Protocol string  `json:"proto"`
+		Address  string  `json:"upstream"`
+		Port     rciPort `json:"port"`
 	} `json:"upstream"`
-	Level struct {
-		Public bool `json:"public"`
-	} `json:"security-level"`
-	PreserveHost bool `json:"preserve-host"`
+	Level        map[string]json.RawMessage `json:"security-level"`
+	PreserveHost bool                       `json:"preserve-host"`
 }
 
 type routerHTTP struct {
-	Proxy []proxyRule `json:"proxy"`
-	SSL   struct {
+	SSL struct {
 		Enable bool
 		Port   rciPort
 	} `json:"ssl"`
@@ -76,23 +73,22 @@ func (c *Client) readPanelHTTP(ctx context.Context) (routerHTTP, error) {
 // show/ndns is the latest confirmed name. No domain is inferred solely from
 // a Host request header, nor by looking up a similarly named DNS record.
 func (c *Client) panelDomain(ctx context.Context) (string, error) {
-	var s struct{ Name, Booked, Domain string }
+	var s struct {
+		Name, Domain string
+		Booked       json.RawMessage
+	}
 	if err := c.doContext(ctx, http.MethodGet, "show/ndns", nil, &s); err != nil {
 		return "", err
 	}
-	if s.Name == "" && s.Booked == "" && s.Domain == "" {
+	if s.Name == "" && s.Domain == "" && (len(s.Booked) == 0 || string(s.Booked) == `""` || string(s.Booked) == "false" || string(s.Booked) == "null") {
 		return "", nil
 	}
-	label := s.Booked
-	if label == "" {
-		label = s.Name
-	}
-	if s.Domain == "" || !dnsLabel.MatchString(label) {
+	if s.Domain == "" || !dnsLabel.MatchString(s.Name) {
 		return "", errors.New("роутер не подтвердил имя CrazeDNS")
 	}
 	switch s.Domain {
 	case "netcraze.link", "netcraze.pro", "netcraze.club", "crazedns.ru", "keenetic.link", "keenetic.pro", "keenetic.name", "keenetic.io", "keenetic.net", "mykeenetic.net", "mykeenetic.com":
-		return label + "." + s.Domain, nil
+		return s.Name + "." + s.Domain, nil
 	}
 	return "", errors.New("роутер вернул неизвестную доменную зону CrazeDNS")
 }
@@ -175,17 +171,63 @@ func isCandidateAvailable(d map[string]any, name string) bool {
 	return false
 }
 
-func proxyConfigured(h routerHTTP, ip string, port int) (bool, error) {
-	for _, p := range h.Proxy {
-		if p.Name != panelProxyName {
-			continue
-		}
-		if !p.Domain.NDNS || !p.Upstream.HTTP || p.Upstream.IP != ip || int(p.Upstream.Port) != port || p.Level.Public {
-			return false, errors.New("имя panel уже занято другим правилом доступа Netcraze")
-		}
-		return true, nil
+func (c *Client) panelProxy(ctx context.Context) (*proxyRule, error) {
+	var rules map[string]proxyRule
+	if err := c.doContext(ctx, http.MethodGet, "show/sc/ip/http/proxy", nil, &rules); err != nil {
+		return nil, err
 	}
-	return false, nil
+	p, exists := rules[panelProxyName]
+	if !exists {
+		return nil, nil
+	}
+	return &p, nil
+}
+
+func (p *proxyRule) private() bool {
+	private := string(p.Level["private"])
+	if private != "true" && private != `"private"` {
+		return false
+	}
+	for _, key := range []string{"public", "protected"} {
+		if value := p.Level[key]; len(value) != 0 && string(value) != "false" {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *proxyRule) matches(ip string, port int) bool {
+	return p != nil && p.private() && p.Domain.NDNS && p.Domain.Domain == "" && p.Upstream.Protocol == "http" && p.Upstream.Address == ip && int(p.Upstream.Port) == port
+}
+
+func (c *Client) createPanelProxy(ctx context.Context, ip string, port int) error {
+	args := map[string]any{
+		"name": panelProxyName, "domain": map[string]any{"ndns": true, "no": false},
+		"upstream":       map[string]any{"proto": "http", "upstream": ip, "port": strconv.Itoa(port)},
+		"security-level": map[string]any{"private": "private", "no": false},
+		"preserve-host":  true, "auth": false,
+	}
+	_, commandErr := c.panelCommand(ctx, "ip/http/proxy", args)
+	check, cancel := context.WithTimeout(context.WithoutCancel(ctx), 6*time.Second)
+	defer cancel()
+	p, err := c.panelProxy(check)
+	if err != nil {
+		return errors.Join(commandErr, err)
+	}
+	if p.matches(ip, port) {
+		return nil
+	}
+	err = errors.New("роутер не подтвердил локальную привязку HTTPS к панели")
+	// A multi-field RCI write can leave only some subcommands applied. Remove
+	// our new incomplete rule if it still carries our LAN-only boundaries.
+	if p != nil && p.private() && p.Domain.NDNS && p.Domain.Domain == "" &&
+		(p.Upstream.Protocol == "" || p.Upstream.Protocol == "http") &&
+		(p.Upstream.Address == "" || p.Upstream.Address == ip) &&
+		(p.Upstream.Port == 0 || int(p.Upstream.Port) == port) {
+		_, cleanupErr := c.panelCommand(check, "ip/http/proxy", map[string]any{"name": panelProxyName, "no": true})
+		err = errors.Join(err, cleanupErr)
+	}
+	return errors.Join(commandErr, err)
 }
 
 type hostRecord struct{ Domain, Address string }
@@ -230,11 +272,14 @@ func (c *Client) PreparePanelHTTPS(ctx context.Context, label, lanIP string, por
 	}
 	origin := panelOrigin(domain, h.SSL.Port)
 	host := panelProxyName + "." + domain
-	setProxy, err := proxyConfigured(h, lanIP, port)
+	p, err := c.panelProxy(ctx)
 	if err != nil {
 		return origin, err
 	}
-	setHost, err := c.hostRecord(ctx, host, lanIP)
+	if p != nil && !p.matches(lanIP, port) {
+		return origin, errors.New("имя panel уже занято другим правилом доступа Netcraze")
+	}
+	hasHost, err := c.hostRecord(ctx, host, lanIP)
 	if err != nil {
 		return origin, err
 	}
@@ -275,30 +320,24 @@ func (c *Client) PreparePanelHTTPS(ctx context.Context, label, lanIP string, por
 			return origin, errors.New("CrazeDNS обрабатывает регистрацию. Повторите проверку через минуту")
 		}
 	}
-	if !setProxy {
-		args := map[string]any{
-			"name": panelProxyName, "domain": map[string]any{"ndns": true},
-			"upstream":       map[string]any{"http": true, "ip": lanIP, "port": port},
-			"security-level": map[string]bool{"private": true}, "preserve-host": true,
-		}
-		if _, err = c.panelCommand(ctx, "ip/http/proxy", args); err != nil {
+	if p == nil {
+		if err = c.createPanelProxy(ctx, lanIP, port); err != nil {
 			return origin, err
 		}
 	}
-	if !setHost {
+	if !hasHost {
 		if _, err = c.panelCommand(ctx, "ip/host", map[string]string{"domain": host, "address": lanIP}); err != nil {
 			return origin, err
 		}
 	}
-	h, err = c.readPanelHTTP(ctx)
+	p, err = c.panelProxy(ctx)
 	if err != nil {
 		return origin, err
 	}
-	ok, err := proxyConfigured(h, lanIP, port)
-	if err != nil || !ok {
+	if !p.matches(lanIP, port) {
 		return origin, errors.New("роутер не подтвердил локальную привязку HTTPS к панели")
 	}
-	ok, err = c.hostRecord(ctx, host, lanIP)
+	ok, err := c.hostRecord(ctx, host, lanIP)
 	if err != nil || !ok {
 		return origin, errors.New("роутер не подтвердил домашний адрес DNS панели")
 	}

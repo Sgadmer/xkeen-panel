@@ -103,7 +103,8 @@ function DomainSetup({ face }: { face: FaceIDAccess }) {
             {!validLabel(label) && <p className='text-sm text-destructive'>Введите от 1 до 63 латинских букв, цифр или дефисов. На краях допустимы буква или цифра.</p>}
             {plan && <>
                 <p className='text-sm text-muted-foreground'>После настройки панель будет доступна из домашней сети по адресу <strong className='break-all text-foreground'>{plan.https_url}</strong>.</p>
-                <p className='text-sm text-muted-foreground'>Роутер использует свой зарегистрированный домен или запросит в CrazeDNS регистрацию имени <strong className='break-all text-foreground'>{label}</strong>. Панель настроит сертификат и привяжет ключи входа к HTTPS-адресу.</p>
+                <p className='text-sm text-muted-foreground'>Роутер использует свой домен или зарегистрирует в CrazeDNS имя <strong className='break-all text-foreground'>{label}</strong>. Ключи входа будут привязаны к HTTPS-адресу панели.</p>
+                <p className='text-sm text-muted-foreground'>Роутер сам получит сертификат и будет автоматически его продлевать. Safari на iPhone доверяет ему без скачивания сертификата и установки профиля.</p>
                 {plan.router_admin_public && <label className='flex min-h-11 items-start gap-3 rounded-xl bg-fill p-3 text-sm'>
                     <input type='checkbox' className='mt-0.5 size-5 shrink-0 accent-[var(--primary)]' checked={privateAdmin} disabled={busy}
                         onChange={e => setPrivateAdmin(e.target.checked)} />
