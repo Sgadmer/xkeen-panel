@@ -135,6 +135,7 @@
 | Для чего | Какие сервисы есть в панели |
 | --- | --- |
 | ИИ | Claude / Anthropic, ChatGPT / OpenAI и общая карточка AI для других сервисов, в том числе Perplexity, Gemini и Mistral |
+| Аналитика и диагностика | Общие сборщики аналитики, отчётов об ошибках и сигналов безопасности. Отдельный маршрут и kill switch; адреса обновляются из category-telemetry. Карточка находится после ChatGPT. |
 | Поиск, разработка и покупки | Google, GitHub, Amazon |
 | Видео и музыка | YouTube, Spotify, Twitch, Netflix, Disney+, Prime Video, Hulu, HBO |
 | Соцсети и мессенджеры | Telegram, Discord, Instagram, WhatsApp, Facebook, X (Twitter), LINE |

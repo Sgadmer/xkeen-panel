@@ -35,12 +35,12 @@ export function ServiceListsProtection() {
     const data = state.data
     const busy = update.isPending || data?.updating === true
     const error = update.error?.message || state.error?.message || data?.error
-    return <Group title='Распознавание сервисов' footer='Списки помогают узнать сервис по адресу сайта. Общие серверы покупок и входа, например RevenueCat и WorkOS, используют маршрут ChatGPT. Claude сохраняет отдельный маршрут. Произвольный запрос без имени сайта роутер не может достоверно связать с приложением.'>
+    return <Group title='Распознавание сервисов' footer='Списки помогают узнать сервис по адресу сайта. Общие адреса сбора аналитики и ошибок используют карточку «Аналитика и диагностика». Серверы покупок и входа, например RevenueCat и WorkOS, используют маршрут ChatGPT. Произвольный запрос без имени сайта роутер не может достоверно связать с приложением.'>
         <Row label='Обновляемые списки сервисов' hint='Новые адреса скачиваются автоматически раз в сутки при любом режиме VPN. Выбранные серверы сохраняются. При ошибке продолжает работать прежняя база.'
             detail={data ? (busy ? 'Проверяем…' : 'Автоматически') : state.isPending ? 'Загружаем…' : 'Нет данных'} />
         {data && <>
             <Row label='Имена сайтов в соединениях' hint='Роутер распознаёт имя сайта при подключении. QUIC на портах 443 и 8443 блокируется: приложения обычно переходят на HTTPS, чтобы запрос не попал в чужой маршрут.' detail={data.ready === false ? 'Ожидаем базу' : 'Включено'} />
-            <Row label='База адресов' detail={`${data.sources} списка · ${count.format(data.domains)} правил`} />
+            <Row label='База адресов' detail={`Списков: ${count.format(data.sources)} · правил: ${count.format(data.domains)}`} />
             {data.source && <Row label='Источник' detail={data.source} />}
             {data.checked_at && <Row label='Последняя проверка' detail={new Date(data.checked_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}
             {data.next_check_at && <Row label='Следующая проверка' detail={new Date(data.next_check_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}

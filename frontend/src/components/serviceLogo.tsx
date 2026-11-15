@@ -1,4 +1,4 @@
-import { IconBrain, IconWorld } from '@tabler/icons-react'
+import { IconBrain, IconChartDots, IconWorld } from '@tabler/icons-react'
 import { cn } from '@/lib/utils'
 
 const brands = new Set([
@@ -11,7 +11,7 @@ const lightArtwork = new Set(['amazon', 'primevideo'])
 
 export function ServiceLogo({ id, className }: { id: string; className?: string }) {
     if (!brands.has(id)) {
-        const Glyph = id === 'ai' ? IconBrain : IconWorld
+        const Glyph = id === 'ai' ? IconBrain : id === 'analytics' ? IconChartDots : IconWorld
         return <Glyph aria-hidden className={cn('shrink-0 text-tint', className)} stroke={1.8} />
     }
 

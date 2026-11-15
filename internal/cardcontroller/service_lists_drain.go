@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -98,6 +99,13 @@ func (c *Controller) finishServiceListsDrain(ctx context.Context, p profile, sta
 }
 
 func serviceListsFlowAffected(flow connectionTracker, enabled bool, known map[string]bool) bool {
+	// Dataset changes cannot change the route of a correctly tagged private
+	// application proxy. Keep an active call on that explicit whole-app path.
+	for id := range groupNames {
+		if flow.Metadata.InboundName == serviceInbound(id) && slices.Contains(flow.Chains, dedicatedGroup(id)) {
+			return false
+		}
+	}
 	if ip, err := netip.ParseAddr(flow.Metadata.DestinationIP); err == nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast()) {
 		return false
 	}

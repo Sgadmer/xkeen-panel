@@ -3,6 +3,7 @@ package xkeen
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ var serviceCatalog = []struct {
 }{
 	{"claude", "Claude / Anthropic", "anthropic", "anthropic.com claude.ai claude.com claudeusercontent.com claudemcpcontent.com claudeassets.com claude.site anthropicusercontent.com"},
 	{"openai", "ChatGPT / OpenAI", "openai", "chatgpt.com openai.com oaistatic.com oaiusercontent.com"},
+	{"analytics", "Аналитика и диагностика", "category-telemetry", ""},
 	{"youtube", "YouTube", "youtube", "youtube.com youtu.be yt.be youtube-nocookie.com googlevideo.com ytimg.com youtubei.googleapis.com youtube.googleapis.com youtubeembeddedplayer.googleapis.com yt3.googleusercontent.com yt3.ggpht.com youtube-ui.l.google.com wide-youtube.l.google.com youtubekids.com"},
 	{"telegram", "Telegram", "telegram", "telegram.org t.me telegram.me tdesktop.com telegram-cdn.org"},
 	{"discord", "Discord", "discord", "discord.com discord.gg discordapp.com discordapp.net discord.media"},
@@ -40,11 +42,27 @@ var serviceCatalog = []struct {
 	{"ai", "AI", "category-ai-!cn", "perplexity.ai gemini.google.com mistral.ai deepseek.com grok.com character.ai"},
 }
 
+// These observed collector hosts are not yet present in category-telemetry.
+// Match the exact hosts, never their vendors' websites or whole cloud ranges.
+var analyticsHosts = []string{
+	"api3.siftscience.com",
+	"browser-intake-us5-datadoghq.com",
+	"o1158394.ingest.us.sentry.io",
+	"http-intake.logs.us5.datadoghq.com",
+}
+
+func AnalyticsHosts() []string { return slices.Clone(analyticsHosts) }
+
 func serviceDomains(index int, geosites map[string]bool) []string {
 	service := serviceCatalog[index]
 	result := []string{}
 	for _, domain := range strings.Fields(service.suffixes) {
 		result = append(result, "domain:"+domain)
+	}
+	if service.id == "analytics" {
+		for _, host := range analyticsHosts {
+			result = append(result, "full:"+host)
+		}
 	}
 	if geosites[service.geo] {
 		result = append(result, "ext:geosite_v2fly.dat:"+service.geo)
@@ -91,6 +109,9 @@ var serviceDomainNames = func() map[string]string {
 // ServiceForHost labels diagnostics even when a known site matched a DIRECT rule.
 func ServiceForHost(host string) string {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if slices.Contains(analyticsHosts, host) {
+		return "analytics"
+	}
 	for host != "" {
 		if id := serviceDomainNames[host]; id != "" {
 			return id

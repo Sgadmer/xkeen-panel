@@ -34,7 +34,7 @@ const serviceListMaxBytes = 2 << 20
 // Text is validated and installed as one immutable snapshot instead of letting
 // independent HTTP providers replace an active subset during an outage.
 var serviceListTags = map[string]string{
-	"claude": "anthropic", "openai": "openai", "youtube": "youtube", "telegram": "telegram",
+	"claude": "anthropic", "openai": "openai", "analytics": "category-telemetry", "youtube": "youtube", "telegram": "telegram",
 	"discord": "discord", "spotify": "spotify", "github": "github", "steam": "steam",
 	"playstation": "playstation", "xbox": "xbox", "instagram": "instagram", "whatsapp": "whatsapp",
 	"facebook": "facebook", "netflix": "netflix", "twitch": "twitch", "disney": "disney",
@@ -149,8 +149,17 @@ func readServiceLists(doc map[string]interface{}) (serviceListsCache, error) {
 	metadata := object(raw)
 	_, hasEnabled := metadata["enabled"].(bool)
 	data, err := json.Marshal(raw)
-	if !hasEnabled || err != nil || json.Unmarshal(data, &info) != nil || info.Version != serviceListsVersion || len(info.Files) != len(serviceListTags) {
+	if !hasEnabled || err != nil || json.Unmarshal(data, &info) != nil || info.Version != serviceListsVersion || len(info.Files) > len(serviceListTags) {
 		return info, errors.New("повреждены настройки обновляемых списков сервисов")
+	}
+	// A panel upgrade must keep the last complete 24-service snapshot usable
+	// while the newly introduced telemetry dataset is still being downloaded.
+	// Every original dataset remains mandatory; an incomplete critical cache
+	// is never accepted as a legacy snapshot.
+	for id := range serviceListTags {
+		if _, found := info.Files[id]; !found && id != "analytics" {
+			return info, errors.New("повреждены настройки обновляемых списков сервисов")
+		}
 	}
 	for id, file := range info.Files {
 		if serviceListTags[id] == "" || !validHash(file.Hash) || file.Count <= 0 || file.Count > 100000 {
@@ -178,7 +187,7 @@ func (info serviceListsCache) status(problem string) ServiceListsStatus {
 	status := ServiceListsStatus{
 		Enabled: true, Ready: info.Enabled && len(info.Files) == len(serviceListTags), Source: "MetaCubeX / v2fly", Sources: len(info.Files), Domains: n,
 		UpdatedAt: info.UpdatedAt, CheckedAt: info.CheckedAt, Error: problem,
-		SharedDependencies: "Общие адреса оплаты RevenueCat, входа WorkOS и голосовой связи LiveKit идут через сервер ChatGPT. Этими адресами могут пользоваться и другие приложения. Claude сохраняет свой отдельный маршрут.",
+		SharedDependencies: "Общие адреса аналитики, диагностики и проверки безопасности используют карточку «Аналитика и диагностика». Адреса оплаты RevenueCat, входа WorkOS и голосовой связи LiveKit идут через сервер ChatGPT. Одними адресами могут пользоваться разные приложения.",
 	}
 	if checked, err := time.Parse(time.RFC3339, info.CheckedAt); err == nil {
 		status.NextCheckAt = checked.Add(serviceListInterval).Format(time.RFC3339)

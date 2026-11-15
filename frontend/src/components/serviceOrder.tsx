@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 
 const storageKey = 'xkeen.service-card-order'
 const defaultOrder = [
-    'claude', 'openai', 'ai', 'google', 'youtube', 'telegram', 'whatsapp', 'instagram',
+    'claude', 'openai', 'analytics', 'ai', 'google', 'youtube', 'telegram', 'whatsapp', 'instagram',
     'discord', 'steam', 'github', 'spotify', 'twitch', 'playstation', 'xbox', 'twitter',
     'facebook', 'netflix', 'amazon', 'primevideo', 'disney', 'hbo', 'hulu', 'line',
 ]
@@ -24,8 +24,15 @@ function readOrder(): string[] {
 
 function ordered<T extends Item>(items: T[], preference: string[]): T[] {
     const byId = new Map(items.map(item => [item.id, item]))
-    const ids = new Set([...preference, ...defaultOrder, ...byId.keys()])
-    return Array.from(ids).flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
+    const ids = Array.from(new Set([...preference, ...defaultOrder, ...byId.keys()]))
+    // Insert a newly introduced card next to ChatGPT without resetting a
+    // browser's older custom order. An explicit saved position wins.
+    if (byId.has('analytics') && !preference.includes('analytics')) {
+        ids.splice(ids.indexOf('analytics'), 1)
+        const openai = ids.indexOf('openai')
+        ids.splice(openai < 0 ? ids.length : openai + 1, 0, 'analytics')
+    }
+    return ids.flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
 }
 
 export function useServiceOrder<T extends Item>(items: T[]) {

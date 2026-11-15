@@ -136,6 +136,7 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
     service: Service; selected?: ServiceTarget; fresh: boolean; mihomo: boolean; firewall: ReturnType<typeof useClaudeApiFirewall>; protectionEnabled?: boolean
 }) {
     const claude = service.id === 'claude'
+    const analytics = service.id === 'analytics'
     const { state, install } = firewall
     const error = install.error ?? state.error
     const proxy = mihomo && !!service.target && service.target !== 'direct'
@@ -143,7 +144,7 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
     const providers = selected?.sources?.join(', ')
     const live = fresh && service.target !== 'direct' ? service.current_route : undefined
     const domains = service.domains ?? []
-    if (!claude && !proxy && !inherited && !domains.length) return null
+    if (!claude && !analytics && !proxy && !inherited && !domains.length) return null
     const needsAttention = claude && (!!error || (!!state.data && !state.data.ready && protectionEnabled !== false))
     return <>
         {needsAttention && <div className='mt-2 text-sm' role='status'>
@@ -160,6 +161,11 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
                 <IconChevronDown aria-hidden className='size-4 shrink-0 transition-transform group-open/details:rotate-180' />
             </summary>
             <div className='space-y-4 pb-2'>
+                {analytics && <div>
+                    <h3 className='font-medium'>Общие служебные запросы</h3>
+                    <p className='mt-1 text-muted-foreground'>Приложения отправляют сюда отчёты об ошибках, данные о работе и сигналы для проверки безопасности аккаунта. Эти адреса общие для разных приложений: выбранный маршрут действует для всех их запросов к адресам из этой карточки.</p>
+                    <p className='mt-1 text-muted-foreground'>Список известных адресов обновляется автоматически раз в сутки.</p>
+                </div>}
                 {live?.kind === 'server' && live.name && <p className='break-words'>{inherited?.kind === 'conditional' ? 'Для адресов из списка блокировок' : 'Сейчас'} · {[countryLabel(live.pool_country) || live.pool, withCountryFlag(live.name, live.country)].filter(Boolean).join(' → ')}</p>}
                 {(live?.source || providers) && <p className='break-words'>Провайдер{!live?.source && (selected?.sources?.length ?? 0) > 1 ? 'ы' : ''} · {live?.source || providers}</p>}
                 {claude && !needsAttention && <div>
@@ -173,7 +179,7 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
                 {domains.length > 0 && <div>
                     <h3 className='font-medium'>Домены сервиса</h3>
                     <ul aria-label='Домены сервиса' className='mt-1 max-h-36 overflow-y-auto break-words text-muted-foreground'>
-                        {domains.map(d => <li key={d}>{d.replace(/^domain:/, '').replace(/^ext:geosite_v2fly\.dat:/, 'GeoSite · ')}</li>)}
+                        {domains.map(d => <li key={d}>{d.replace(/^(domain|full):/, '').replace(/^ext:geosite_v2fly\.dat:/, 'GeoSite · ')}</li>)}
                     </ul>
                 </div>}
             </div>

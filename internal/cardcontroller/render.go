@@ -14,7 +14,8 @@ import (
 
 var groupNames = map[string]string{
 	"claude": "Claude", "openai": "ChatGPT", "youtube": "YouTube", "telegram": "Telegram",
-	"discord": "Discord", "spotify": "Spotify", "github": "GitHub", "steam": "Steam",
+	"analytics": "Аналитика и диагностика",
+	"discord":   "Discord", "spotify": "Spotify", "github": "GitHub", "steam": "Steam",
 	"playstation": "PlayStation", "xbox": "Xbox", "instagram": "Instagram", "whatsapp": "WhatsApp",
 	"facebook": "Facebook", "netflix": "Netflix", "twitch": "Twitch", "disney": "Disney+",
 	"primevideo": "Prime Video", "amazon": "Amazon", "twitter": "X (Twitter)", "hulu": "Hulu",
@@ -323,7 +324,20 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		}
 		p.doc["listeners"] = kept
 	}
+	// Explicit direct exceptions keep their priority for telemetry. Claude's
+	// protected classifiers still run before the original exceptions below.
+	head := 0
+	var analyticsBypasses []string
+	for _, rule := range original {
+		fields, target := targetPart(rule)
+		if fields[target] != "DIRECT" || fields[0] == "MATCH" || protectedRouting && !protectedDirectRule(fields, target) {
+			break
+		}
+		analyticsBypasses = append(analyticsBypasses, "("+ruleCondition(fields, target)+")")
+		head++
+	}
 	priority := []string{}
+	var analyticsRules, dedicatedRules []string
 	var specific []string
 	earlierDomains := map[string]bool{}
 	autoDefaults := p.doc[serviceAutoKey] == true
@@ -388,8 +402,17 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		if id == "google" && p.assigned["youtube"] == "" {
 			withoutYouTube = youtubeCondition(services, original)
 		}
-		destination := &priority
+		baseDestination := &priority
+		if id == "analytics" {
+			baseDestination = &analyticsRules
+		}
+		destination := baseDestination
 		add := func(r string) {
+			if id == "analytics" && !strings.HasPrefix(r, "IN-NAME,") && len(analyticsBypasses) > 0 {
+				fields, end := targetPart(r)
+				exclusions := "NOT,((OR,(" + strings.Join(analyticsBypasses, ",") + ")))"
+				r = "AND,((" + ruleCondition(fields, end) + "),(" + exclusions + "))," + fields[end]
+			}
 			if withoutYouTube != "" && !strings.HasPrefix(r, "IN-NAME,") {
 				fields, end := targetPart(r)
 				r = "AND,((" + ruleCondition(fields, end) + "),(" + withoutYouTube + "))," + fields[end]
@@ -422,7 +445,9 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 			}
 		}
 		if forced[id] {
+			destination = &dedicatedRules
 			add("IN-NAME," + serviceInbound(id) + "," + dedicatedGroup(id))
+			destination = baseDestination
 		}
 		if id == "claude" || autoDefaults {
 			for _, cidr := range xkeen.ServiceNetworks(id) {
@@ -443,11 +468,15 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 					}
 				}
 				add("DOMAIN-SUFFIX," + suffix + "," + name)
-				destination = &priority
+				destination = baseDestination
+			} else if host, ok := strings.CutPrefix(domain, "full:"); ok {
+				add("DOMAIN," + host + "," + name)
 			}
 		}
 		if serviceLists.Enabled {
-			add("RULE-SET," + serviceProviderName(id) + "," + name)
+			if _, available := serviceLists.Files[id]; available {
+				add("RULE-SET," + serviceProviderName(id) + "," + name)
+			}
 			if id == "openai" {
 				for _, host := range openAISharedDomains {
 					add("DOMAIN," + host + "," + name)
@@ -482,14 +511,6 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	// The owner's leading direct exceptions retain their original priority
 	// over ordinary service cards. Claude has an explicit no-direct policy.
 	// A catch-all DIRECT remains at its original default boundary.
-	head := 0
-	for _, rule := range original {
-		fields, target := targetPart(rule)
-		if fields[target] != "DIRECT" || fields[0] == "MATCH" || protectedRouting && !protectedDirectRule(fields, target) {
-			break
-		}
-		head++
-	}
 	rules := make([]string, 0, len(priority)+len(original))
 	if domainRules := domainPolicyRules(p.doc); len(domainRules) > 0 {
 		name := serviceGuardName("quic")
@@ -497,6 +518,11 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		expected[name] = "REJECT"
 		rules = append(rules, domainRules...)
 	}
+	// An application explicitly using its own authenticated proxy retains the
+	// whole-application route. Shared collectors use the analytics card only
+	// for normal transparent traffic, before overlapping app domain datasets.
+	rules = append(rules, dedicatedRules...)
+	rules = append(rules, analyticsRules...)
 	rules = append(rules, priority[:claudeRuleCount]...)
 	rules = append(rules, original[:head]...)
 	rules = append(rules, specific...)
@@ -662,6 +688,16 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 	}
 
 	domains := map[string]string{}
+	exactDomains := map[string]string{}
+	var analyticsMatches func(string) bool
+	if _, changed := changes["analytics"]; changed {
+		match, err := c.analyticsMatcher(p)
+		if err != nil {
+			failed["analytics"] = true
+		} else {
+			analyticsMatches = match
+		}
+	}
 	inbounds := map[string]string{}
 	type network struct {
 		id     string
@@ -674,6 +710,8 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 		for _, domain := range service.Domains {
 			if suffix, ok := strings.CutPrefix(domain, "domain:"); ok && domains[suffix] == "" {
 				domains[suffix] = id
+			} else if host, ok := strings.CutPrefix(domain, "full:"); ok && exactDomains[host] == "" {
+				exactDomains[host] = id
 			}
 		}
 		if id == "claude" || p.doc[serviceAutoKey] == true {
@@ -708,7 +746,15 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 		id := inbounds[flow.Metadata.InboundName]
 		if id == "" {
 			for _, name := range []string{flow.Metadata.SniffHost, flow.Metadata.Host} {
-				for host := strings.ToLower(strings.TrimSuffix(name, ".")); host != ""; {
+				host := strings.ToLower(strings.TrimSuffix(name, "."))
+				if analyticsMatches != nil && analyticsMatches(host) {
+					id = "analytics"
+					break
+				}
+				if id = exactDomains[host]; id != "" {
+					break
+				}
+				for host != "" {
 					if id = domains[host]; id != "" {
 						break
 					}
@@ -720,7 +766,7 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 			}
 			if ip, err := netip.ParseAddr(flow.Metadata.DestinationIP); err == nil {
 				for _, net := range networks {
-					if net.prefix.Contains(ip) && (id == "" || net.id == "claude") {
+					if net.prefix.Contains(ip) && (id == "" || net.id == "claude" && id != "analytics") {
 						id = net.id
 					}
 				}
