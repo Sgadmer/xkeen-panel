@@ -1,6 +1,7 @@
 package cardcontroller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -190,11 +191,14 @@ func TestServiceListsDownloadLeavesStatusResponsive(t *testing.T) {
 	}()
 	select {
 	case status := <-read:
-		if !status.Updating || status.Enabled {
+		if !status.Updating || !status.Enabled || status.Ready {
 			t.Fatal("pending download published an active policy", status)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("public source outage blocks status reads")
+	}
+	if status, err := c.EnsureServiceLists(ctx); err == nil || !status.Updating || status.Ready {
+		t.Fatal("a second maintenance tick started a simultaneous download", status, err)
 	}
 	cancel()
 	if err := <-done; err == nil {
@@ -209,15 +213,22 @@ func TestServiceListsDownloadLeavesStatusResponsive(t *testing.T) {
 type serviceListTestTransport struct {
 	fallback http.RoundTripper
 	fail     atomic.Bool
+	changed  atomic.Bool
+	requests atomic.Int32
 }
 
 func (t *serviceListTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.URL.Host == "raw.githubusercontent.com" {
+		t.requests.Add(1)
 		if t.fail.Load() {
 			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("upstream unavailable")), Header: http.Header{}}, nil
 		}
 		tag := strings.TrimSuffix(filepath.Base(r.URL.Path), ".list")
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("+." + strings.ReplaceAll(tag, "!", "") + ".fixture\n")), Header: http.Header{}}, nil
+		body := "+." + strings.ReplaceAll(tag, "!", "") + ".fixture\n"
+		if t.changed.Load() {
+			body += "+.new.fixture\n"
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
 	}
 	return t.fallback.RoundTrip(r)
 }
@@ -282,9 +293,8 @@ func TestServiceListsRealMihomoPolicyAndLastGoodCache(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	on := true
-	status, err := c.UpdateServiceLists(ctx, &on, false)
-	if err != nil || !status.Enabled || status.Sources != len(serviceListTags) || status.Domains != len(serviceListTags) {
+	status, err := c.EnsureServiceLists(ctx)
+	if err != nil || !status.Enabled || !status.Ready || status.Sources != len(serviceListTags) || status.Domains != len(serviceListTags) {
 		t.Fatalf("status=%+v err=%v", status, err)
 	}
 	p, err = c.read()
@@ -313,6 +323,37 @@ func TestServiceListsRealMihomoPolicyAndLastGoodCache(t *testing.T) {
 	if directHits.Load() != baselineHits {
 		t.Fatal("protected requests leaked directly")
 	}
+	// A legacy cache may have been disabled by an old panel. Reactivate it
+	// without using the network or changing any card's saved destination.
+	info, err := readServiceLists(p.doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignments := p.assigned
+	info.Enabled = false
+	_, err = c.apply(ctx, "", "", func(candidate *profile) error {
+		if err := configureDomainPolicy(candidate.doc, false); err != nil {
+			return err
+		}
+		metadata, _ := json.Marshal(info)
+		var value map[string]interface{}
+		_ = json.Unmarshal(metadata, &value)
+		candidate.doc[serviceListsKey] = value
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := transport.requests.Load()
+	transport.fail.Store(true)
+	status, err = c.EnsureServiceLists(ctx)
+	if err != nil || !status.Ready || transport.requests.Load() != requested {
+		t.Fatalf("legacy cache was not enabled without downloading: %+v %v", status, err)
+	}
+	p, err = c.read()
+	if err != nil || !reflect.DeepEqual(p.assigned, assignments) {
+		t.Fatal("legacy migration changed service assignments", err)
+	}
 	before, _ := os.ReadFile(path)
 	transport.fail.Store(true)
 	if _, err := c.UpdateServiceLists(ctx, nil, true); err == nil {
@@ -323,16 +364,81 @@ func TestServiceListsRealMihomoPolicyAndLastGoodCache(t *testing.T) {
 		t.Fatal("source outage replaced the last working snapshot")
 	}
 	transport.fail.Store(false)
+	transport.changed.Store(true)
 	priorValidate := c.validate
 	c.validate = func(context.Context, string) error { return errors.New("rejected synthetic candidate") }
-	off := false
-	if _, err := c.UpdateServiceLists(ctx, &off, false); err == nil {
+	if _, err := c.UpdateServiceLists(ctx, nil, true); err == nil {
 		t.Fatal("invalid reload was accepted")
 	}
 	c.validate = priorValidate
 	after, _ = os.ReadFile(path)
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("rejected config changed the installed profile")
+	}
+}
+
+func TestServiceListsAlwaysOnStatusAndReadOnlyDisableRejection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	base := []byte(`{"mode":"rule","external-controller":"127.0.0.1:1","secret":"fixture","rules":["MATCH,DIRECT"]}`)
+	if err := os.WriteFile(path, base, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := New(path, dir, xkeen.Runtime{}, func() []models.Server { return nil })
+	status, err := c.ServiceListsStatus()
+	if err != nil || !status.Enabled || status.Ready {
+		t.Fatalf("initial status=%+v err=%v", status, err)
+	}
+	off := false
+	if _, err := c.UpdateServiceLists(context.Background(), &off, false); err == nil {
+		t.Fatal("service lists could be disabled")
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(base, after) {
+		t.Fatal("status or rejected disabling mutated the profile")
+	}
+}
+
+func TestServiceListsDailyCadenceAndFailedInitialRetry(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached_%t", existing), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			base := map[string]interface{}{"mode": "rule", "external-controller": "127.0.0.1:1", "secret": "fixture", "rules": []string{"MATCH,DIRECT"}}
+			if existing {
+				metadata := serviceListFixture(t)
+				metadata["checked_at"], metadata["updated_at"] = time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339)
+				base[serviceListsKey] = metadata
+			}
+			raw, _ := json.Marshal(base)
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			c := New(path, dir, xkeen.Runtime{}, func() []models.Server { return nil })
+			transport := &serviceListTestTransport{}
+			transport.fail.Store(true)
+			c.http.Transport = transport
+			status, err := c.EnsureServiceLists(context.Background())
+			if existing {
+				if err != nil || !status.Ready || transport.requests.Load() != 0 {
+					t.Fatal("a fresh daily cache was unnecessarily downloaded", status, err)
+				}
+				on := true
+				if _, err := c.UpdateServiceLists(context.Background(), &on, false); err != nil || transport.requests.Load() != 0 {
+					t.Fatal("an old client's enable request bypassed the daily interval")
+				}
+			} else if err == nil || status.Ready || transport.requests.Load() != int32(len(serviceListTags)) {
+				t.Fatal("the initial cache was not attempted safely", status, err)
+			}
+			requests := transport.requests.Load()
+			if _, err := c.EnsureServiceLists(context.Background()); err != nil || transport.requests.Load() != requests {
+				t.Fatal("automatic maintenance bypassed the retry/daily interval", err)
+			}
+			after, _ := os.ReadFile(path)
+			if !bytes.Equal(raw, after) {
+				t.Fatal("a skipped/failed update changed the profile")
+			}
+		})
 	}
 }
 

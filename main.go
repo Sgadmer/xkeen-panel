@@ -24,6 +24,7 @@ import (
 	"xkeen-panel/internal/notifications"
 	"xkeen-panel/internal/server"
 	"xkeen-panel/internal/sse"
+	"xkeen-panel/internal/trafficjournal"
 	"xkeen-panel/internal/updater"
 	"xkeen-panel/internal/version"
 	"xkeen-panel/internal/xkeen"
@@ -301,6 +302,8 @@ func main() {
 	// HTTP server
 	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, eventBus, upd, panelSettings, frontendFS)
 	if cards != nil {
+		srv.History = trafficjournal.New(ctx, cfg.DataDir)
+		cards.SetTrafficRecorder(srv.History.Active, srv.History.Record)
 		go cards.RunGuardObserver(ctx)
 	}
 	if push, err := notifications.New(cfg.DataDir); err == nil {

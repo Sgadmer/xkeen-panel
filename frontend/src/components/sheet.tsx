@@ -17,12 +17,14 @@ export function Sheet({
     open,
     onClose,
     title,
+    closeLabel = 'Отмена',
     done,
     children,
 }: {
     open: boolean
     onClose: () => void
     title: string
+    closeLabel?: string
     done?: { label: string; onClick: () => void; disabled?: boolean }
     children: ReactNode
 }) {
@@ -155,7 +157,7 @@ export function Sheet({
                             onClick={onClose}
                             className='min-h-11 cursor-pointer justify-self-start px-1 text-[17px] text-tint'
                         >
-                            Отмена
+                            {closeLabel}
                         </button>
                         <h2 className='text-[17px] font-semibold tracking-[-0.43px]'>
                             {title}

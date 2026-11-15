@@ -53,12 +53,14 @@ var openAISharedDomains = []string{
 
 type ServiceListsStatus struct {
 	Enabled            bool   `json:"enabled"`
+	Ready              bool   `json:"ready"`
 	Updating           bool   `json:"updating"`
 	Source             string `json:"source"`
 	Sources            int    `json:"sources"`
 	Domains            int    `json:"domains"`
 	UpdatedAt          string `json:"updated_at,omitempty"`
 	CheckedAt          string `json:"checked_at,omitempty"`
+	NextCheckAt        string `json:"next_check_at,omitempty"`
 	Error              string `json:"error,omitempty"`
 	SharedDependencies string `json:"shared_dependencies"`
 }
@@ -173,11 +175,15 @@ func (info serviceListsCache) status(problem string) ServiceListsStatus {
 	for _, file := range info.Files {
 		n += file.Count
 	}
-	return ServiceListsStatus{
-		Enabled: info.Enabled, Source: "MetaCubeX / v2fly", Sources: len(info.Files), Domains: n,
+	status := ServiceListsStatus{
+		Enabled: true, Ready: info.Enabled && len(info.Files) == len(serviceListTags), Source: "MetaCubeX / v2fly", Sources: len(info.Files), Domains: n,
 		UpdatedAt: info.UpdatedAt, CheckedAt: info.CheckedAt, Error: problem,
 		SharedDependencies: "Общие адреса оплаты RevenueCat, входа WorkOS и голосовой связи LiveKit идут через сервер ChatGPT. Этими адресами могут пользоваться и другие приложения. Claude сохраняет свой отдельный маршрут.",
 	}
+	if checked, err := time.Parse(time.RFC3339, info.CheckedAt); err == nil {
+		status.NextCheckAt = checked.Add(serviceListInterval).Format(time.RFC3339)
+	}
+	return status
 }
 
 func (c *Controller) ServiceListsStatus() (ServiceListsStatus, error) {
@@ -188,14 +194,36 @@ func (c *Controller) ServiceListsStatus() (ServiceListsStatus, error) {
 		return ServiceListsStatus{}, err
 	}
 	info, err := readServiceLists(p.doc)
-	status := info.status(c.serviceListsError)
-	status.Updating = c.serviceListsUpdating
+	status := c.serviceListStatus(info, c.serviceListsError)
 	return status, err
 }
 
+func (c *Controller) serviceListStatus(info serviceListsCache, problem string) ServiceListsStatus {
+	status := info.status(problem)
+	status.Updating = c.serviceListsUpdating
+	checked, _ := time.Parse(time.RFC3339, info.CheckedAt)
+	now := time.Now().UTC()
+	if !status.Ready || now.Sub(checked) >= serviceListInterval {
+		next := c.serviceListsAttempt.Add(5 * time.Minute)
+		if c.serviceListsAttempt.IsZero() || next.Before(now) {
+			next = now
+		}
+		status.NextCheckAt = next.Format(time.RFC3339)
+	}
+	return status
+}
+
+// EnsureServiceLists keeps the classifier datasets active independently of the
+// routing mode and browser. A legacy disabled cache is reactivated without a
+// download; an overdue cache is refreshed on the following maintenance tick.
+func (c *Controller) EnsureServiceLists(ctx context.Context) (ServiceListsStatus, error) {
+	return c.UpdateServiceLists(ctx, nil, false)
+}
+
 // A failed download, an unexpected source format or a rejected reload keeps
-// every old file and the previous live policy. Maintenance can call this with
-// nil,false: actual network work runs once a day, with a retry delay on errors.
+// every old file and the previous live policy. nil enables automatic daily
+// maintenance; only an explicit refresh bypasses its interval and retry delay.
+// enabled=true is retained for older clients; disabling is no longer allowed.
 func (c *Controller) UpdateServiceLists(ctx context.Context, enabled *bool, force bool) (ServiceListsStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -207,36 +235,36 @@ func (c *Controller) UpdateServiceLists(ctx context.Context, enabled *bool, forc
 	if err != nil {
 		return ServiceListsStatus{}, err
 	}
+	if enabled != nil && !*enabled {
+		return c.serviceListStatus(old, c.serviceListsError), errors.New("списки сервисов обновляются автоматически; отключение недоступно")
+	}
 	if c.serviceListsUpdating {
-		status := old.status(c.serviceListsError)
+		status := c.serviceListStatus(old, c.serviceListsError)
 		status.Updating = true
 		return status, errors.New("списки сервисов уже обновляются")
 	}
 	if err := c.finishServiceListsDrain(ctx, p, old); err != nil {
 		c.serviceListsError = err.Error()
-		return old.status(c.serviceListsError), err
+		return c.serviceListStatus(old, c.serviceListsError), err
 	}
 	next := old
-	if enabled != nil {
-		next.Enabled = *enabled
-	}
-	if !next.Enabled && !force && (!old.Enabled || enabled == nil) {
-		return old.status(c.serviceListsError), nil
-	}
+	next.Enabled = true
 	now := time.Now().UTC()
 	checked, _ := time.Parse(time.RFC3339, old.CheckedAt)
-	if enabled == nil && !force && now.Sub(checked) < serviceListInterval {
-		return old.status(c.serviceListsError), nil
+	hasCache := len(old.Files) == len(serviceListTags)
+	download := force || !hasCache || old.Enabled && now.Sub(checked) >= serviceListInterval
+	if !download && old.Enabled {
+		return c.serviceListStatus(old, c.serviceListsError), nil
 	}
-	if enabled == nil && !force && !c.serviceListsAttempt.IsZero() && now.Sub(c.serviceListsAttempt) < 5*time.Minute {
-		return old.status(c.serviceListsError), nil
+	if download && !force && !c.serviceListsAttempt.IsZero() && now.Sub(c.serviceListsAttempt) < 5*time.Minute {
+		return c.serviceListStatus(old, c.serviceListsError), nil
 	}
 	fail := func(err error) (ServiceListsStatus, error) {
 		c.serviceListsError = err.Error()
-		return old.status(c.serviceListsError), err
+		return c.serviceListStatus(old, c.serviceListsError), err
 	}
 	dir := filepath.Dir(c.path)
-	if next.Enabled || force {
+	if download {
 		c.serviceListsAttempt = now
 		// Downloading public datasets does not own the routing transaction.
 		// Status/diagnostics and unrelated edits remain usable during an outage.
@@ -254,7 +282,7 @@ func (c *Controller) UpdateServiceLists(ctx context.Context, enabled *bool, forc
 			return fail(err)
 		}
 		if !reflect.DeepEqual(current, old) {
-			return current.status(c.serviceListsError), errors.New("списки сервисов изменены параллельно; повторите обновление")
+			return c.serviceListStatus(current, c.serviceListsError), errors.New("списки сервисов изменены параллельно; повторите обновление")
 		}
 		if downloadErr != nil {
 			return fail(downloadErr)
@@ -302,11 +330,11 @@ func (c *Controller) UpdateServiceLists(ctx context.Context, enabled *bool, forc
 	}
 	current, err := c.read()
 	if err != nil {
-		return next.status(err.Error()), err
+		return c.serviceListStatus(next, err.Error()), err
 	}
 	if err := c.finishServiceListsDrain(ctx, current, next); err != nil {
 		c.serviceListsError = err.Error()
-		return next.status(c.serviceListsError), err
+		return c.serviceListStatus(next, c.serviceListsError), err
 	}
 	for id, file := range old.Files {
 		if file.Hash != next.Files[id].Hash {
@@ -314,7 +342,7 @@ func (c *Controller) UpdateServiceLists(ctx context.Context, enabled *bool, forc
 		}
 	}
 	c.serviceListsError = ""
-	return next.status(""), nil
+	return c.serviceListStatus(next, ""), nil
 }
 
 func (c *Controller) cleanServiceListCandidates(next, old serviceListsCache) {

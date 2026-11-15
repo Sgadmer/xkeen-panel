@@ -16,6 +16,7 @@ import (
 	"xkeen-panel/internal/monitor"
 	"xkeen-panel/internal/notifications"
 	"xkeen-panel/internal/sse"
+	"xkeen-panel/internal/trafficjournal"
 	"xkeen-panel/internal/updater"
 	"xkeen-panel/internal/xkeen"
 
@@ -24,6 +25,7 @@ import (
 )
 
 type Server struct {
+	History       *trafficjournal.Manager
 	Notifications *notifications.Manager
 	Lifetime      context.Context
 	Cards         *cardcontroller.Controller
@@ -91,6 +93,11 @@ func (s *Server) Handler() http.Handler {
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool)
 	handlers.Cards = s.Cards
+	handlers.History = s.History
+	if s.History != nil {
+		s.History.SetDeviceProvider(devicesHandler.TrafficIdentities)
+		go s.History.Run(lifetime)
+	}
 	handlers.Checks = sse.NewProbeJobs(s.subscription, xkeen.ProbeOptions{Context: lifetime, StateDir: s.config.DataDir, Concurrency: s.config.ProbeConcurrency, Timeout: time.Duration(s.config.ProbeTimeoutMs) * time.Millisecond}, func(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
 		if s.Cards != nil {
 			return s.Cards.CheckServers(servers, options)
@@ -148,6 +155,7 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/status", handlers.HandleStatus)
 			r.Get("/diagnostics", api.NewDiagnosticsHandler(lifetime, s.Cards, devicesHandler))
+			handlers.MountTrafficHistory(r)
 			r.Get("/access", handlers.HandlePanelAccess)
 			if s.Notifications != nil {
 				s.Notifications.Mount(r)

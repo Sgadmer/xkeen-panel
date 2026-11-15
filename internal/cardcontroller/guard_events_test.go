@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"xkeen-panel/internal/trafficlog"
 	"xkeen-panel/internal/xkeen"
 )
 
@@ -144,6 +145,13 @@ func TestGuardStreamKeepsOnlyValidatedSanitizedEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := New(path, dir, xkeen.Runtime{}, nil)
+	archived := make(chan trafficlog.Entry, 128)
+	c.SetTrafficRecorder(func() bool { return true }, func(entry trafficlog.Entry) {
+		select {
+		case archived <- entry:
+		default:
+		}
+	})
 	live, err := c.read()
 	if err != nil {
 		t.Fatal(err)
@@ -224,6 +232,13 @@ func TestMihomoGuardObserverRecordsOnlyOwnedRejection(t *testing.T) {
 	}
 	defer func() { cancel(); _ = proc.Wait() }()
 	c := New(path, dir, xkeen.Runtime{}, nil)
+	archived := make(chan trafficlog.Entry, 128)
+	c.SetTrafficRecorder(func() bool { return true }, func(entry trafficlog.Entry) {
+		select {
+		case archived <- entry:
+		default:
+		}
+	})
 	live, err := c.read()
 	if err != nil {
 		t.Fatal(err)
@@ -261,11 +276,16 @@ func TestMihomoGuardObserverRecordsOnlyOwnedRejection(t *testing.T) {
 		_, _ = io.ReadFull(conn, reply[:])
 		_, _ = conn.Write([]byte("fixture"))
 	}
+	recorded := map[string]string{}
 	for {
 		send("ad-fixture.example")
 		send("guard-fixture.example")
 		send("missing-worker.example")
 		state := c.GuardEvents()
+		for len(archived) > 0 {
+			entry := <-archived
+			recorded[entry.Host] = entry.Kind
+		}
 		if len(state.Events) > 0 {
 			seen := map[string]bool{}
 			for _, event := range state.Events {
@@ -275,7 +295,7 @@ func TestMihomoGuardObserverRecordsOnlyOwnedRejection(t *testing.T) {
 				}
 				seen[event.Host] = true
 			}
-			if len(seen) == 2 {
+			if len(seen) == 2 && recorded["ad-fixture.example"] == "connection" && recorded["guard-fixture.example"] == "kill_switch" && recorded["missing-worker.example"] == "kill_switch" {
 				return
 			}
 		}

@@ -1,6 +1,7 @@
 package cardcontroller
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"io"
@@ -38,7 +39,7 @@ func TestMihomoRejectsUnsupportedUDPBeforeDirect(t *testing.T) {
 	}
 	blocked, control := receiver(), receiver()
 	p := profile{doc: map[string]interface{}{
-		"socks-port": local.Port, "mode": "rule", "allow-lan": false,
+		"socks-port": local.Port, "mode": "rule", "allow-lan": false, "bind-address": "127.0.0.1", "ipv6": false,
 		"proxies":      []interface{}{map[string]interface{}{"name": "test-tcp-only", "type": "http", "server": "127.0.0.1", "port": 1}},
 		"proxy-groups": []interface{}{map[string]interface{}{"name": "ChatGPT", "type": "select", "proxies": []string{"DIRECT"}}},
 		"rules":        []interface{}{"DST-PORT," + portOf(blocked.LocalAddr()) + ",ChatGPT", "MATCH,DIRECT"},
@@ -63,10 +64,18 @@ func TestMihomoRejectsUnsupportedUDPBeforeDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(core, "-d", dir, "-f", path)
+	var coreLog bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &coreLog, &coreLog
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { cmd.Process.Kill(); cmd.Wait() }()
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		if t.Failed() {
+			t.Logf("isolated core: %s", coreLog.String())
+		}
+	}()
 	send := func(dst *net.UDPConn) {
 		// Use a separate association/UDP sender for each case so the previous
 		// connection's NAT cache cannot determine the outcome.

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -162,6 +163,8 @@ func (c *Controller) readGuardStream(ctx context.Context, p profile) {
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 4096), 32<<10)
+	lastCheck := time.Time{}
+	fileInfo, _ := os.Stat(c.path)
 	for scanner.Scan() && ctx.Err() == nil {
 		var line struct {
 			Type    string `json:"type"`
@@ -170,20 +173,30 @@ func (c *Controller) readGuardStream(ctx context.Context, p profile) {
 		if json.Unmarshal(scanner.Bytes(), &line) != nil || len(line.Payload) > 8192 {
 			continue
 		}
+		// Reparse YAML only after publication of a changed configuration,
+		// rather than for every QUIC packet or archived connection.
+		if time.Since(lastCheck) > 500*time.Millisecond {
+			if info, err := os.Stat(c.path); err == nil && (fileInfo == nil || info.ModTime() != fileInfo.ModTime() || info.Size() != fileInfo.Size()) {
+				if fresh, err := c.read(); err == nil {
+					p, fileInfo = fresh, info
+				}
+			}
+			lastCheck = time.Now()
+		}
 		if !strings.Contains(line.Payload, cardPrefix) || line.Type == "info" &&
 			(!strings.Contains(line.Payload, "[REJECT]") || !guardRejectTag.MatchString(line.Payload) && !guardCardTag.MatchString(line.Payload)) ||
 			(line.Type == "warning" || line.Type == "warn" || line.Type == "error") && !guardDialLog.MatchString(line.Payload) {
+			c.recordTraffic(line.Type, line.Payload, p, nil)
 			continue
 		}
 		// Re-read after a candidate event: a preference or route can change
 		// while the long-lived core stream remains connected.
-		live, err := c.read()
-		if err != nil {
-			continue
-		}
-		if event, ok := parseGuardLog(line.Type, line.Payload, live); ok {
+		if event, ok := parseGuardLog(line.Type, line.Payload, p); ok {
 			event.At = time.Now()
 			c.guard.add(event)
+			c.recordTraffic(line.Type, line.Payload, p, &event)
+		} else {
+			c.recordTraffic(line.Type, line.Payload, p, nil)
 		}
 	}
 }

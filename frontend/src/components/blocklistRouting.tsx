@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Group, Row, Switch } from '@/components/ios'
+import { Group, Row } from '@/components/ios'
 import { api } from '@/lib/api'
 import { ServiceListsProtection } from '@/components/serviceListsProtection'
 
 type GeoPolicy = {
     enabled: boolean
+    mode?: 'protected' | 'blocklist' | 'custom'
+    protected_fallback?: boolean
     source: string
     domains: number
     prefixes: number
@@ -33,12 +35,32 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
     })
     const data = state.data
     const error = update.error?.message || state.error?.message || data?.error
+    const protectedMode = data?.mode === 'protected' || !data?.mode && !data?.enabled && data?.protected_fallback === true
     return <div className='flex flex-col gap-5'>
         <div id='service-lists'><ServiceListsProtection /></div>
-        <Group title='Маршруты Mihomo' footer='При смене режима открытые соединения могут переподключиться по новым правилам. Выключение возвращает прежний порядок правил профиля.'>
-            <Row label='VPN по списку блокировок' hint='Для сервиса с автовыбором или ручным маршрутом действует его карточка. Для остальных сайтов роутер сверяет адрес со списком Re:filter. Адреса из списка открываются через основной VPN, остальные — напрямую.'
-                trailing={data ? <Switch label='VPN по списку блокировок' checked={data.enabled} disabled={update.isPending}
-                    onChange={enabled => update.mutate(enabled)} /> : <span role='status' className='text-sm text-muted-foreground'>{state.isPending ? 'Загружаем…' : 'Нет данных'}</span>} />
+        <Group title='Остальные подключения' footer='Карточки сервисов и их kill switch работают в обоих режимах. Ваши прямые исключения сохраняются. При смене режима часть открытых соединений переподключится.'>
+            {data ? <fieldset disabled={update.isPending} className='divide-y divide-white/10' aria-label='Режим VPN'>
+                <label className='flex min-h-20 cursor-pointer items-center gap-3 py-3'>
+                    <input type='radio' name='routing-mode' value='protected' checked={protectedMode}
+                        onClick={() => { if (protectedMode) update.mutate(false) }} onChange={() => { if (!protectedMode) update.mutate(false) }} className='size-5 shrink-0 accent-indigo-500' />
+                    <span className='min-w-0 flex-1'>
+                        <span className='flex flex-wrap items-center gap-x-2 gap-y-1 text-[17px]'>Защищённый режим <span className='rounded-full bg-tint/10 px-2 py-0.5 text-xs font-medium text-tint'>Рекомендуется</span></span>
+                        <span className='mt-1 block text-[13px] text-muted-foreground'>Запросы, которые не удалось отнести к сервису, тоже идут через основной VPN.</span>
+                    </span>
+                </label>
+                <label className='flex min-h-20 cursor-pointer items-center gap-3 py-3'>
+                    <input type='radio' name='routing-mode' value='blocklist' checked={data.mode === 'blocklist' || !data.mode && data.enabled}
+                        onChange={() => update.mutate(true)} className='size-5 shrink-0 accent-indigo-500' />
+                    <span className='min-w-0 flex-1'>
+                        <span className='block text-[17px]'>Только по списку блокировок</span>
+                        <span className='mt-1 block text-[13px] text-muted-foreground'>Адреса из Re:filter идут через основной VPN. Остальные адреса без правила сервиса открываются напрямую.</span>
+                    </span>
+                </label>
+            </fieldset> : <p role='status' className='py-4 text-sm text-muted-foreground'>{state.isPending ? 'Загружаем режим…' : 'Не удалось прочитать режим'}</p>}
+            {data?.mode === 'custom' && <p role='status' className='py-3 text-[13px] text-warning'>Сейчас действуют собственные правила профиля. Выберите защищённый режим, чтобы неопознанные запросы тоже шли через VPN.</p>}
+            <p role={data?.enabled ? 'alert' : undefined} className={'py-3 text-[13px] leading-relaxed ' + (data?.enabled ? 'text-warning' : 'text-muted-foreground')}>
+                Приложения могут обращаться к новым адресам, которых ещё нет в правилах сервиса. Защищённый режим направит их через общий VPN. В режиме по списку такие запросы могут уйти напрямую — даже при включённом kill switch карточки.
+            </p>
         </Group>
         <Group title='Геобазы' footer='GeoSite проверяет имя сайта. GeoIP проверяет IP, когда имя определить не удалось. Это сохраняет прямой выход для обычных сайтов на общем IP с заблокированным сервисом.'>
             <Row label='Re:filter' hint='Список включает блокировки и сервисы с региональными ограничениями. Панель раз в минуту проверяет файлы на роутере и применяет новые правила. Свежие файлы должен скачивать XKeen или другой загрузчик.' />

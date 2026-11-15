@@ -107,6 +107,19 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	if err != nil {
 		return nil, err
 	}
+	_, protectedRouting, err := readProtectedRouting(p.doc)
+	if err != nil {
+		return nil, err
+	}
+	protectedRouting = protectedRouting && !registry.Enabled
+	if protectedRouting {
+		if err := validateProtectedExclusions(p.doc); err != nil {
+			return nil, err
+		}
+		if !validHash(p.assigned[defaultID]) {
+			return nil, errors.New("в защищённом режиме отсутствует общий VPN-маршрут")
+		}
+	}
 	if _, ownedProvider := p.doc[refilterKey]; ownedProvider {
 		if err := refilterProviders(p.doc, registry); err != nil {
 			return nil, err
@@ -234,7 +247,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		return directGroup
 	}
 	serviceTerminal := func(id string, protected bool) string {
-		if !protected || !serviceLists.Enabled {
+		if !protected || !serviceLists.Enabled && !protectedRouting {
 			return terminal(protected)
 		}
 		name := serviceGuardName(id)
@@ -472,7 +485,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	head := 0
 	for _, rule := range original {
 		fields, target := targetPart(rule)
-		if fields[target] != "DIRECT" || fields[0] == "MATCH" {
+		if fields[target] != "DIRECT" || fields[0] == "MATCH" || protectedRouting && !protectedDirectRule(fields, target) {
 			break
 		}
 		head++
@@ -489,7 +502,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	rules = append(rules, specific...)
 	rules = append(rules, priority[claudeRuleCount:]...)
 	defaultKey := p.assigned[defaultID]
-	if defaultKey != "" || registry.Enabled {
+	if defaultKey != "" || registry.Enabled || protectedRouting {
 		if registry.Enabled && defaultKey == "" && !native[defaultTarget] {
 			return nil, errors.New("для совпадений Re:filter сначала выберите основной VPN-сервер или пул")
 		}
@@ -497,6 +510,45 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		route := routeFor(defaultID, defaultTarget, policy.Enabled)
 		groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{route}})
 		expected[name] = route
+	}
+	if protectedRouting {
+		// The explicit panel mode owns the fallback. Keep deliberate named
+		// bypasses and blocks above it, and retain a lossless provider tail
+		// below the terminal MATCH. Generic DIRECT aliases and broad provider
+		// rules can no longer release an unidentified service request.
+		for _, rule := range original[head:] {
+			fields, end := targetPart(rule)
+			if fields[0] == "MATCH" {
+				continue
+			}
+			target := fields[end]
+			if target == "DIRECT" && protectedDirectRule(fields, end) {
+				fields[end] = terminal(false)
+			} else if manualBlocks[target] {
+				if target == "REJECT" {
+					fields[end] = rejectGroup
+				} else {
+					sum := sha256.Sum256([]byte(target))
+					name := fmt.Sprintf("%sprotected-owner-%x", cardPrefix, sum[:12])
+					if expected[name] == "" {
+						groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{target}})
+						expected[name] = target
+					}
+					fields[end] = name
+				}
+			} else {
+				continue
+			}
+			rules = append(rules, strings.Join(fields, ","))
+		}
+		for _, cidr := range []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "255.255.255.255/32", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8"} {
+			rules = append(rules, "IP-CIDR,"+cidr+","+terminal(false)+",no-resolve")
+		}
+		rules = append(rules, "MATCH,"+cardPrefix+defaultID, "MATCH,"+serviceTerminal(defaultID, policy.Enabled))
+		rules = append(rules, original[head:]...)
+		p.doc[stateKey] = p.assigned
+		p.doc["proxies"], p.doc["proxy-groups"], p.doc["rules"] = nodes, groups, rules
+		return expected, nil
 	}
 	if registry.Enabled {
 		// Keep the owner's base rules after a managed terminal MATCH. They

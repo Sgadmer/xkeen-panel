@@ -22,7 +22,13 @@ func (h *Handlers) mountRefilter(r chi.Router) {
 		write(w, state, err)
 	})
 	update := func(w http.ResponseWriter, r *http.Request, enabled *bool, force bool) {
-		state, err := h.Cards.UpdateRefilter(r.Context(), enabled, force)
+		var state cardcontroller.RefilterStatus
+		var err error
+		if enabled != nil && !*enabled && !force {
+			state, err = h.Cards.SetProtectedRouting(r.Context())
+		} else {
+			state, err = h.Cards.UpdateRefilter(r.Context(), enabled, force)
+		}
 		if err == nil && h.watchdog != nil {
 			go h.watchdog.CheckNow()
 		}

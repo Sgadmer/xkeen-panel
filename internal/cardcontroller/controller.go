@@ -38,6 +38,7 @@ type View struct {
 }
 
 type Controller struct {
+	traffic              *trafficRecorder
 	mu                   sync.Mutex
 	path                 string
 	stateDir             string

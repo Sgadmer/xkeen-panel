@@ -35,6 +35,10 @@ func (h *Handlers) mountServiceLists(r chi.Router) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Требуется значение enabled."})
 			return
 		}
+		if !*body.Enabled {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Списки сервисов обновляются автоматически. Отключать обновление не требуется."})
+			return
+		}
 		update(w, r, body.Enabled, false)
 	})
 	r.Post("/routing/service-lists/refresh", func(w http.ResponseWriter, r *http.Request) { update(w, r, nil, true) })

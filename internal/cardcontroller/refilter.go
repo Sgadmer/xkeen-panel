@@ -21,12 +21,15 @@ const refilterSites = "XKP-refilter-domains"
 const refilterIPs = "XKP-refilter-ip"
 
 type RefilterStatus struct {
-	Enabled   bool   `json:"enabled"`
-	Source    string `json:"source"`
-	Domains   int    `json:"domains"`
-	Prefixes  int    `json:"prefixes"`
-	UpdatedAt string `json:"updated_at,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Enabled                  bool   `json:"enabled"`
+	Mode                     string `json:"mode"`
+	ProtectedFallback        bool   `json:"protected_fallback"`
+	ActiveConnectionsPending bool   `json:"active_connections_pending,omitempty"`
+	Source                   string `json:"source"`
+	Domains                  int    `json:"domains"`
+	Prefixes                 int    `json:"prefixes"`
+	UpdatedAt                string `json:"updated_at,omitempty"`
+	Error                    string `json:"error,omitempty"`
 }
 
 type refilterCache struct {
@@ -58,7 +61,11 @@ func readRefilter(doc map[string]interface{}) (refilterCache, error) {
 }
 
 func (v refilterCache) status(problem string) RefilterStatus {
-	return RefilterStatus{v.Enabled, "Re:filter", v.Domains, v.Prefixes, v.UpdatedAt, problem}
+	mode := "custom"
+	if v.Enabled {
+		mode = "blocklist"
+	}
+	return RefilterStatus{Enabled: v.Enabled, Mode: mode, Source: "Re:filter", Domains: v.Domains, Prefixes: v.Prefixes, UpdatedAt: v.UpdatedAt, Error: problem}
 }
 
 func (c *Controller) RefilterStatus() (RefilterStatus, error) {
@@ -69,7 +76,10 @@ func (c *Controller) RefilterStatus() (RefilterStatus, error) {
 		return RefilterStatus{}, err
 	}
 	info, err := readRefilter(p.doc)
-	return info.status(c.refilterError), err
+	if _, _, modeErr := readProtectedRouting(p.doc); modeErr != nil {
+		return RefilterStatus{}, modeErr
+	}
+	return c.routingModeStatus(p, info.status(c.refilterError)), err
 }
 
 func refilterPath(name, hash string) string { return name + "-" + hash + ".txt" }
@@ -125,20 +135,23 @@ func (c *Controller) UpdateRefilter(ctx context.Context, enabled *bool, force bo
 	if err != nil {
 		return RefilterStatus{}, err
 	}
+	status := func(info refilterCache, problem string) RefilterStatus {
+		return c.routingModeStatus(p, info.status(problem))
+	}
 	next := old
 	if err := c.finishRefilterDrain(ctx, p, old); err != nil {
 		c.refilterError = err.Error()
-		return old.status(c.refilterError), err
+		return status(old, c.refilterError), err
 	}
 	if enabled != nil {
 		next.Enabled = *enabled
 	}
 	if !next.Enabled && !force && !old.Enabled {
-		return old.status(c.refilterError), nil
+		return status(old, c.refilterError), nil
 	}
 	fail := func(err error) (RefilterStatus, error) {
 		c.refilterError = err.Error()
-		return old.status(c.refilterError), err
+		return status(old, c.refilterError), err
 	}
 	dir := filepath.Dir(c.path)
 	if next.Enabled || force {
@@ -150,7 +163,7 @@ func (c *Controller) UpdateRefilter(ctx context.Context, enabled *bool, force bo
 		}
 		if !force && old.Enabled && old.Stamp == stamp {
 			c.refilterError = ""
-			return old.status(""), nil
+			return status(old, ""), nil
 		}
 		domains, err := geoip.ReadRefilter(site, true)
 		if err != nil {
@@ -204,9 +217,10 @@ func (c *Controller) UpdateRefilter(ctx context.Context, enabled *bool, force bo
 		if err != nil {
 			return fail(err)
 		}
+		p = current
 		if err = c.finishRefilterDrain(ctx, current, next); err != nil {
 			c.refilterError = err.Error()
-			return next.status(c.refilterError), err
+			return status(next, c.refilterError), err
 		}
 	}
 	for _, item := range []struct{ name, old, next string }{{refilterSites, old.SiteHash, next.SiteHash}, {refilterIPs, old.IPHash, next.IPHash}} {
@@ -215,7 +229,7 @@ func (c *Controller) UpdateRefilter(ctx context.Context, enabled *bool, force bo
 		}
 	}
 	c.refilterError = ""
-	return next.status(""), nil
+	return status(next, ""), nil
 }
 
 // c.apply may fail after the new file is already live. Inspect the installed

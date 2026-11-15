@@ -15,12 +15,14 @@ import (
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/monitor"
 	"xkeen-panel/internal/sse"
+	"xkeen-panel/internal/trafficjournal"
 	"xkeen-panel/internal/xkeen"
 
 	"github.com/go-chi/chi/v5"
 )
 
 type Handlers struct {
+	History      *trafficjournal.Manager
 	Cards        *cardcontroller.Controller
 	FaceID       *PanelFaceID
 	Checks       *sse.ProbeJobs

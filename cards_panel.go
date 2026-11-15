@@ -52,8 +52,11 @@ func maintainCardRoutes(ctx context.Context, controller *cardcontroller.Controll
 		if _, err := controller.UpdateRefilter(attempt, nil, false); err != nil && ctx.Err() == nil {
 			wd.Log("Re:filter: %v", err)
 		}
-		if _, err := controller.UpdateServiceLists(attempt, nil, false); err != nil && ctx.Err() == nil {
+		if _, err := controller.EnsureServiceLists(attempt); err != nil && ctx.Err() == nil {
 			wd.Log("Списки сервисов: %v", err)
+		}
+		if err := controller.FinishRoutingTransition(attempt); err != nil && ctx.Err() == nil {
+			wd.Log("Защищённый режим: %v", err)
 		}
 		if err := controller.Reconcile(attempt); err != nil && ctx.Err() == nil {
 			log.Print("Маршруты сервисов ожидают готовности локального контроллера.")

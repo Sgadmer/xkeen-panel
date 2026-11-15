@@ -5,7 +5,6 @@ import {
     IconChevronLeft,
     IconChevronRight,
     IconLink,
-    IconLoader2,
     IconLayersLinked,
     IconPencil,
     IconPlus,
@@ -744,10 +743,8 @@ function PoolRow({
 }
 
 function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
-    if (measuring) return <span className='inline-flex shrink-0 items-center text-tint' role='img' aria-label='Проверяем задержку'>
-        <IconLoader2 aria-hidden className='size-4 motion-safe:animate-spin' />
-    </span>
-    return <span className={cn('shrink-0 text-right text-[15px] tabular-nums', toneText[latencyTone(ms)])}>
+    if (measuring) return <span className='inline-block w-[4.5rem] shrink-0' aria-label='Проверяем задержку' />
+    return <span className={cn('inline-block w-[4.5rem] shrink-0 text-right text-[15px] tabular-nums', toneText[latencyTone(ms)])}>
         {ms > 0 ? `${ms} мс` : ms < 0 ? <span aria-label='Нет ответа' title='Нет ответа'>—</span> : ''}
     </span>
 }
