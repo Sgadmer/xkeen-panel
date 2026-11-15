@@ -218,10 +218,17 @@ type serviceListTestTransport struct {
 }
 
 func (t *serviceListTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.URL.Host == "raw.githubusercontent.com" {
+	if r.URL.Host == "raw.githubusercontent.com" || r.URL.String() == openAIVoiceURL {
 		t.requests.Add(1)
 		if t.fail.Load() {
 			return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("upstream unavailable")), Header: http.Header{}}, nil
+		}
+		if r.URL.String() == openAIVoiceURL {
+			body := `{"creationTime":"2026-01-01T00:00:00Z","prefixes":[{"ipv4Prefix":"198.51.100.1/32"}]}`
+			if t.changed.Load() {
+				body = `{"creationTime":"2026-01-02T00:00:00Z","prefixes":[{"ipv4Prefix":"198.51.100.2/32"}]}`
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
 		}
 		tag := strings.TrimSuffix(filepath.Base(r.URL.Path), ".list")
 		body := "+." + strings.ReplaceAll(tag, "!", "") + ".fixture\n"
@@ -294,7 +301,7 @@ func TestServiceListsRealMihomoPolicyAndLastGoodCache(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	status, err := c.EnsureServiceLists(ctx)
-	if err != nil || !status.Enabled || !status.Ready || status.Sources != len(serviceListTags) || status.Domains != len(serviceListTags) {
+	if err != nil || !status.Enabled || !status.Ready || status.Sources != len(serviceListTags) || status.Domains != len(serviceListTags)-1 || status.VoicePrefixes != 1 {
 		t.Fatalf("status=%+v err=%v", status, err)
 	}
 	p, err = c.read()

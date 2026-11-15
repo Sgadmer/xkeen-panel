@@ -33,6 +33,9 @@ func analyticsSnapshot(t *testing.T, dir string) map[string]interface{} {
 			data = "collector.anthropic.fixture\n+.collector.fixture\n"
 		}
 		file, err := normalizeServiceList([]byte(data))
+		if id == openAIVoiceListID {
+			file, err = normalizeOpenAIVoiceList([]byte(`{"creationTime":"2026-01-01T00:00:00Z","prefixes":[{"ipv4Prefix":"198.51.100.1/32"}]}`))
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -10,6 +10,7 @@ interface ServiceListsStatus {
     source: string
     sources: number
     domains: number
+    voice_prefixes?: number
     updated_at?: string
     checked_at?: string
     next_check_at?: string
@@ -35,12 +36,13 @@ export function ServiceListsProtection() {
     const data = state.data
     const busy = update.isPending || data?.updating === true
     const error = update.error?.message || state.error?.message || data?.error
-    return <Group title='Распознавание сервисов' footer='Списки помогают узнать сервис по адресу сайта. Общие адреса сбора аналитики и ошибок используют карточку «Аналитика и диагностика». Серверы покупок и входа, например RevenueCat и WorkOS, используют маршрут ChatGPT. Произвольный запрос без имени сайта роутер не может достоверно связать с приложением.'>
+    return <Group title='Распознавание сервисов' footer='Списки помогают узнать сервис по имени сайта или известному IP. Для голосового ChatGPT автоматически загружается официальный список IP. Общая аналитика использует свою карточку, RevenueCat и WorkOS — карточку ChatGPT. Произвольный неизвестный IP роутер не может достоверно связать с приложением.'>
         <Row label='Обновляемые списки сервисов' hint='Новые адреса скачиваются автоматически раз в сутки при любом режиме VPN. Выбранные серверы сохраняются. При ошибке продолжает работать прежняя база.'
             detail={data ? (busy ? 'Проверяем…' : 'Автоматически') : state.isPending ? 'Загружаем…' : 'Нет данных'} />
         {data && <>
             <Row label='Имена сайтов в соединениях' hint='Роутер распознаёт имя сайта при подключении. QUIC на портах 443 и 8443 блокируется: приложения обычно переходят на HTTPS, чтобы запрос не попал в чужой маршрут.' detail={data.ready === false ? 'Ожидаем базу' : 'Включено'} />
-            <Row label='База адресов' detail={`Списков: ${count.format(data.sources)} · правил: ${count.format(data.domains)}`} />
+            <Row label='База адресов' detail={`Списков: ${count.format(data.sources)} · правил: ${count.format(data.domains + (data.voice_prefixes || 0))}`} />
+            <Row label='Голосовой ChatGPT' hint='Известные голосовые IP используют сервер из карточки ChatGPT. Список обновляется раз в сутки; при ошибке сохраняется прежняя копия.' detail={data.voice_prefixes ? `${count.format(data.voice_prefixes)} сетей` : 'Ожидаем список'} />
             {data.source && <Row label='Источник' detail={data.source} />}
             {data.checked_at && <Row label='Последняя проверка' detail={new Date(data.checked_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}
             {data.next_check_at && <Row label='Следующая проверка' detail={new Date(data.next_check_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}

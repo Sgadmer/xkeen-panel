@@ -29,12 +29,16 @@ const serviceListsKey = "x-xkeen-panel-service-lists"
 const serviceListsVersion = 1
 const serviceListInterval = 24 * time.Hour
 const serviceListMaxBytes = 2 << 20
+const openAIVoiceListID = "openai-voice"
+const openAIVoiceURL = "https://openai.com/chatgpt-voice.json"
 
-// The same maintained domain datasets used by Xkeen-UI's Mihomo templates.
+// The maintained domain datasets used by Xkeen-UI's Mihomo templates, plus
+// OpenAI's official voice IP feed (downloaded and parsed separately).
 // Text is validated and installed as one immutable snapshot instead of letting
 // independent HTTP providers replace an active subset during an outage.
 var serviceListTags = map[string]string{
-	"claude": "anthropic", "openai": "openai", "analytics": "category-telemetry", "youtube": "youtube", "telegram": "telegram",
+	openAIVoiceListID: openAIVoiceListID,
+	"claude":          "anthropic", "openai": "openai", "analytics": "category-telemetry", "youtube": "youtube", "telegram": "telegram",
 	"discord": "discord", "spotify": "spotify", "github": "github", "steam": "steam",
 	"playstation": "playstation", "xbox": "xbox", "instagram": "instagram", "whatsapp": "whatsapp",
 	"facebook": "facebook", "netflix": "netflix", "twitch": "twitch", "disney": "disney",
@@ -58,6 +62,7 @@ type ServiceListsStatus struct {
 	Source             string `json:"source"`
 	Sources            int    `json:"sources"`
 	Domains            int    `json:"domains"`
+	VoicePrefixes      int    `json:"voice_prefixes"`
 	UpdatedAt          string `json:"updated_at,omitempty"`
 	CheckedAt          string `json:"checked_at,omitempty"`
 	NextCheckAt        string `json:"next_check_at,omitempty"`
@@ -80,6 +85,20 @@ type serviceListsCache struct {
 }
 
 func serviceProviderName(id string) string { return "XKP-service-" + id }
+
+func serviceListBehavior(id string) string {
+	if id == openAIVoiceListID {
+		return "ipcidr"
+	}
+	return "domain"
+}
+
+func serviceListLabel(id string) string {
+	if id == openAIVoiceListID {
+		return "голосового режима ChatGPT"
+	}
+	return groupNames[id]
+}
 
 func serviceGuardName(id string) string { return cardPrefix + "guard-" + id }
 
@@ -152,12 +171,12 @@ func readServiceLists(doc map[string]interface{}) (serviceListsCache, error) {
 	if !hasEnabled || err != nil || json.Unmarshal(data, &info) != nil || info.Version != serviceListsVersion || len(info.Files) > len(serviceListTags) {
 		return info, errors.New("повреждены настройки обновляемых списков сервисов")
 	}
-	// A panel upgrade must keep the last complete 24-service snapshot usable
-	// while the newly introduced telemetry dataset is still being downloaded.
+	// A panel upgrade must keep previous complete domain snapshots usable
+	// while the telemetry or voice dataset is still being downloaded.
 	// Every original dataset remains mandatory; an incomplete critical cache
 	// is never accepted as a legacy snapshot.
 	for id := range serviceListTags {
-		if _, found := info.Files[id]; !found && id != "analytics" {
+		if _, found := info.Files[id]; !found && id != "analytics" && id != openAIVoiceListID {
 			return info, errors.New("повреждены настройки обновляемых списков сервисов")
 		}
 	}
@@ -181,11 +200,13 @@ func readServiceLists(doc map[string]interface{}) (serviceListsCache, error) {
 
 func (info serviceListsCache) status(problem string) ServiceListsStatus {
 	n := 0
-	for _, file := range info.Files {
-		n += file.Count
+	for id, file := range info.Files {
+		if serviceListBehavior(id) == "domain" {
+			n += file.Count
+		}
 	}
 	status := ServiceListsStatus{
-		Enabled: true, Ready: info.Enabled && len(info.Files) == len(serviceListTags), Source: "MetaCubeX / v2fly", Sources: len(info.Files), Domains: n,
+		Enabled: true, Ready: info.Enabled && len(info.Files) == len(serviceListTags), Source: "MetaCubeX / v2fly / OpenAI", Sources: len(info.Files), Domains: n, VoicePrefixes: info.Files[openAIVoiceListID].Count,
 		UpdatedAt: info.UpdatedAt, CheckedAt: info.CheckedAt, Error: problem,
 		SharedDependencies: "Общие адреса аналитики, диагностики и проверки безопасности используют карточку «Аналитика и диагностика». Адреса оплаты RevenueCat, входа WorkOS и голосовой связи LiveKit идут через сервер ChatGPT. Одними адресами могут пользоваться разные приложения.",
 	}
@@ -302,7 +323,7 @@ func (c *Controller) UpdateServiceLists(ctx context.Context, enabled *bool, forc
 			hash, err := saveRuleFile(dir, serviceProviderName(id), file)
 			if err != nil {
 				c.cleanServiceListCandidates(next, old)
-				return fail(fmt.Errorf("не удалось сохранить список %s", groupNames[id]))
+				return fail(fmt.Errorf("не удалось сохранить список %s", serviceListLabel(id)))
 			}
 			next.Files[id] = serviceListFile{Hash: hash, Count: file.Count}
 			changed = changed || old.Files[id] != next.Files[id]
@@ -410,6 +431,9 @@ func (c *Controller) downloadServiceLists(ctx context.Context) (map[string]geoip
 
 func (c *Controller) downloadServiceList(ctx context.Context, id string) (geoip.RuleFile, error) {
 	url := "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/" + serviceListTags[id] + ".list"
+	if id == openAIVoiceListID {
+		url = openAIVoiceURL
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return geoip.RuleFile{}, err
@@ -417,19 +441,24 @@ func (c *Controller) downloadServiceList(ctx context.Context, id string) (geoip.
 	req.Header.Set("User-Agent", "XKeen-Panel-service-rules/1")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return geoip.RuleFile{}, fmt.Errorf("не удалось скачать список %s; сохранена прежняя база", groupNames[id])
+		return geoip.RuleFile{}, fmt.Errorf("не удалось скачать список %s; сохранена прежняя база", serviceListLabel(id))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return geoip.RuleFile{}, fmt.Errorf("источник списка %s ответил HTTP %d; сохранена прежняя база", groupNames[id], resp.StatusCode)
+		return geoip.RuleFile{}, fmt.Errorf("источник списка %s ответил HTTP %d; сохранена прежняя база", serviceListLabel(id), resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, serviceListMaxBytes+1))
 	if err != nil {
-		return geoip.RuleFile{}, fmt.Errorf("не удалось дочитать список %s", groupNames[id])
+		return geoip.RuleFile{}, fmt.Errorf("не удалось дочитать список %s", serviceListLabel(id))
 	}
-	file, err := normalizeServiceList(data)
+	var file geoip.RuleFile
+	if id == openAIVoiceListID {
+		file, err = normalizeOpenAIVoiceList(data)
+	} else {
+		file, err = normalizeServiceList(data)
+	}
 	if err != nil {
-		return geoip.RuleFile{}, fmt.Errorf("список %s имеет неожиданный формат; сохранена прежняя база", groupNames[id])
+		return geoip.RuleFile{}, fmt.Errorf("список %s имеет неожиданный формат; сохранена прежняя база", serviceListLabel(id))
 	}
 	return file, nil
 }
@@ -496,7 +525,7 @@ func serviceListProviders(doc map[string]interface{}, info serviceListsCache) er
 	for id, file := range info.Files {
 		name := serviceProviderName(id)
 		if info.Enabled {
-			providers[name] = map[string]interface{}{"type": "file", "behavior": "domain", "format": "text", "path": refilterPath(name, file.Hash)}
+			providers[name] = map[string]interface{}{"type": "file", "behavior": serviceListBehavior(id), "format": "text", "path": refilterPath(name, file.Hash)}
 		} else {
 			delete(providers, name)
 		}
@@ -523,7 +552,7 @@ func (a coreAPI) serviceListsReady(ctx context.Context, doc map[string]interface
 	}
 	for id, file := range info.Files {
 		provider := response.Providers[serviceProviderName(id)]
-		if provider.RuleCount != file.Count || !strings.EqualFold(provider.Behavior, "domain") {
+		if provider.RuleCount != file.Count || !strings.EqualFold(provider.Behavior, serviceListBehavior(id)) {
 			return false
 		}
 	}

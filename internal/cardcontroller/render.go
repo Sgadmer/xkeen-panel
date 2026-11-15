@@ -478,6 +478,9 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 				add("RULE-SET," + serviceProviderName(id) + "," + name)
 			}
 			if id == "openai" {
+				if _, available := serviceLists.Files[openAIVoiceListID]; available {
+					add("RULE-SET," + serviceProviderName(openAIVoiceListID) + "," + name + ",no-resolve")
+				}
 				for _, host := range openAISharedDomains {
 					add("DOMAIN," + host + "," + name)
 				}
@@ -704,6 +707,16 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 		prefix netip.Prefix
 	}
 	var networks []network
+	if _, changed := changes["openai"]; changed {
+		prefixes, err := c.openAIVoicePrefixes(p)
+		if err != nil {
+			failed["openai"] = true
+		} else {
+			for _, prefix := range prefixes {
+				networks = append(networks, network{"openai", prefix})
+			}
+		}
+	}
 	for _, service := range services {
 		id := service.ID
 		inbounds[serviceInbound(id)] = id

@@ -61,8 +61,20 @@ func (c *Controller) finishServiceListsDrain(ctx context.Context, p profile, sta
 		return errors.New("правила сервисов применены; проверка прежних соединений будет повторена")
 	}
 	known := map[string]bool{}
+	var networks []netip.Prefix
+	for _, cidr := range xkeen.ServiceNetworks("claude") {
+		networks = append(networks, netip.MustParsePrefix(cidr))
+	}
 	if len(snapshot.Connections) > 0 {
+		voice, err := c.openAIVoicePrefixes(p)
+		if err != nil {
+			return err
+		}
+		networks = append(networks, voice...)
 		for id, file := range state.Files {
+			if serviceListBehavior(id) != "domain" {
+				continue
+			}
 			path := filepath.Join(filepath.Dir(c.path), refilterPath(serviceProviderName(id), file.Hash))
 			info, err := os.Lstat(path)
 			if err != nil || !info.Mode().IsRegular() || info.Size() > serviceListMaxBytes {
@@ -81,7 +93,7 @@ func (c *Controller) finishServiceListsDrain(ctx context.Context, p profile, sta
 		}
 	}
 	for _, flow := range snapshot.Connections {
-		if !flow.Start.IsZero() && flow.Start.After(cutoff) || !serviceListsFlowAffected(flow, state.Enabled, known) {
+		if !flow.Start.IsZero() && flow.Start.After(cutoff) || !serviceListsFlowAffected(flow, state.Enabled, known, networks...) {
 			continue
 		}
 		if flow.ID == "" {
@@ -98,7 +110,7 @@ func (c *Controller) finishServiceListsDrain(ctx context.Context, p profile, sta
 	return nil
 }
 
-func serviceListsFlowAffected(flow connectionTracker, enabled bool, known map[string]bool) bool {
+func serviceListsFlowAffected(flow connectionTracker, enabled bool, known map[string]bool, networks ...netip.Prefix) bool {
 	// Dataset changes cannot change the route of a correctly tagged private
 	// application proxy. Keep an active call on that explicit whole-app path.
 	for id := range groupNames {
@@ -108,6 +120,13 @@ func serviceListsFlowAffected(flow connectionTracker, enabled bool, known map[st
 	}
 	if ip, err := netip.ParseAddr(flow.Metadata.DestinationIP); err == nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast()) {
 		return false
+	}
+	if ip, err := netip.ParseAddr(flow.Metadata.DestinationIP); enabled && err == nil {
+		for _, prefix := range networks {
+			if prefix.Contains(ip.Unmap()) {
+				return true
+			}
+		}
 	}
 	if enabled && strings.EqualFold(flow.Metadata.Network, "udp") && (flow.Metadata.DestinationPort == "443" || flow.Metadata.DestinationPort == "8443") {
 		return true
