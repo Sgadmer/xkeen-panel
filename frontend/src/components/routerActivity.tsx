@@ -21,6 +21,10 @@ type Activity = {
     connections: Flow[]
     services?: { id: string; name: string }[]
     connections_error?: string
+    guard?: {
+        running: boolean; complete: boolean; error?: string
+        events: { id: string; at: string; service_id?: string; device?: string; host?: string; port?: string; network: string; reason: string; count: number }[]
+    }
 }
 
 const clock = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -74,6 +78,7 @@ export function RouterActivity() {
     const devices = new Map<string, string>()
     for (const d of known) if (d.ip && d.active) devices.set(d.ip, d.name)
     for (const f of flows) if (f.device && !devices.has(f.device)) devices.set(f.device, '')
+    for (const event of data?.guard?.events ?? []) if (event.device && !devices.has(event.device)) devices.set(event.device, '')
     if (device && !devices.has(device)) devices.set(device, '')
     const input = search.trim().toLowerCase()
     const filtered = flows.filter(f => {
@@ -83,12 +88,40 @@ export function RouterActivity() {
         return [f.host, f.rule, f.service_id && services.get(f.service_id), ...f.route, location?.name, location?.source, location?.country, countryName(location?.country)]
             .some(s => s?.toLowerCase().includes(input))
     })
+    const guard = data?.guard
+    const guardEvents = (guard?.events ?? []).filter(event => {
+        if ((device && event.device !== device) || (service && event.service_id !== service)) return false
+        return !input || [event.host, event.device, event.service_id && services.get(event.service_id)]
+            .some(value => value?.toLowerCase().includes(input))
+    })
     const pageSize = 25
     const last = Math.max(0, Math.ceil(filtered.length / pageSize) - 1)
     const current = Math.min(page, last)
     useEffect(() => { setPage(0) }, [search, device, service])
     return <>
         <RouterMetrics system={sys} history={data?.history}/>
+        {guard && <Group title='Защита соединений' footer='Здесь показаны события из журнала Mihomo. Повторные попытки объединяются; история хранится в памяти панели 30 минут.'>
+            {(!guard.running || !guard.complete) && <Row label={guard.running ? 'Часть событий недоступна' : 'Наблюдение за защитой недоступно'}
+                hint={guard.error || 'Для полного журнала защиты в Mihomo нужен уровень сообщений «info».'} />}
+            {!guardEvents.length && <Row label={device || service || input ? 'Подходящих событий защиты нет' : 'Событий защиты пока нет'} />}
+            {guardEvents.slice(0, 12).map(event => <article key={event.id} className='min-w-0 py-3'>
+                <div className='flex items-start justify-between gap-2'>
+                    <strong className='flex min-w-0 items-center gap-2 break-all text-[15px]'>
+                        {event.service_id && <ServiceLogo id={event.service_id} className='size-5' />}
+                        <span>{event.reason === 'protocol_guard' ? 'QUIC заблокирован' : 'Kill switch'}{event.service_id && ' · ' + (event.service_id === 'default' ? 'Общий маршрут' : services.get(event.service_id) || event.service_id)}</span>
+                    </strong>
+                    <span className='shrink-0 text-xs text-muted-foreground'>{clock.format(Date.parse(event.at))}{event.count > 1 && ' · ×' + event.count}</span>
+                </div>
+                <p className='mt-1 break-words text-sm text-muted-foreground'>
+                    {event.device && (devices.get(event.device) || event.device)}{event.device && event.host && ' → '}{event.host}{event.port && ':' + event.port}{' · ' + event.network}
+                </p>
+                <p className={'mt-1 text-sm ' + (event.reason === 'protocol_guard' ? 'text-muted-foreground' : 'text-warning')}>
+                    {event.reason === 'protocol_guard' ? 'Приложение может перейти на обычное HTTPS-соединение.' : event.reason === 'vpn_unavailable' ?
+                        'Не удалось подключиться через выбранный VPN. Прямой выход запрещён.' : 'Защита остановила запрос. Прямой выход запрещён.'}
+                </p>
+            </article>)}
+            {guardEvents.length > 12 && <p className='py-2 text-xs text-muted-foreground'>Показаны последние 12 из {guardEvents.length} событий. Для поиска используйте фильтры ниже.</p>}
+        </Group>}
         <Group title='Соединения по устройствам' footer='Пунктиром отмечен текущий выбор пула Xray.'>
             <div className='grid gap-3 py-3 sm:grid-cols-2 lg:grid-cols-3'>
                 <label className='grid min-w-0 gap-1 text-sm text-muted-foreground'>Устройство

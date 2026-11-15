@@ -23,6 +23,10 @@ func (h *Handlers) MountMihomoCards(r chi.Router, host string) {
 		h.Cards.MountExclusions(r, h.config.DataDir)
 		h.mountMultiPools(r)
 		h.mountRefilter(r)
+		h.mountServiceLists(r)
+		r.Get("/kill-switch/events", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, http.StatusOK, h.Cards.GuardEvents())
+		})
 		r.Get("/kill-switch", func(w http.ResponseWriter, r *http.Request) {
 			policy, err := h.Cards.KillSwitch()
 			if err != nil {

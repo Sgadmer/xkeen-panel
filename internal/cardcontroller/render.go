@@ -87,6 +87,18 @@ func failoverName(scope, route string) string {
 }
 
 func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]cardEndpoint, defaultSourceAvailable bool) (map[string]string, error) {
+	serviceLists, err := readServiceLists(p.doc)
+	if err != nil {
+		return nil, err
+	}
+	if _, owned := p.doc[serviceListsKey]; owned {
+		if err := serviceListProviders(p.doc, serviceLists); err != nil {
+			return nil, err
+		}
+	}
+	if serviceLists.Enabled {
+		services = serviceListOrder(services)
+	}
 	policy, err := readKillSwitch(p.doc)
 	if err != nil {
 		return nil, err
@@ -116,6 +128,9 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 				return nil, errors.New("конфликт существующих правил карточек")
 			}
 			continue
+		}
+		if serviceLists.Enabled {
+			r = scopeDiscordRule(r)
 		}
 		original = append(original, r)
 	}
@@ -217,6 +232,17 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 			expected[directGroup] = "DIRECT"
 		}
 		return directGroup
+	}
+	serviceTerminal := func(id string, protected bool) string {
+		if !protected || !serviceLists.Enabled {
+			return terminal(protected)
+		}
+		name := serviceGuardName(id)
+		if _, exists := expected[name]; !exists {
+			groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{"REJECT"}})
+			expected[name] = "REJECT"
+		}
+		return name
 	}
 	probeURL := p.probeURL
 	if probeURL == "" {
@@ -363,7 +389,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 					condition := ruleCondition(fields, end)
 					combine := func(set string) []string {
 						predicate := "AND,((" + condition + "),(RULE-SET," + set + ")),"
-						return []string{predicate + name, predicate + terminal(protected)}
+						return []string{predicate + name, predicate + serviceTerminal(id, protected)}
 					}
 					registryDomainOverrides = append(registryDomainOverrides, combine(refilterSites)...)
 					registryIPOverrides = append(registryIPOverrides, combine(refilterIPs)...)
@@ -376,7 +402,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 				// terminates that path in REJECT before any owner DIRECT.
 				if key != directTarget {
 					fields, end := targetPart(r)
-					fields[end] = terminal(protected)
+					fields[end] = serviceTerminal(id, protected)
 					*destination = append(*destination, strings.Join(fields, ","))
 				}
 				seen[r] = true
@@ -405,6 +431,19 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 				}
 				add("DOMAIN-SUFFIX," + suffix + "," + name)
 				destination = &priority
+			}
+		}
+		if serviceLists.Enabled {
+			add("RULE-SET," + serviceProviderName(id) + "," + name)
+			if id == "openai" {
+				for _, host := range openAISharedDomains {
+					add("DOMAIN," + host + "," + name)
+				}
+			}
+			if id == "discord" {
+				for _, prefix := range []string{"5.200.14.128/25", "66.22.192.0/18", "138.128.136.0/21"} {
+					add(discordVoicePredicate("IP-CIDR,"+prefix+",no-resolve") + "," + name)
+				}
 			}
 		}
 		if autoDefaults {
@@ -439,6 +478,12 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		head++
 	}
 	rules := make([]string, 0, len(priority)+len(original))
+	if domainRules := domainPolicyRules(p.doc); len(domainRules) > 0 {
+		name := serviceGuardName("quic")
+		groups = append(groups, map[string]interface{}{"name": name, "type": "select", "proxies": []string{"REJECT"}})
+		expected[name] = "REJECT"
+		rules = append(rules, domainRules...)
+	}
 	rules = append(rules, priority[:claudeRuleCount]...)
 	rules = append(rules, original[:head]...)
 	rules = append(rules, specific...)
@@ -487,13 +532,13 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		}
 		route := cardPrefix + defaultID
 		rules = append(rules, registryDomainOverrides...)
-		rules = append(rules, "RULE-SET,"+refilterSites+","+route, "RULE-SET,"+refilterSites+","+terminal(policy.Enabled))
+		rules = append(rules, "RULE-SET,"+refilterSites+","+route, "RULE-SET,"+refilterSites+","+serviceTerminal(defaultID, policy.Enabled))
 		// Explicitly known names have already matched the domain database.
 		// An IP-only prefix on a shared CDN should not take over another host.
 		rules = append(rules, "DOMAIN-REGEX,.+,"+direct)
 		rules = append(rules, registryIPOverrides...)
 		rules = append(rules,
-			"RULE-SET,"+refilterIPs+","+route+",no-resolve", "RULE-SET,"+refilterIPs+","+terminal(policy.Enabled)+",no-resolve",
+			"RULE-SET,"+refilterIPs+","+route+",no-resolve", "RULE-SET,"+refilterIPs+","+serviceTerminal(defaultID, policy.Enabled)+",no-resolve",
 			"MATCH,"+direct)
 	}
 	found := false
@@ -523,7 +568,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		if parts[0] == "MATCH" && defaultKey != "" {
 			parts[end] = cardPrefix + defaultID
 			rules = append(rules, strings.Join(parts, ","))
-			parts[end] = terminal(policy.Enabled)
+			parts[end] = serviceTerminal(defaultID, policy.Enabled)
 			rules = append(rules, strings.Join(parts, ","))
 			found = true
 		} else if native[dst] && !policy.Enabled {

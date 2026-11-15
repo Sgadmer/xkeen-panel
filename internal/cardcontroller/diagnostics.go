@@ -97,7 +97,7 @@ func (f connectionTracker) project(names map[string]string) Connection {
 var diagnosticServiceTags = func() map[string]string {
 	tags := map[string]string{}
 	for id, name := range groupNames {
-		for _, tag := range []string{name, cardPrefix + id, cardPrefix + id + "-inherited", dedicatedGroup(id)} {
+		for _, tag := range []string{name, cardPrefix + id, cardPrefix + id + "-inherited", cardPrefix + "guard-" + id, dedicatedGroup(id)} {
 			tags[tag] = id
 		}
 	}
@@ -123,10 +123,12 @@ func (c *Controller) Connections(ctx context.Context) ([]Connection, error) {
 // sample and may have changed since this connection started.
 func (c *Controller) connectionRows(ctx context.Context, p profile, flows []connectionTracker, readMember func(context.Context, xkeen.Runtime, string, int) string) []Connection {
 	names := map[string]string{"DIRECT": "Напрямую", "REJECT": "Блокировка", "REJECT-DROP": "Блокировка", cardPrefix + defaultID: "Общий маршрут"}
+	names[cardPrefix+"guard-"+defaultID], names[cardPrefix+"guard-quic"] = "Kill switch", "Блокировка QUIC"
 	for id, display := range groupNames {
 		names[cardPrefix+id] = display
 		names[cardPrefix+id+"-inherited"] = display + " (по правилам)"
 		names[dedicatedGroup(id)] = display + " (прокси устройства)"
+		names[cardPrefix+"guard-"+id] = "Kill switch"
 	}
 	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()

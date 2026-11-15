@@ -38,22 +38,26 @@ type View struct {
 }
 
 type Controller struct {
-	mu                 sync.Mutex
-	path               string
-	stateDir           string
-	rt                 xkeen.Runtime
-	catalog            func() []models.Server
-	http               *http.Client
-	validate           func(context.Context, string) error
-	prepare            func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
-	pending            map[string]bool
-	autoFlowsChecked   bool
-	refilterError      string
-	avoidCountries     func() []string
-	autoAllowed        func(models.Server) bool
-	sourceProviderURLs func() map[string]string
-	autoPoolLimit      int
-	probeURL           string
+	mu                   sync.Mutex
+	path                 string
+	stateDir             string
+	rt                   xkeen.Runtime
+	catalog              func() []models.Server
+	http                 *http.Client
+	validate             func(context.Context, string) error
+	prepare              func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
+	pending              map[string]bool
+	autoFlowsChecked     bool
+	refilterError        string
+	serviceListsError    string
+	serviceListsAttempt  time.Time
+	serviceListsUpdating bool
+	avoidCountries       func() []string
+	autoAllowed          func(models.Server) bool
+	sourceProviderURLs   func() map[string]string
+	autoPoolLimit        int
+	probeURL             string
+	guard                guardJournal
 }
 
 // SetAutoPoolLimit uses the panel's existing router-wide capacity setting.
@@ -181,6 +185,12 @@ func (c *Controller) read() (profile, error) {
 		return p, errors.New("не удалось прочитать YAML Mihomo")
 	}
 	if _, err = readKillSwitch(p.doc); err != nil {
+		return p, err
+	}
+	if _, err = readServiceLists(p.doc); err != nil {
+		return p, err
+	}
+	if _, err = readDomainPolicy(p.doc); err != nil {
 		return p, err
 	}
 	if value, found := p.doc[serviceAutoKey]; found && value != true {
@@ -747,7 +757,7 @@ func (c *Controller) keepOriginal(raw []byte) error {
 // compiled into this configuration, before any pre-existing direct rule.
 func (a coreAPI) rulesReady(ctx context.Context, doc map[string]interface{}) bool {
 	rules, err := a.rules(ctx)
-	return err == nil && activeRulesMatch(rules, doc) && a.refilterReady(ctx, doc)
+	return err == nil && activeRulesMatch(rules, doc) && a.refilterReady(ctx, doc) && a.serviceListsReady(ctx, doc)
 }
 
 type liveRule struct {

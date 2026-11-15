@@ -300,6 +300,9 @@ func main() {
 
 	// HTTP server
 	srv := server.New(cfg, userManager, subManager, watchdog, detector, poolStore, sites, eventBus, upd, panelSettings, frontendFS)
+	if cards != nil {
+		go cards.RunGuardObserver(ctx)
+	}
 	if push, err := notifications.New(cfg.DataDir); err == nil {
 		srv.Notifications = push
 		go push.Run(ctx, func(ctx context.Context) notifications.Snapshot {
@@ -307,6 +310,7 @@ func main() {
 			s := notifications.Snapshot{Route: status.CurrentServer, Connected: status.Connected,
 				Checked: status.ProxyChecked && !status.Restarting && !status.LastCheck.IsZero()}
 			if cards != nil {
+				s.GuardEventID, s.GuardAt = cards.LatestGuardEvent()
 				s.Route = ""
 				if route, err := cards.Default(ctx); err == nil {
 					s.Route = route.Current

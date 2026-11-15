@@ -173,11 +173,12 @@ func (d *diagnosticsHandler) sample(ctx context.Context, sensors []string) {
 
 func (d *diagnosticsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	result := struct {
-		Load     routerLoad                  `json:"system"`
-		History  []routerLoad                `json:"history"`
-		Flows    []cardcontroller.Connection `json:"connections"`
-		Services []xkeen.ServiceName         `json:"services"`
-		Error    string                      `json:"connections_error,omitempty"`
+		Load     routerLoad                       `json:"system"`
+		History  []routerLoad                     `json:"history"`
+		Flows    []cardcontroller.Connection      `json:"connections"`
+		Services []xkeen.ServiceName              `json:"services"`
+		Error    string                           `json:"connections_error,omitempty"`
+		Guard    *cardcontroller.GuardObservation `json:"guard,omitempty"`
 	}{Flows: []cardcontroller.Connection{}, Services: xkeen.ServiceNames()}
 	d.mu.Lock()
 	result.History = append([]routerLoad(nil), d.history...)
@@ -188,6 +189,8 @@ func (d *diagnosticsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	if d.cards == nil {
 		result.Error = "Для просмотра соединений нужен контроллер Mihomo."
 	} else {
+		guard := d.cards.GuardEvents()
+		result.Guard = &guard
 		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()
 		flows, err := d.cards.Connections(ctx)

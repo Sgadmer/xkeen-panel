@@ -12,10 +12,12 @@ import (
 )
 
 type Snapshot struct {
-	Route     string
-	Checked   bool
-	Connected bool
-	Latest    string
+	Route        string
+	Checked      bool
+	Connected    bool
+	Latest       string
+	GuardEventID string
+	GuardAt      time.Time
 }
 
 type message struct {
@@ -37,6 +39,8 @@ func (p Preferences) allows(category string) bool {
 		return p.Update
 	case "health":
 		return p.Health
+	case "kill_switch":
+		return p.KillSwitch
 	}
 	return false
 }
@@ -48,12 +52,23 @@ type delivery struct {
 	attempts int
 }
 type transitions struct {
-	route  string
-	health string
+	route       string
+	health      string
+	guard       string
+	guardNotice time.Time
 }
 
 func (s *transitions) changes(now Snapshot) []message {
 	var out []message
+	if now.GuardEventID != "" && now.GuardEventID != s.guard {
+		s.guard = now.GuardEventID
+		// Repeated packets and failures of several routes form one short
+		// notification episode. The local diagnostic journal retains details.
+		if !now.GuardAt.IsZero() && (s.guardNotice.IsZero() || now.GuardAt.Sub(s.guardNotice) >= time.Minute) {
+			s.guardNotice = now.GuardAt
+			out = append(out, message{Kind: "kill_switch"})
+		}
+	}
 	if now.Route != "" {
 		if s.route != "" && now.Route != s.route {
 			out = append(out, message{Kind: "server"})

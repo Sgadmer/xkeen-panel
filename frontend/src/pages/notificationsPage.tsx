@@ -13,6 +13,7 @@ const events: { key: keyof Preferences; label: string; hint: string }[] = [
     { key: 'server', label: 'Смена сервера', hint: 'Изменился сервер общего маршрута' },
     { key: 'update', label: 'Обновление панели', hint: 'Появилась новая версия панели' },
     { key: 'health', label: 'Связь через VPN', hint: 'Общий маршрут перестал отвечать или восстановился' },
+    { key: 'kill_switch', label: 'Срабатывание Kill switch', hint: 'Не удалось использовать выбранный VPN, прямой выход запрещён. Не чаще одного уведомления в минуту' },
 ]
 const browserSubscription = async () => {
     if (!('serviceWorker' in navigator)) return null

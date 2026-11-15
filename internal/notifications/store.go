@@ -25,9 +25,10 @@ import (
 )
 
 type Preferences struct {
-	Server bool `json:"server"`
-	Update bool `json:"update"`
-	Health bool `json:"health"`
+	Server     bool `json:"server"`
+	Update     bool `json:"update"`
+	Health     bool `json:"health"`
+	KillSwitch bool `json:"kill_switch"`
 }
 
 type device struct {

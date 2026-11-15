@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Group, Row, Switch } from '@/components/ios'
 import { api } from '@/lib/api'
+import { ServiceListsProtection } from '@/components/serviceListsProtection'
 
 type GeoPolicy = {
     enabled: boolean
@@ -33,6 +34,7 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
     const data = state.data
     const error = update.error?.message || state.error?.message || data?.error
     return <div className='flex flex-col gap-5'>
+        <div id='service-lists'><ServiceListsProtection /></div>
         <Group title='Маршруты Mihomo' footer='При смене режима открытые соединения могут переподключиться по новым правилам. Выключение возвращает прежний порядок правил профиля.'>
             <Row label='VPN по списку блокировок' hint='Для сервиса с автовыбором или ручным маршрутом действует его карточка. Для остальных сайтов роутер сверяет адрес со списком Re:filter. Адреса из списка открываются через основной VPN, остальные — напрямую.'
                 trailing={data ? <Switch label='VPN по списку блокировок' checked={data.enabled} disabled={update.isPending}

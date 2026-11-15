@@ -256,6 +256,7 @@ export function ServiceRoutesPage() {
                 <PageTitle title='Маршруты сервисов' subtitle='Откройте «Маршрут» у нужного сервиса и выберите, как он будет выходить в интернет.' />
                 {order.services.length > 1 && <ServiceOrderControl services={order.services} save={order.save} />}
             </div>
+            {mihomo && <Link to='/settings/routing#service-lists' className='self-start text-sm text-tint'>Обновляемые списки и распознавание сервисов</Link>}
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
             {view && (

@@ -25,6 +25,7 @@ import { useStatus } from '@/hooks/usePanelData'
 import { SETUP_LATER_KEY, useSetupState } from '@/pages/welcomePage'
 import { statusInfo, toneDot, toneText } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useGuardNotifications } from '@/lib/notifications'
 
 const TABS: { to: string; label: string; icon: Icon; active: Icon }[] = [
     { to: '/', label: 'Главная', icon: IconShield, active: IconShieldFilled },
@@ -67,6 +68,7 @@ const shortLabels: Record<string, string> = {
 
 export function AppShell() {
     useEventSource()
+    useGuardNotifications()
     const { pathname } = useLocation()
     const status = useStatus()
     const s = status.data
