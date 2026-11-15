@@ -108,7 +108,7 @@ func TestVoiceRulesFollowSeparateCardsAndRetainTerminalGuards(t *testing.T) {
 	rules := namesOf(p.doc["rules"])
 	for _, pair := range [][2]string{
 		{"RULE-SET," + serviceProviderName(openAIVoiceListID) + "," + cardPrefix + "openai,no-resolve", "RULE-SET," + serviceProviderName(openAIVoiceListID) + "," + serviceGuardName("openai") + ",no-resolve"},
-		{"IP-CIDR,160.79.104.0/23," + cardPrefix + "claude,no-resolve", "IP-CIDR,160.79.104.0/23," + serviceGuardName("claude") + ",no-resolve"},
+		{"IP-CIDR,34.186.249.240/32," + cardPrefix + "claude,no-resolve", "IP-CIDR,34.186.249.240/32," + serviceGuardName("claude") + ",no-resolve"},
 	} {
 		at := slices.Index(rules, pair[0])
 		if at < 0 || at+1 >= len(rules) || rules[at+1] != pair[1] {
@@ -127,7 +127,7 @@ func TestVoiceRulesFollowSeparateCardsAndRetainTerminalGuards(t *testing.T) {
 }
 
 func TestVoiceTransitionFindsIPOnlyConnections(t *testing.T) {
-	prefixes := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8::/64"), netip.MustParsePrefix("160.79.104.10/32")}
+	prefixes := []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8::/64"), netip.MustParsePrefix("34.186.249.240/32")}
 	flow := func(ip, network, port string) connectionTracker {
 		var f connectionTracker
 		f.Metadata.DestinationIP, f.Metadata.Network, f.Metadata.DestinationPort = ip, network, port
@@ -141,7 +141,7 @@ func TestVoiceTransitionFindsIPOnlyConnections(t *testing.T) {
 		{flow("198.51.100.7", "tcp", "443"), true},
 		{flow("::ffff:198.51.100.7", "tcp", "443"), true},
 		{flow("2001:db8::9", "tcp", "443"), true},
-		{flow("34.186.249.240", "tcp", "443"), false},
+		{flow("34.186.249.240", "tcp", "443"), true},
 		{flow("198.51.101.7", "tcp", "443"), false},
 		{flow("34.186.249.241", "tcp", "443"), false},
 		{flow("192.168.1.1", "tcp", "443"), false},
@@ -311,7 +311,7 @@ func TestVoiceRealMihomoCardExitsAndNoDirectFallback(t *testing.T) {
 		}
 	}
 	check("198.51.100.10:443", "A")
-	check("160.79.104.10:443", "B")
+	check("34.186.249.240:443", "B")
 	check("direct-control.fixture:"+portOf(destination.Listener.Addr()), "direct")
 	p.assigned["openai"], p.assigned["claude"] = keyB, keyA
 	writeConfig()
@@ -319,13 +319,13 @@ func TestVoiceRealMihomoCardExitsAndNoDirectFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("198.51.100.10:443", "B")
-	check("160.79.104.10:443", "A")
+	check("34.186.249.240:443", "A")
 	// The local IP belongs to the synthetic voice provider. A fallback to
 	// DIRECT would reach destination and increment directHits.
 	check(destination.Listener.Addr().String(), "B")
 	exitB.Close()
 	check(destination.Listener.Addr().String(), "blocked")
-	check("160.79.104.10:443", "A")
+	check("34.186.249.240:443", "A")
 	check("direct-control.fixture:"+portOf(destination.Listener.Addr()), "direct")
 	got := directHits.Load()
 	if got != 2 {

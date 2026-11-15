@@ -51,7 +51,11 @@ func serviceGuardCommand(rt Runtime, command string, input []byte) bool {
 var serviceNetworks = map[string][]string{
 	// Anthropic publishes inbound API/Console prefixes separately from its
 	// outbound MCP addresses: https://platform.claude.com/docs/en/api/ip-addresses
-	"claude":   {"160.79.104.0/23", "153.61.224.0/22", "2607:6bc0::/48"},
+	"claude": {"160.79.104.0/23", "153.61.224.0/22", "2607:6bc0::/48",
+		// Observed native voice connection; independently captured by another
+		// user: https://github.com/Gufiye/Rule/commit/2f15b33f1a49b3240e492bee480de2dd3af7ba76
+		// This is one known host, not an official or exhaustive voice range.
+		"34.186.249.240/32"},
 	"telegram": {"149.154.160.0/20", "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22", "91.108.20.0/22", "91.108.56.0/22"},
 }
 
