@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconChevronDown, IconShield } from '@tabler/icons-react'
+import { AiRouteWarning } from '@/components/aiRouteWarning'
+import { aiServiceIds, isAiService } from '@/lib/aiServiceGroup'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { ServiceOrderControl, useServiceOrder } from '@/components/serviceOrder'
 import { PageTitle } from '@/components/ios'
@@ -219,6 +221,7 @@ export function ServiceRoutesPage() {
     const qc = useQueryClient()
     const avoidCountries = usePanelSettings().data?.avoid_countries
     const [notice, setNotice] = useState('')
+    const [warning, setWarning] = useState<{serviceId: string; serviceName: string; targetId: string; targetLabel: string; targetKind?: ServiceTarget['kind']} | null>(null)
     const key = ['service-routes']
     const query = useQuery({
         queryKey: key,
@@ -227,15 +230,17 @@ export function ServiceRoutesPage() {
         refetchOnWindowFocus: 'always',
     })
     const change = useMutation({
-        mutationFn: (selection: { service_id: string; target_id: string } | 'auto-default') =>
+        mutationFn: (selection: { service_id: string; target_id: string; ai_group?: boolean } | 'auto-default') =>
             selection === 'auto-default' ? api.post<ServiceRoutes>('/api/service-routes/auto-default')
-                : api.put<ServiceRoutes>('/api/service-routes', selection),
+                : selection.ai_group ? api.put<ServiceRoutes>('/api/service-routes/ai-group', { target_id: selection.target_id })
+                    : api.put<ServiceRoutes>('/api/service-routes', selection),
         onMutate: async () => { await qc.cancelQueries({ queryKey: key }) },
         onSuccess: async (view, selection) => {
             await qc.cancelQueries({ queryKey: key })
             qc.setQueryData(key, view)
             const service = selection !== 'auto-default' && view.services.find(item => item.id === selection.service_id)
-            const saved = selection === 'auto-default' ? 'Автовыбор включён' : 'Маршрут сохранён' + (service ? ' · ' + service.name : '')
+            setWarning(null)
+            const saved = selection !== 'auto-default' && selection.ai_group ? 'Один маршрут сохранён для AI и аналитики' : selection === 'auto-default' ? 'Автовыбор включён' : 'Маршрут сохранён' + (service ? ' · ' + service.name : '')
             setNotice(view.active_connections_pending ? saved + '. Проверяем прежние соединения.' : saved)
         },
         onError: () => { void qc.invalidateQueries({ queryKey: key }) },
@@ -256,15 +261,67 @@ export function ServiceRoutesPage() {
     const defaultServiceTarget = mihomo ? view.default_service_target : undefined
     const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries, defaultServiceTarget), [targets, scopes, avoidCountries, defaultServiceTarget])
 
+    const renderService = (service: Service) => {
+        if (!view) return null
+        const isClaude = service.id === 'claude'
+        const selected = view.targets.find(t => t.id === service.target)
+        const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service)
+        const busy = pendingService?.service_id === service.id || !!pendingService?.ai_group && isAiService(service.id)
+        const label = 'service-' + service.id
+        return (
+            <section key={service.id} className='min-w-0 rounded-card bg-card p-4' aria-labelledby={label}>
+                <div className='mb-3 flex items-center gap-3'>
+                    <span className='grid size-10 shrink-0 place-items-center'>
+                        <ServiceLogo id={service.id} className='size-8' />
+                    </span>
+                    <h2 id={label} className='font-semibold'>{service.name}</h2>
+                </div>
+                <label className='block text-sm text-muted-foreground' htmlFor={'vpn-' + service.id}>Маршрут</label>
+                <ServiceRoutePicker
+                    id={'vpn-' + service.id}
+                    serviceName={service.name}
+                    groups={options}
+                    value={(busy && pendingService ? pendingService.target_id : service.target) || ''}
+                    inheritedLabel={isClaude || (mihomo && !needsMigration) ? 'Выберите VPN' : 'По правилам роутера'}
+                    allowInherited={!isClaude && !mihomo}
+                    allowDirect={!isClaude && view.scope === 'mihomo'}
+                    disabled={change.isPending || !(view.guard_ready || (view.scope === 'mihomo' && view.controller_ready))}
+                    onSelect={targetId => {
+                        if (targetId === service.target) return
+                        setNotice('')
+                        change.reset()
+                        if (isAiService(service.id)) {
+                            const target = view?.targets.find(item => item.id === targetId)
+                            setWarning({serviceId: service.id, serviceName: service.name, targetId, targetLabel: target?.name || (targetId === 'direct' ? 'Напрямую' : 'Выбранный VPN'), targetKind: target?.kind})
+                        } else change.mutate({ service_id: service.id, target_id: targetId })
+                    }}
+                />
+                <p className='mt-1 min-h-5 truncate text-sm leading-5 text-muted-foreground' title={summary || undefined}>
+                    {busy ? 'Меняем маршрут…' : summary}
+                </p>
+                {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
+                <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
+                    protectionEnabled={claudeProtection} />
+            </section>
+        )
+    }
+
     return (
         <>
             <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-1'>
                 <PageTitle title='Маршруты сервисов' subtitle='Откройте «Маршрут» у нужного сервиса и выберите, как он будет выходить в интернет.' />
-                {order.services.length > 1 && <ServiceOrderControl services={order.services} save={order.save} />}
+                {order.services.length > 1 && <ServiceOrderControl services={order.services.filter(service => !isAiService(service.id))} save={order.save} />}
             </div>
             {mihomo && <Link to='/settings/routing#service-lists' className='self-start text-sm text-tint'>Обновляемые списки и распознавание сервисов</Link>}
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
+            {warning && <AiRouteWarning key={warning.serviceId + ':' + warning.targetId}
+                serviceName={warning.serviceName} targetLabel={warning.targetLabel} targetKind={warning.targetKind}
+                canApplyGroup={!!mihomo && warning.targetId !== 'direct' && !!warning.targetId && aiServiceIds.every(id => view?.services.some(service => service.id === id))}
+                busy={change.isPending} error={change.error?.message}
+                onCancel={() => { if (!change.isPending) { setWarning(null); change.reset() } }}
+                onSingle={() => { if (!change.isPending) change.mutate({ service_id: warning.serviceId, target_id: warning.targetId }) }}
+                onGroup={() => { if (!change.isPending) change.mutate({ service_id: 'ai-group', target_id: warning.targetId, ai_group: true }) }} />}
             {view && (
                 <>
                     <div className='flex items-start gap-3 rounded-card bg-card p-4'>
@@ -294,45 +351,19 @@ export function ServiceRoutesPage() {
                             {change.isPending && change.variables === 'auto-default' ? 'Применяем…' : 'Применить'}
                         </button>
                     </div>}
+                    <section aria-labelledby='ai-group-title' className='rounded-[28px] border border-tint/30 bg-tint/5 p-3 sm:p-4'>
+                        <header className='mb-4 px-1'>
+                            <h2 id='ai-group-title' className='flex items-center gap-2 text-lg font-semibold'><IconShield aria-hidden className='size-5 text-tint' /> AI и аналитика</h2>
+                            <p className='mt-2 max-w-5xl text-sm leading-relaxed text-foreground/90'>Крайне рекомендуем выбрать один и тот же конфиг для всех четырёх карточек. AI-приложения и агенты отправляют служебные запросы, которые могут идти по правилам аналитики, а не самого AI-сервиса. Один сервер помогает сохранить одинаковый выход и уменьшить риск проблем с аккаунтом, особенно у Claude / Anthropic.</p>
+                            <p className='mt-3 max-w-5xl rounded-xl border border-warning/20 bg-warning/5 px-3 py-2 text-sm leading-relaxed'><strong className='font-semibold text-warning'>Если нужен голосовой чат.</strong> Для голоса ChatGPT и Claude подходят не все VPN-локации, даже если переписка работает. Иногда нужно попробовать несколько серверов. Если голос не нужен, выбирайте любую локацию, где нормально работает сам сервис.</p>
+                            <p className='mt-1 text-sm text-muted-foreground'>Для постоянного общего выхода выбирайте конкретный сервер: один пул может использовать разные узлы. Порядок этих карточек закреплён.</p>
+                        </header>
+                        <div className='grid gap-3 sm:grid-cols-2 2xl:grid-cols-4'>
+                            {aiServiceIds.flatMap(id => { const service = view.services.find(item => item.id === id); return service ? [renderService(service)] : [] })}
+                        </div>
+                    </section>
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
-                        {order.services.map(service => {
-                            const isClaude = service.id === 'claude'
-                            const selected = view.targets.find(t => t.id === service.target)
-                            const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service)
-                            const busy = pendingService?.service_id === service.id
-                            const label = 'service-' + service.id
-                            return (
-                                <section key={service.id} className='min-w-0 rounded-card bg-card p-4' aria-labelledby={label}>
-                                    <div className='mb-3 flex items-center gap-3'>
-                                        <span className='grid size-10 shrink-0 place-items-center'>
-                                            <ServiceLogo id={service.id} className='size-8' />
-                                        </span>
-                                        <h2 id={label} className='font-semibold'>{service.name}</h2>
-                                    </div>
-                                    <label className='block text-sm text-muted-foreground' htmlFor={'vpn-' + service.id}>Маршрут</label>
-                                    <ServiceRoutePicker
-                                        id={'vpn-' + service.id}
-                                        serviceName={service.name}
-                                        groups={options}
-                                        value={(busy ? pendingService.target_id : service.target) || ''}
-                                        inheritedLabel={isClaude || (mihomo && !needsMigration) ? 'Выберите VPN' : 'По правилам роутера'}
-                                        allowInherited={!isClaude && !mihomo}
-                                        allowDirect={!isClaude && view.scope === 'mihomo'}
-                                        disabled={change.isPending || !(view.guard_ready || (view.scope === 'mihomo' && view.controller_ready))}
-                                        onSelect={targetId => {
-                                            setNotice('')
-                                            change.mutate({ service_id: service.id, target_id: targetId })
-                                        }}
-                                    />
-                                    <p className='mt-1 min-h-5 truncate text-sm leading-5 text-muted-foreground' title={summary || undefined}>
-                                        {busy ? 'Меняем маршрут…' : summary}
-                                    </p>
-                                    {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
-                                    <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
-                                        protectionEnabled={claudeProtection} />
-                                </section>
-                            )
-                        })}
+                        {order.services.filter(service => !isAiService(service.id)).map(renderService)}
                     </div>
                     <p role='status' className='text-sm text-muted-foreground'>{notice}</p>
                 </>

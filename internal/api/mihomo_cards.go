@@ -99,5 +99,22 @@ func (h *Handlers) MountMihomoCards(r chi.Router, host string) {
 			}
 			writeJSON(w, 200, data)
 		})
+		r.Put("/service-routes/ai-group", func(w http.ResponseWriter, r *http.Request) {
+			var choice struct {
+				TargetID *string `json:"target_id"`
+			}
+			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048))
+			dec.DisallowUnknownFields()
+			if dec.Decode(&choice) != nil || dec.Decode(&struct{}{}) != io.EOF || choice.TargetID == nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Выберите один VPN-сервер или пул для группы AI и аналитики."})
+				return
+			}
+			data, err := h.Cards.SetAIGroup(r.Context(), *choice.TargetID)
+			if err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, data)
+		})
 	})
 }

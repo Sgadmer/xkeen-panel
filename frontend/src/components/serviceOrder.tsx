@@ -3,10 +3,11 @@ import { Dialog } from '@base-ui/react/dialog'
 import { IconArrowDown, IconArrowUp, IconGripVertical, IconListDetails } from '@tabler/icons-react'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { cn } from '@/lib/utils'
+import { aiServiceIds, isAiService } from '@/lib/aiServiceGroup'
 
 const storageKey = 'xkeen.service-card-order'
 const defaultOrder = [
-    'claude', 'openai', 'analytics', 'ai', 'google', 'youtube', 'telegram', 'whatsapp', 'instagram',
+    'claude', 'openai', 'ai', 'analytics', 'google', 'youtube', 'telegram', 'whatsapp', 'instagram',
     'discord', 'steam', 'github', 'spotify', 'twitch', 'playstation', 'xbox', 'twitter',
     'facebook', 'netflix', 'amazon', 'primevideo', 'disney', 'hbo', 'hulu', 'line',
 ]
@@ -24,14 +25,7 @@ function readOrder(): string[] {
 
 function ordered<T extends Item>(items: T[], preference: string[]): T[] {
     const byId = new Map(items.map(item => [item.id, item]))
-    const ids = Array.from(new Set([...preference, ...defaultOrder, ...byId.keys()]))
-    // Insert a newly introduced card next to ChatGPT without resetting a
-    // browser's older custom order. An explicit saved position wins.
-    if (byId.has('analytics') && !preference.includes('analytics')) {
-        ids.splice(ids.indexOf('analytics'), 1)
-        const openai = ids.indexOf('openai')
-        ids.splice(openai < 0 ? ids.length : openai + 1, 0, 'analytics')
-    }
+    const ids = Array.from(new Set([...aiServiceIds, ...preference.filter(id => !isAiService(id)), ...defaultOrder, ...byId.keys()]))
     return ids.flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
 }
 
@@ -46,6 +40,7 @@ export function useServiceOrder<T extends Item>(items: T[]) {
     }, [])
 
     function save(ids: string[]) {
+        ids = ids.filter(id => !isAiService(id))
         if (ids.length) localStorage.setItem(storageKey, JSON.stringify(ids))
         else localStorage.removeItem(storageKey)
         setPreference(ids)
@@ -67,7 +62,8 @@ export function ServiceOrderControl({ services, save }: { services: Item[]; save
     const drag = useRef<Drag | null>(null)
     const list = useRef<HTMLOListElement>(null)
     const frame = useRef(0)
-    const rows = ordered(services, draft)
+    const movable = services.filter(item => !isAiService(item.id))
+    const rows = ordered(movable, draft)
 
     useEffect(() => () => cancelAnimationFrame(frame.current), [])
 
@@ -130,7 +126,7 @@ export function ServiceOrderControl({ services, save }: { services: Item[]; save
     return <Dialog.Root open={open} onOpenChange={next => {
         stopDragging()
         if (next) {
-            setDraft(services.map(item => item.id))
+            setDraft(movable.map(item => item.id))
             setMessage('')
             setError('')
         }
@@ -144,7 +140,7 @@ export function ServiceOrderControl({ services, save }: { services: Item[]; save
             <Dialog.Popup className='fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col overflow-hidden rounded-t-[26px] border bg-popover text-popover-foreground shadow-2xl outline-none sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:max-h-[min(90dvh,46rem)] sm:w-[28rem] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[26px]'>
                 <header className='shrink-0 border-b px-4 py-3'>
                     <Dialog.Title className='font-semibold'>Порядок сервисов</Dialog.Title>
-                    <Dialog.Description className='mt-1 text-sm text-muted-foreground'>Перетащите сервис за ручку или нажмите на стрелку. Порядок сохранится в этом браузере.</Dialog.Description>
+                    <Dialog.Description className='mt-1 text-sm text-muted-foreground'>Перетащите сервис за ручку или нажмите на стрелку. Порядок сохранится в этом браузере. Блок AI и аналитики закреплён отдельно.</Dialog.Description>
                 </header>
                 <ol ref={list} className='min-h-0 overflow-y-auto overscroll-contain px-3' onPointerMove={event => {
                     if (drag.current?.pointer === event.pointerId) {
@@ -174,7 +170,7 @@ export function ServiceOrderControl({ services, save }: { services: Item[]; save
                     <Dialog.Close className='min-h-11 text-tint'>Отмена</Dialog.Close>
                     <button type='button' className='min-h-11 rounded-xl bg-primary px-3 font-medium text-primary-foreground' onClick={() => {
                         const ids = rows.map(item => item.id)
-                        const standard = ordered(services, [])
+                        const standard = ordered(movable, [])
                         try {
                             save(ids.every((id, i) => standard[i].id === id) ? [] : ids)
                             setOpen(false)
