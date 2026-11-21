@@ -83,6 +83,11 @@ class BundleTests(unittest.TestCase):
         self.assertFalse(sig.verify_release('v1.2.3', sums, line))  # the real release keys did not sign it
         self.assertFalse(sig.verify_release('v1.2.3', sums, b'', example_key))
         self.assertFalse(sig.verify_release('v1.2.3\n', sums, line, example_key))
+        # The keys come from the file the panel embeds; without it nothing is trusted.
+        self.assertGreaterEqual(len(sig.TRUSTED_KEYS), 2)
+        self.assertEqual(sig.load_keys(REPO / 'installer/missing-keys.txt'), ())
+        self.assertFalse(sig.verify_release('v1.2.3', sums, line, ()))
+        self.assertFalse(sig.verify_release('v1.2.3', sums, line, ('not base64',)))
 
     def test_panel_release_must_be_signed(self):
         sig, original, trusted = bundle.release_signature, bundle.fetch, bundle.release_signature.TRUSTED_KEYS

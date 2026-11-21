@@ -6,20 +6,35 @@ a binary together with its checksums. The signature is made on the maintainer's
 computer with a key that never reaches GitHub. Standard library only: Ed25519
 verification follows the reference code of RFC 8032.
 
-The message and the keys are the same as in internal/releasesig of the panel.
+The message and the keys are the same as in internal/releasesig of the panel:
+both read the keys from one file, the only place a fork has to replace.
 """
 from __future__ import annotations
 import base64
 import hashlib
+from pathlib import Path
 
 ASSET = 'SHA256SUMS.sig'
 PURPOSE = b'xkeen-panel release checksums v1'
-# The public halves of the release keys: main and spare.
-TRUSTED_KEYS = (
-    'tm5lBEJxVT1nzx9v9974lIEKgfUmT3ORlKrphTt6flo=',
-    'gL94OYrlbFXzy6ZaLjQaAGhF8d5TefHjX+JtpGnHDNY=',
-)
+KEYS_FILE = Path(__file__).resolve().parent.parent.joinpath('internal', 'releasesig', 'release-keys.txt')
 MAX_SIGNATURES = 8
+
+
+def load_keys(path: Path = KEYS_FILE) -> tuple[str, ...]:
+    """The public halves of the release keys. No readable file means no trusted key."""
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return ()
+    keys = []
+    for line in lines:
+        fields = line.split()
+        if fields and not fields[0].startswith('#'):
+            keys.append(fields[0])
+    return tuple(keys)
+
+
+TRUSTED_KEYS = load_keys()
 
 _P = 2 ** 255 - 19
 _L = 2 ** 252 + 27742317777372353535851937790883648493
@@ -104,7 +119,12 @@ def verify_release(tag: str, sums: bytes, signatures: bytes, trusted=None) -> bo
     """True when any line of the signature file was made by any trusted key."""
     if not tag.strip() or '\n' in tag or '\r' in tag:
         return False
-    keys = [base64.b64decode(key, validate=True) for key in (TRUSTED_KEYS if trusted is None else trusted)]
+    try:
+        keys = [base64.b64decode(key, validate=True) for key in (TRUSTED_KEYS if trusted is None else trusted)]
+    except ValueError:
+        return False
+    if not keys:
+        return False
     signed = message(tag, sums)
     seen = 0
     for line in signatures.decode('ascii', 'replace').splitlines():

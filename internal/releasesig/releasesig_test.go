@@ -103,19 +103,32 @@ func TestSignatureMatchesTheSharedExample(t *testing.T) {
 	}
 }
 
-// The installer carries its own copy of the keys; it must name the same ones.
-func TestInstallerTrustsTheSameKeys(t *testing.T) {
+// The installer must read the keys from the same file as the panel: a fork
+// replaces that one file and nothing else.
+func TestInstallerReadsTheSameKeyFile(t *testing.T) {
 	script, err := os.ReadFile(filepath.Join("..", "..", "installer", "release_signature.py"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range trustedKeys {
-		if !strings.Contains(string(script), "'"+key+"'") {
-			t.Errorf("installer/release_signature.py does not trust %s", key)
-		}
+	if !strings.Contains(string(script), "'internal', 'releasesig', 'release-keys.txt'") {
+		t.Fatal("installer/release_signature.py does not read internal/releasesig/release-keys.txt")
 	}
-	if got := strings.Count(string(script), "=',"); got != len(trustedKeys) {
-		t.Errorf("the installer lists %d keys, the panel %d", got, len(trustedKeys))
+	if strings.Contains(string(script), "=',") {
+		t.Fatal("the installer carries its own copy of a key")
+	}
+}
+
+func TestKeyFileFormat(t *testing.T) {
+	public, _ := testKey(t)
+	text := "# comment\n\n" + EncodePublicKey(public) + "  main key\n"
+	keys, err := parseKeys(text)
+	if err != nil || len(keys) != 1 || !keys[0].Equal(public) {
+		t.Fatalf("a valid file was not read: %v", err)
+	}
+	for name, bad := range map[string]string{"empty": "# only a comment\n", "broken key": "not-a-key\n"} {
+		if _, err := parseKeys(bad); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }
 
