@@ -1,6 +1,10 @@
 package demo
 
-import "time"
+import (
+	"time"
+
+	"xkeen-panel/internal/components"
+)
 
 // XKEEN_DEMO_CORE=mihomo shows the pages that exist only with the Mihomo core:
 // service cards, the kill switch, protected routing and the address lists.
@@ -56,6 +60,17 @@ func demoDeviceRows() []object {
 		add(name, false, name != "Приставка" && name != "Умная колонка")
 	}
 	return rows
+}
+
+// The XKeen switches as the panel words them with the Mihomo core.
+func demoMihomoSettings() []components.Setting {
+	return []components.Setting{
+		{ID: "autostart", Name: "Запускать XKeen вместе с роутером", Hint: "При включении роутера XKeen сам запустит VPN. Если выключить, после перезагрузки VPN нужно будет запустить вручную.", Enabled: true, Supported: true},
+		{ID: "ipv6", Name: "Разрешать IPv6 после перезагрузки роутера", Hint: "Разрешает устройствам дома выходить в интернет по IPv6, если его поддерживает провайдер. Если выключить, после перезагрузки роутера XKeen при запуске отключит IPv6 для всей домашней сети.", Enabled: true, Supported: true},
+		{ID: "verbose", Name: "Подробные сообщения запуска", Hint: "При запуске XKeen запишет больше подробностей в журнал. По ним легче понять, почему VPN не запустился.", Enabled: false, Supported: true},
+		{ID: "backup", Name: "Резервная копия при обновлении XKeen", Hint: "При обновлении XKeen сохранит копию своих файлов. Она пригодится, если потребуется вернуть прежнюю версию.", Enabled: true, Supported: true},
+		{ID: "native_geodata_schedule", Name: "Штатное расписание геобаз XKeen", Hint: "По этому расписанию XKeen сам скачивает свои базы. Список блокировок Re:filter панель обновляет и без него — см. блок выше. Здесь расписание можно только отключить.", Enabled: true, Supported: true},
+	}
 }
 
 // demoMihomo answers the Mihomo-only requests; ok is false for every other path.
@@ -126,7 +141,7 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 	case "/api/components":
 		return object{"supported": false, "settings_supported": true, "reason": "нужен установленный XKeen с активным Xray", "architecture": "arm64", "xkeen_version": "2.1 Stable",
 			"mode": "Hybrid", "core": "mihomo", "router_time": now.Format(time.RFC3339), "geodata": object{"sources": []string{}, "auto": false, "day": -1, "hour": 4, "minute": 0},
-			"sources": []object{}, "backups": []object{}, "notes": []string{}, "settings": demoSettings()}, true
+			"sources": []object{}, "backups": []object{}, "notes": []string{}, "settings": demoMihomoSettings()}, true
 	case "/api/dns":
 		return object{"mode": "router", "foreign": false, "presets": []object{
 			{"id": "cloudflare", "name": "Cloudflare", "servers": []string{"https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"}},
@@ -135,7 +150,7 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 			{"id": "adguard", "name": "AdGuard", "servers": []string{"https://94.140.14.14/dns-query", "https://94.140.15.15/dns-query"}}}}, true
 	case "/api/components/refilter":
 		return object{"supported": true, "auto": true, "busy": false, "checked_at": now.Add(-3 * time.Hour).Format(time.RFC3339), "updated_at": now.Add(-27 * time.Hour).Format(time.RFC3339),
-			"version": "21.11.2026", "files_changed_at": now.Add(-27 * time.Hour).Format(time.RFC3339)}, true
+			"version": "21112026", "files_changed_at": now.Add(-27 * time.Hour).Format(time.RFC3339)}, true
 	case "/api/components/mihomo":
 		return object{"supported": true, "installed": "v1.19.34", "latest": "v1.19.35", "checked_at": now.Add(-2 * time.Hour).Format(time.RFC3339), "staged": false, "busy": false}, true
 	case "/api/multipools":

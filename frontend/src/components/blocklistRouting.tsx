@@ -112,7 +112,11 @@ export function RefilterBase() {
     const info = files.data
     // The age of the files on the router, whoever wrote them.
     const changed = info?.files_changed_at ? Date.parse(info.files_changed_at) : 0
-    const days = changed ? Math.floor((Date.now() - changed) / DAY) : 0
+    // Calendar days, as the owner counts them: a file from last evening is yesterday's.
+    const dayOf = (time: number) => { const d = new Date(time); return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY) }
+    const days = changed ? Math.max(0, dayOf(Date.now()) - dayOf(changed)) : 0
+    // The source names its releases by date without separators: 07112026.
+    const release = info?.version?.replace(/^(\d{2})(\d{2})(\d{4})$/, '$1.$2.$3')
     const stale = changed > 0 && Date.now() - changed > WEEK
     const busy = info?.busy || download.isPending
     const error = download.error?.message || auto.error?.message || update.error?.message || state.error?.message || info?.error
@@ -122,8 +126,8 @@ export function RefilterBase() {
         {data && (data.domains > 0 || data.prefixes > 0)
             ? <Row label='Сайтов и сетей' detail={`${count.format(data.domains)} · ${count.format(data.prefixes)}`} hint='В применённой панелью копии' />
             : <Row label={state.isPending ? 'Читаем список…' : 'Список ещё не применялся'} hint={data ? 'Панель читает его при включении режима «по списку блокировок».' : undefined} />}
-        {changed > 0 && <Row label='Файлы на роутере' detail={<span className={stale ? 'text-warning' : undefined}>{days === 0 ? 'сегодня' : `${days} дн. назад`}</span>}
-            hint={moment(info!.files_changed_at!) + (info?.version ? ' · выпуск ' + info.version : '')} />}
+        {changed > 0 && <Row label='Файлы на роутере' detail={<span className={stale ? 'text-warning' : undefined}>{days === 0 ? 'сегодня' : days === 1 ? 'вчера' : `${days} дн. назад`}</span>}
+            hint={moment(info!.files_changed_at!) + (release ? ' · выпуск от ' + release : '')} />}
         {info?.supported && <>
             <Row label='Обновлять раз в сутки' hint={info.checked_at ? 'Проверено ' + moment(info.checked_at) : 'Панель сама скачивает свежий список и проверяет его перед заменой.'}
                 trailing={<Switch label='Обновлять список блокировок раз в сутки' checked={info.auto} disabled={auto.isPending} onChange={next => auto.mutate(next)} />} />
