@@ -110,6 +110,14 @@ func TestMihomoSelectionFollowsReissuedServer(t *testing.T) {
 	if card := claude(); card.Target != from || card.Blocked {
 		t.Fatalf("card lost its restored server: %+v", card)
 	}
+	// The replaced worker had no open connection, so nothing waits for it; the
+	// worker of the current choice is the one that stays.
+	c.mu.Lock()
+	waiting, current, pending := len(c.retired), c.liveWorkers[from], len(c.pending)
+	c.mu.Unlock()
+	if waiting != 0 || !current || pending != 0 {
+		t.Fatalf("after a reissue: %d retired workers, current kept=%v, %d pending", waiting, current, pending)
+	}
 }
 
 func TestRebindTargetsFollowsVanishedAndOwnedSelections(t *testing.T) {

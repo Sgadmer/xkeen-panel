@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -59,6 +60,11 @@ type Controller struct {
 	autoPoolLimit        int
 	probeURL             string
 	guard                guardJournal
+	// Set while a subscription refresh is applied: see soft_swap.go.
+	soft        bool
+	retired     map[string]retiredWorker
+	retireSweep bool
+	liveWorkers map[string]bool // workers of the last completed reload
 }
 
 // SetAutoPoolLimit uses the panel's existing router-wide capacity setting.
@@ -497,6 +503,7 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	if err != nil {
 		return View{}, err
 	}
+	chosen := maps.Clone(p.assigned) // the saved choices before a refresh re-points them
 	if withListener != nil {
 		if err = withListener(&p); err != nil {
 			return View{}, err
@@ -651,6 +658,13 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 		// The new defaults can change which card owns a destination even
 		// when both cards keep their pinned targets. Resume after a restart.
 		recheckAuto := p.doc[serviceAutoKey] == true && !c.autoFlowsChecked
+		if c.soft && !recheckAuto && !c.pending[service.ID] && service.ID != id {
+			key := p.assigned[service.ID]
+			if worker := replacedWorker(chosen[service.ID], key, previous.Now, want, p.pool(key) != nil); worker != "" {
+				c.retire(worker, previous.Now)
+				continue
+			}
+		}
 		if recheckAuto || c.pending[service.ID] || (want != "" || exists) && (previous.Now != want || service.ID == id) {
 			changed[service.ID] = want
 		}
@@ -658,7 +672,14 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	c.autoFlowsChecked = p.doc[serviceAutoKey] == true
 	want := expected[cardPrefix+defaultID]
 	before := selections[cardPrefix+defaultID].Now
-	if c.pending[defaultID] || before != want || id == defaultID {
+	reissued := ""
+	if c.soft && !c.pending[defaultID] && id != defaultID {
+		key := p.assigned[defaultID]
+		reissued = replacedWorker(chosen[defaultID], key, before, want, p.pool(key) != nil)
+	}
+	if reissued != "" {
+		c.retire(reissued, before)
+	} else if c.pending[defaultID] || before != want || id == defaultID {
 		changed[defaultID] = want
 	}
 	failed := c.drainChanged(ctx, p, changed, view.Services)
@@ -683,6 +704,14 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 		keep := map[string]bool{}
 		for key := range workers {
 			keep[key] = true
+		}
+		c.liveWorkers = maps.Clone(keep)
+		// A worker replaced by a reissue serves its open connections to the end.
+		if len(c.retired) > 0 {
+			chains, known := c.openChains(ctx, p.api)
+			for _, worker := range c.stillUsed(chains, known, time.Now()) {
+				keep[worker] = true
+			}
 		}
 		_ = xkeen.PruneCardProxies(c.rt, keep)
 	}

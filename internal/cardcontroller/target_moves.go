@@ -74,6 +74,9 @@ func rebindTargets(p *profile, moves []xkeen.TargetMove, present map[string]bool
 func (c *Controller) ReconcileMoves(ctx context.Context, moves []xkeen.TargetMove) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Routes that only received new keys keep their open connections.
+	c.soft = true
+	defer func() { c.soft = false }()
 	rebound := 0
 	var follow func(*profile) error
 	if len(moves) > 0 {
