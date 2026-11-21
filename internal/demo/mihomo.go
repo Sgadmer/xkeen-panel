@@ -58,6 +58,11 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 		return object{"enabled": true, "ready": true, "updating": false, "source": "v2fly/domain-list-community", "sources": 14, "domains": 4821, "voice_prefixes": 36,
 			"updated_at": now.Add(-5 * time.Hour).Format(time.RFC3339), "checked_at": now.Add(-5 * time.Hour).Format(time.RFC3339),
 			"next_check_at": now.Add(19 * time.Hour).Format(time.RFC3339), "shared_dependencies": ""}, true
+	case "/api/components/refilter":
+		return object{"supported": true, "auto": true, "busy": false, "checked_at": now.Add(-3 * time.Hour).Format(time.RFC3339), "updated_at": now.Add(-27 * time.Hour).Format(time.RFC3339),
+			"version": "21.11.2026", "files_changed_at": now.Add(-27 * time.Hour).Format(time.RFC3339)}, true
+	case "/api/components/mihomo":
+		return object{"supported": true, "installed": "v1.19.34", "latest": "v1.19.35", "checked_at": now.Add(-2 * time.Hour).Format(time.RFC3339), "staged": false, "busy": false}, true
 	case "/api/multipools":
 		return object{"pools": []object{}, "scopes": []object{{"id": "pool-all", "name": "Все локации", "kind": "all", "member_count": 2, "limit": 16, "eligible_count": 3},
 			{"id": "country-NL", "name": "Нидерланды", "kind": "country", "country": "NL", "member_count": 1}, {"id": "country-DE", "name": "Германия", "kind": "country", "country": "DE", "member_count": 1}}}, true

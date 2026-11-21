@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"xkeen-panel/internal/components"
 	"xkeen-panel/internal/xkeen"
 )
@@ -55,8 +56,12 @@ func NewComponentsHandler(h *Handlers) *ComponentsHandler {
 			go manager.Start(context.Background())
 		} else {
 			// Mihomo imports local Re:filter files in its maintenance loop.
-			// Recover interrupted setting changes without starting the downloader.
-			go manager.Recover(context.Background())
+			// Recover interrupted setting changes without starting the Xray
+			// downloader; the block list has its own small refresh.
+			go func() {
+				manager.Recover(context.Background())
+				manager.StartMihomo(context.Background())
+			}()
 		}
 	}
 	return handler
@@ -147,6 +152,69 @@ func componentsFirmware(configPath string) string {
 
 func (h *ComponentsHandler) HandleState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.manager.State())
+}
+
+// MountMihomo exposes what a Mihomo router manages apart from the Xray
+// transactions: the Re:filter block list and the version of the core.
+func (h *ComponentsHandler) MountMihomo(r chi.Router) {
+	refused := func(w http.ResponseWriter, e error) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": e.Error()})
+	}
+	r.Get("/components/refilter", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, h.manager.RefilterInfo())
+	})
+	r.Put("/components/refilter", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Auto *bool `json:"auto"`
+		}
+		if componentRequest(w, r, &req) != nil || req.Auto == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверная настройка обновления списка"})
+			return
+		}
+		writeJSON(w, http.StatusOK, h.manager.SetRefilterAuto(*req.Auto))
+	})
+	r.Post("/components/refilter/update", func(w http.ResponseWriter, r *http.Request) {
+		info, e := h.manager.StartRefilterUpdate()
+		if e != nil {
+			refused(w, e)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, info)
+	})
+	r.Get("/components/mihomo", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, h.manager.CoreInfo(r.Context()))
+	})
+	r.Post("/components/mihomo/check", func(w http.ResponseWriter, r *http.Request) {
+		info, e := h.manager.CoreCheck(r.Context())
+		if e != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": e.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
+	})
+	r.Post("/components/mihomo/install", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Version string `json:"version"`
+		}
+		if componentRequest(w, r, &req) != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат операции"})
+			return
+		}
+		info, e := h.manager.StartCoreInstall(req.Version)
+		if e != nil {
+			refused(w, e)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, info)
+	})
+	r.Post("/components/mihomo/rollback", func(w http.ResponseWriter, r *http.Request) {
+		info, e := h.manager.CoreRollback(r.Context())
+		if e != nil {
+			refused(w, e)
+			return
+		}
+		writeJSON(w, http.StatusOK, info)
+	})
 }
 func (h *ComponentsHandler) HandleReleases(w http.ResponseWriter, r *http.Request) {
 	channel := r.URL.Query().Get("channel")

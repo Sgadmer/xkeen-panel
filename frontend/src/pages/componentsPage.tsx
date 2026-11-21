@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { IconLoader2 } from '@tabler/icons-react'
 import { RefilterBase } from '@/components/blocklistRouting'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
+import { MihomoCore } from '@/components/mihomoCore'
 import { ServiceListsProtection } from '@/components/serviceListsProtection'
 import { SettingChangeDialog, type SettingChange } from '@/components/settingChangeDialog'
 import { api } from '@/lib/api'
@@ -150,7 +151,10 @@ export function ComponentsPage() {
                 </div>
             </Group>}
             {state.core === 'mihomo' && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-start'>
-                <div id='service-lists' className='scroll-mt-4'><ServiceListsProtection /></div>
+                <div className='flex min-w-0 flex-col gap-5'>
+                    <div id='service-lists' className='scroll-mt-4'><ServiceListsProtection /></div>
+                    <MihomoCore />
+                </div>
                 <RefilterBase />
             </div>}
             {state.supported && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2'>

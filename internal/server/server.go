@@ -204,6 +204,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/components/apply", componentsHandler.HandleApply)
 			r.Post("/components/rollback", componentsHandler.HandleRollback)
 			r.Put("/components/geodata", componentsHandler.HandleGeodata)
+			componentsHandler.MountMihomo(r)
 
 			r.Get("/subscription", handlers.HandleGetSubscription)
 			r.Post("/subscription", handlers.HandleUpdateSubscription)

@@ -123,6 +123,7 @@ type Manager struct {
 	catalog map[string]catalogCache
 	job     *Job
 	geo     GeoSettings
+	tasks   mihomoTasks // the block list and the core binary of a Mihomo router
 }
 
 func New(opts Options) *Manager {

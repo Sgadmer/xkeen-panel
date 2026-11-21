@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Group, Row } from '@/components/ios'
+import { Group, Row, Switch } from '@/components/ios'
 import { ProtectionWarning } from '@/components/protectionWarning'
 import { api } from '@/lib/api'
 
@@ -82,24 +82,53 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
     </div>
 }
 
-const WEEK = 7 * 24 * 60 * 60 * 1000
+const DAY = 24 * 60 * 60 * 1000
+const WEEK = 7 * DAY
 
-// The block list itself: how large it is and how fresh.
+type RefilterFiles = {
+    supported: boolean
+    auto: boolean
+    busy: boolean
+    checked_at?: string
+    updated_at?: string
+    version?: string
+    files_changed_at?: string
+    error?: string
+}
+
+const filesKey = ['refilter-files']
+const filesPath = '/api/components/refilter'
+const moment = (value: string) => new Date(value).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+
+// The block list itself: how large it is, how fresh, and who refreshes it.
 export function RefilterBase() {
+    const client = useQueryClient()
     const { state, update } = useBlocklist()
+    const files = useQuery({ queryKey: filesKey, queryFn: () => api.get<RefilterFiles>(filesPath), refetchInterval: query => query.state.data?.busy ? 2000 : 60000 })
+    const store = (info: RefilterFiles) => client.setQueryData(filesKey, info)
+    const download = useMutation({ mutationFn: () => api.post<RefilterFiles>(filesPath + '/update'), onSuccess: store })
+    const auto = useMutation({ mutationFn: (next: boolean) => api.put<RefilterFiles>(filesPath, { auto: next }), onSuccess: store })
     const data = state.data
-    const changed = data?.updated_at ? Date.parse(data.updated_at) : 0
-    const days = changed ? Math.floor((Date.now() - changed) / (24 * 60 * 60 * 1000)) : 0
+    const info = files.data
+    // The age of the files on the router, whoever wrote them.
+    const changed = info?.files_changed_at ? Date.parse(info.files_changed_at) : 0
+    const days = changed ? Math.floor((Date.now() - changed) / DAY) : 0
     const stale = changed > 0 && Date.now() - changed > WEEK
-    const error = update.error?.message || state.error?.message
+    const busy = info?.busy || download.isPending
+    const error = download.error?.message || auto.error?.message || update.error?.message || state.error?.message || info?.error
     return <Group title='Список блокировок Re:filter' footer={stale
-        ? <span className='text-warning'>Файлы списка на роутере не менялись больше недели. Панель применяет их, но не скачивает: это делает расписание геобаз XKeen ниже. Проверьте, что оно включено.</span>
-        : 'Заблокированные сайты и сервисы с региональными ограничениями. Файлы скачивает XKeen по своему расписанию; панель подхватывает их в течение минуты.'}>
-        {data && (data.domains > 0 || data.prefixes > 0) ? <>
-            <Row label='Сайтов и сетей' detail={`${count.format(data.domains)} · ${count.format(data.prefixes)}`} />
-            {changed > 0 && <Row label='Файлы изменились' detail={<span className={stale ? 'text-warning' : undefined}>{days === 0 ? 'сегодня' : `${days} дн. назад`}</span>}
-                hint={new Date(changed).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })} />}
-        </> : <Row label={state.isPending ? 'Читаем список…' : 'Список пока не прочитан'} />}
+        ? <span className='text-warning'>Файлы списка не менялись больше недели. Нажмите «Скачать свежий список» или включите обновление раз в сутки.</span>
+        : 'Заблокированные сайты и сервисы с региональными ограничениями. Нужен для режима «только по списку блокировок»; в защищённом режиме на маршруты не влияет.'}>
+        {data && (data.domains > 0 || data.prefixes > 0)
+            ? <Row label='Сайтов и сетей' detail={`${count.format(data.domains)} · ${count.format(data.prefixes)}`} hint='В применённой панелью копии' />
+            : <Row label={state.isPending ? 'Читаем список…' : 'Список ещё не применялся'} hint={data ? 'Панель читает его при включении режима «по списку блокировок».' : undefined} />}
+        {changed > 0 && <Row label='Файлы на роутере' detail={<span className={stale ? 'text-warning' : undefined}>{days === 0 ? 'сегодня' : `${days} дн. назад`}</span>}
+            hint={moment(info!.files_changed_at!) + (info?.version ? ' · выпуск ' + info.version : '')} />}
+        {info?.supported && <>
+            <Row label='Обновлять раз в сутки' hint={info.checked_at ? 'Проверено ' + moment(info.checked_at) : 'Панель сама скачивает свежий список и проверяет его перед заменой.'}
+                trailing={<Switch label='Обновлять список блокировок раз в сутки' checked={info.auto} disabled={auto.isPending} onChange={next => auto.mutate(next)} />} />
+            <Row label={busy ? 'Скачиваем и проверяем…' : 'Скачать свежий список'} tone='tint' disabled={busy} onClick={() => download.mutate()} />
+        </>}
         {data?.enabled && <Row label={update.isPending ? 'Перечитываем…' : 'Перечитать файлы с роутера'} tone='tint' disabled={update.isPending} onClick={() => update.mutate('refresh')} />}
         {error && <p role='alert' className='py-3 text-sm text-destructive'>{error}</p>}
     </Group>
