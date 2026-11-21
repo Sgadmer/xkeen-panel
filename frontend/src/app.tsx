@@ -20,6 +20,7 @@ import { ProtectionPage } from '@/pages/protectionPage'
 import { AutomationPage } from '@/pages/automationPage'
 import { SecurityPage } from '@/pages/securityPage'
 import { TransferPage } from '@/pages/transferPage'
+import { RecommendedPage } from '@/pages/recommendedPage'
 import { ComponentsPage } from '@/pages/componentsPage'
 import { WelcomePage } from '@/pages/welcomePage'
 import { ProtectedRoute } from '@/components/protectedRoute'
@@ -90,6 +91,7 @@ export function App() {
                             <Route path='settings/automation' element={<AutomationPage />} />
                             <Route path='settings/security' element={<SecurityPage />} />
                             <Route path='settings/transfer' element={<TransferPage />} />
+                            <Route path='settings/recommended' element={<RecommendedPage />} />
                             <Route path='settings/routing' element={<Navigate to='/settings/protection' replace />} />
                             <Route path='settings/components' element={<ComponentsPage />} />
                             <Route

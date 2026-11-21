@@ -58,6 +58,10 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 		return object{"enabled": true, "ready": true, "updating": false, "source": "v2fly/domain-list-community", "sources": 14, "domains": 4821, "voice_prefixes": 36,
 			"updated_at": now.Add(-5 * time.Hour).Format(time.RFC3339), "checked_at": now.Add(-5 * time.Hour).Format(time.RFC3339),
 			"next_check_at": now.Add(19 * time.Hour).Format(time.RFC3339), "shared_dependencies": ""}, true
+	case "/api/components":
+		return object{"supported": false, "settings_supported": true, "reason": "нужен установленный XKeen с активным Xray", "architecture": "arm64", "xkeen_version": "2.1 Stable",
+			"mode": "Hybrid", "core": "mihomo", "router_time": now.Format(time.RFC3339), "geodata": object{"sources": []string{}, "auto": false, "day": -1, "hour": 4, "minute": 0},
+			"sources": []object{}, "backups": []object{}, "notes": []string{}, "settings": demoSettings()}, true
 	case "/api/dns":
 		return object{"mode": "router", "foreign": false, "presets": []object{
 			{"id": "cloudflare", "name": "Cloudflare", "servers": []string{"https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"}},
