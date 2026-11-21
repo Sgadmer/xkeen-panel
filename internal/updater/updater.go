@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"xkeen-panel/internal/releasesig"
 )
 
 // ErrLocked is a build policy, not a user preference or a version check.
@@ -85,6 +88,7 @@ type Updater struct {
 	repo         string
 	apiBase      string
 	asset        string
+	keys         []ed25519.PublicKey // release keys; a release signed by none of them is not installed
 	client       *http.Client
 	logf         func(format string, args ...interface{})
 	publish      func(State)
@@ -141,6 +145,12 @@ func New(opts Options) *Updater {
 	if u.locked {
 		return u
 	}
+	// A build whose keys cannot be read installs nothing: Verify refuses an empty list.
+	keys, err := releasesig.Trusted()
+	if err != nil {
+		u.log("[UPDATE] Ключи проверки выпусков не прочитаны: %v", err)
+	}
+	u.keys = keys
 	loaded := u.settings
 	if err := readJSON(u.settingsPath(), &loaded); err == nil {
 		u.settings = loaded

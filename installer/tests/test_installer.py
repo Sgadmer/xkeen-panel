@@ -60,6 +60,68 @@ class BundleTests(unittest.TestCase):
             self.assertEqual(bundle.asset(info, 'binary')[0], b'abc')
         finally: bundle.fetch = original
 
+    def test_ed25519_matches_rfc_8032_and_the_panel(self):
+        sig = bundle.release_signature
+        # RFC 8032, section 7.1, tests 1 and 2.
+        for public, text, signature in [
+            ('d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a', '',
+             'e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b'),
+            ('3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c', '72',
+             '92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00'),
+        ]:
+            key, message, signed = bytes.fromhex(public), bytes.fromhex(text), bytes.fromhex(signature)
+            self.assertTrue(sig.ed25519_verify(key, message, signed))
+            self.assertFalse(sig.ed25519_verify(key, message + b'x', signed))
+            self.assertFalse(sig.ed25519_verify(key, message, signed[:63] + bytes([signed[63] ^ 1])))
+        # The same example is checked by internal/releasesig of the panel.
+        example_key = ('6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=',)
+        sums = b'aa  xkeen-panel-aarch64\nbb  xkeen-panel-mipsel\n'
+        line = b'ZbGXM4xl1j5l9J2KFWJDQLWM6XkOIh9Y1ihbLDXw6YGjeh236gu8mj5rYsP+pmkz5ablourYz3iMdWguVcdHDQ==\n'
+        self.assertTrue(sig.verify_release('v1.2.3', sums, b'# main\n\nnot-base64\n' + line, example_key))
+        self.assertFalse(sig.verify_release('v1.2.4', sums, line, example_key))
+        self.assertFalse(sig.verify_release('v1.2.3', sums.replace(b'aa', b'ab'), line, example_key))
+        self.assertFalse(sig.verify_release('v1.2.3', sums, line))  # the real release keys did not sign it
+        self.assertFalse(sig.verify_release('v1.2.3', sums, b'', example_key))
+        self.assertFalse(sig.verify_release('v1.2.3\n', sums, line, example_key))
+
+    def test_panel_release_must_be_signed(self):
+        sig, original, trusted = bundle.release_signature, bundle.fetch, bundle.release_signature.TRUSTED_KEYS
+        binary, digest = b'panel', hashlib.sha256(b'panel').hexdigest()
+        sums = (digest + '  xkeen-panel-aarch64\n').encode()
+        # Made with the example key of internal/releasesig for the tag v1.2.3 and these sums.
+        line = b'QW3HVlg24SmiBa6rnhD9gd87GJujYPMlrVFiLR+DRyv51dXY7XG3oeA/RR/V60BjdORZcpCNUCoQyQnJzAL3Bw==\n'
+        files = {'xkeen-panel-aarch64': binary, 'SHA256SUMS': sums}
+        def info(*names, tag='v1.2.3'):
+            return {'tag_name': tag, 'assets': [{'name': n, 'size': len(files.get(n, b'')), 'id': i,
+                'browser_download_url': 'https://github.com/example/repo/releases/download/v1.2.3/' + n} for i, n in enumerate(names)]}
+        unsigned, signed = ('xkeen-panel-aarch64', 'SHA256SUMS'), ('xkeen-panel-aarch64', 'SHA256SUMS', 'SHA256SUMS.sig')
+        try:
+            bundle.fetch = lambda url, limit=bundle.MAX_DOWNLOAD: files[url.rsplit('/', 1)[1]]
+            sig.TRUSTED_KEYS = ('6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=',)
+            # No signature: refused unless the operator explicitly accepts an older release.
+            with self.assertRaisesRegex(ValueError, 'no signature'): bundle.signed_sum(info(*unsigned), 'xkeen-panel-aarch64')
+            self.assertEqual(bundle.signed_sum(info(*unsigned), 'xkeen-panel-aarch64', True), '')
+            # Signed: the approved checksum is returned and decides which file is accepted.
+            files['SHA256SUMS.sig'] = line
+            self.assertEqual(bundle.signed_sum(info(*signed), 'xkeen-panel-aarch64'), digest)
+            with self.assertRaisesRegex(ValueError, 'no entry'): bundle.signed_sum(info(*signed), 'xkeen-panel-mipsel')
+            listing = info('xkeen-panel-aarch64')
+            self.assertEqual(bundle.asset(listing, 'xkeen-panel-aarch64', digest)[0], binary)
+            # GitHub vouching for another file does not help it past the signed checksum.
+            files['xkeen-panel-aarch64'] = b'other'
+            listing = info('xkeen-panel-aarch64')
+            listing['assets'][0]['digest'] = 'sha256:' + hashlib.sha256(b'other').hexdigest()
+            with self.assertRaisesRegex(ValueError, 'integrity'): bundle.asset(listing, 'xkeen-panel-aarch64', digest)
+            # Replaced checksums, another version or another key: refused even with the flag.
+            for change in ('sums', 'tag', 'key'):
+                files['SHA256SUMS'] = (hashlib.sha256(b'other').hexdigest() + '  xkeen-panel-aarch64\n').encode() if change == 'sums' else sums
+                sig.TRUSTED_KEYS = trusted if change == 'key' else ('6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=',)
+                for allow in (False, True):
+                    with self.assertRaisesRegex(ValueError, 'not valid', msg=change):
+                        bundle.signed_sum(info(*signed, tag='v1.2.4' if change == 'tag' else 'v1.2.3'), 'xkeen-panel-aarch64', allow)
+        finally:
+            bundle.fetch, sig.TRUSTED_KEYS = original, trusted
+
     def test_mips_uses_softfloat_binary_when_provided(self):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, 'w') as archive:

@@ -1,3 +1,7 @@
+# CI builds the files and SHA256SUMS. The signature SHA256SUMS.sig is added
+# afterwards from the maintainer's computer: the release key is never stored
+# here. Panels do not offer a release until it is signed.
+# See docs/release-signing.md.
 name: Release
 on:
   push:

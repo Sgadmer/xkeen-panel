@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"xkeen-panel/internal/releasesig"
 )
 
 func TestPublishedReleaseChannels(t *testing.T) {
@@ -44,7 +46,10 @@ func TestPublishedReleaseChannels(t *testing.T) {
 					}{testAsset, server.URL + "/panel"}, struct {
 						Name string `json:"name"`
 						URL  string `json:"browser_download_url"`
-					}{sumsAsset, server.URL + "/sums"})
+					}{sumsAsset, server.URL + "/sums"}, struct {
+						Name string `json:"name"`
+						URL  string `json:"browser_download_url"`
+					}{releasesig.Asset, server.URL + "/sig"})
 				}
 				json.NewEncoder(w).Encode(payload)
 			}))
@@ -100,14 +105,22 @@ func TestReleaseCatalogErrorsAreNotHidden(t *testing.T) {
 }
 
 func TestIncompletePublishedReleaseIsNotOffered(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[{"tag_name":"v3.0.0-beta.2","prerelease":true,"assets":[]}]`))
-	}))
-	defer server.Close()
-	u := New(Options{Current: "v3.0.0-beta.1", DataDir: t.TempDir(), Repo: "owner/repo", APIBase: server.URL, Client: server.Client()})
-	u.asset = testAsset
-	state, err := u.Check(context.Background())
-	if err != nil || state.Latest != nil || state.Available {
-		t.Fatalf("incomplete release advertised: %+v, %v", state, err)
+	for name, assets := range map[string]string{
+		"no assets": ``,
+		// CI has finished, the maintainer has not signed the checksums yet.
+		"not signed yet": `{"name":"` + testAsset + `","browser_download_url":"https://example.invalid/panel"},{"name":"SHA256SUMS","browser_download_url":"https://example.invalid/sums"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(`[{"tag_name":"v3.0.0-beta.2","prerelease":true,"assets":[` + assets + `]}]`))
+			}))
+			defer server.Close()
+			u := New(Options{Current: "v3.0.0-beta.1", DataDir: t.TempDir(), Repo: "owner/repo", APIBase: server.URL, Client: server.Client()})
+			u.asset = testAsset
+			state, err := u.Check(context.Background())
+			if err != nil || state.Latest != nil || state.Available {
+				t.Fatalf("incomplete release advertised: %+v, %v", state, err)
+			}
+		})
 	}
 }

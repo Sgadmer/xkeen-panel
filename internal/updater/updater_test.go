@@ -1,7 +1,9 @@
 package updater
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"xkeen-panel/internal/releasesig"
 )
 
 const testAsset = "xkeen-panel-aarch64"
@@ -24,6 +28,18 @@ type fakeRelease struct {
 	tag      string
 	reported string // what the binary prints for -version
 	sums     string // SHA256SUMS body; "" = computed, "-" = no file in the release
+	sig      string // SHA256SUMS.sig body; "" = made with the test key, "-" = no file in the release
+}
+
+// The release key of the tests. Its public half replaces the embedded keys.
+var testReleaseKey = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))
+
+func (f fakeRelease) sumsBody() string {
+	if f.sums != "" {
+		return f.sums
+	}
+	sum := sha256.Sum256(f.binary())
+	return hex.EncodeToString(sum[:]) + "  " + testAsset + "\nffff  xkeen-panel-mipsel\n"
 }
 
 func (f fakeRelease) binary() []byte {
@@ -45,16 +61,20 @@ func (f fakeRelease) serve(t *testing.T) *httptest.Server {
 			if f.sums != "-" {
 				assets += fmt.Sprintf(`,{"name":"SHA256SUMS","browser_download_url":%q}`, srv.URL+"/dl/SHA256SUMS")
 			}
+			if f.sig != "-" {
+				assets += fmt.Sprintf(`,{"name":%q,"browser_download_url":%q}`, releasesig.Asset, srv.URL+"/dl/"+releasesig.Asset)
+			}
 			fmt.Fprintf(w, `{"tag_name":%q,"body":"notes","html_url":"https://example/rel","assets":[%s]}`, f.tag, assets)
 		case "/dl/" + testAsset:
 			w.Write(f.binary())
 		case "/dl/SHA256SUMS":
-			sums := f.sums
-			if sums == "" {
-				sum := sha256.Sum256(f.binary())
-				sums = hex.EncodeToString(sum[:]) + "  " + testAsset + "\nffff  xkeen-panel-mipsel\n"
+			fmt.Fprint(w, f.sumsBody())
+		case "/dl/" + releasesig.Asset:
+			if f.sig != "" {
+				fmt.Fprint(w, f.sig)
+				return
 			}
-			fmt.Fprint(w, sums)
+			fmt.Fprintln(w, releasesig.Sign(testReleaseKey, f.tag, []byte(f.sumsBody())))
 		default:
 			http.NotFound(w, r)
 		}
@@ -94,6 +114,7 @@ func newHarness(t *testing.T, current string, rel fakeRelease) *harness {
 		},
 	})
 	h.u.asset = testAsset
+	h.u.keys = []ed25519.PublicKey{testReleaseKey.Public().(ed25519.PublicKey)}
 	// Short enough not to outlive the test run; by then the temp dir is gone and the guard exits
 	h.u.guardDelay = 3 * time.Second
 	return h
@@ -260,6 +281,49 @@ func TestApplyRefusesReleaseWithoutSums(t *testing.T) {
 	h.u.Apply()
 	waitFor(t, "failure", func() bool { return h.u.State().ApplyError != "" })
 
+	assertUntouched(t, h)
+}
+
+// Whoever controls the repository can publish a binary together with matching
+// checksums. Without the signature of a release key neither is trusted.
+func TestApplyRefusesReleaseNotSignedByAReleaseKey(t *testing.T) {
+	stranger := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize))
+	valid := fakeRelease{tag: "v1.3.1"}
+	for name, rel := range map[string]fakeRelease{
+		"no signature":       {tag: "v1.3.1", sig: "-"},
+		"empty signature":    {tag: "v1.3.1", sig: "\n"},
+		"another key":        {tag: "v1.3.1", sig: releasesig.Sign(stranger, "v1.3.1", []byte(valid.sumsBody())) + "\n"},
+		"another version":    {tag: "v1.3.1", sig: releasesig.Sign(testReleaseKey, "v1.3.0", []byte(valid.sumsBody())) + "\n"},
+		"replaced checksums": {tag: "v1.3.1", sig: releasesig.Sign(testReleaseKey, "v1.3.1", []byte("0000  "+testAsset+"\n")) + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, "v1.3.0", rel)
+			h.u.Check(context.Background())
+
+			h.u.Apply()
+			waitFor(t, "failure", func() bool { return h.u.State().ApplyError != "" })
+
+			assertUntouched(t, h)
+			if !strings.Contains(h.u.State().ApplyError, "подпис") {
+				t.Errorf("error = %q, want it to name the signature", h.u.State().ApplyError)
+			}
+		})
+	}
+}
+
+// The embedded keys are what a real build trusts: a release signed with the
+// key of the tests must not pass for them.
+func TestEmbeddedKeysDoNotTrustTheTestKey(t *testing.T) {
+	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1"})
+	keys, err := releasesig.Trusted()
+	if err != nil || len(keys) == 0 {
+		t.Fatalf("embedded keys: %v", err)
+	}
+	h.u.keys = keys
+	h.u.Check(context.Background())
+
+	h.u.Apply()
+	waitFor(t, "failure", func() bool { return h.u.State().ApplyError != "" })
 	assertUntouched(t, h)
 }
 

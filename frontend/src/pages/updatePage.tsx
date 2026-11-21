@@ -117,6 +117,7 @@ export function UpdatePage() {
             <Group footer='Здесь обновляется только панель. Версии XKeen, Xray и геобазы управляются в разделе «Роутер и XKeen».'>
                 <Row label='Источник обновлений' detail={u.repository ?? 'Sgadmer/xkeen-panel'} />
                 <Row label='Канал обновлений' detail={u.channel === 'preview' ? 'Стабильные и предварительные' : 'Стабильные'} hint={u.channel === 'preview' ? 'Установлена beta: проверяются опубликованные beta и стабильные версии.' : 'Предварительные версии автоматически не выбираются.'} />
+                <Row label='Проверка выпуска' detail='По подписи автора' hint='Панель ставит только выпуск, контрольные суммы которого подписаны ключом автора. Файл, подменённый на GitHub, не установится.' />
             </Group>
 
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>

@@ -7,6 +7,7 @@ release APIs, never executes downloaded code on the computer.
 from __future__ import annotations
 import argparse
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -17,6 +18,15 @@ import tarfile
 import urllib.parse
 import urllib.request
 import zipfile
+
+def _sibling(name: str):
+    # Loaded by path: this file is run as a script and is also loaded by path in tests.
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+release_signature = _sibling('release_signature')
 
 PANEL_REPO = 'Sgadmer/xkeen-panel'
 MAX_DOWNLOAD = 256 * 1024 * 1024
@@ -56,13 +66,38 @@ def latest_fixed(repo: str) -> dict:
         raise ValueError('No usable geodata release')
     return info
 
-def asset(info: dict, name: str) -> tuple[bytes, dict]:
+def signed_sum(info: dict, name: str, allow_unsigned: bool = False) -> str:
+    """The checksum of a panel file from SHA256SUMS approved with a release key.
+
+    GitHub's own digest and an unsigned SHA256SUMS prove only that the file is
+    the one GitHub stores, not that the maintainer released it. Releases
+    published before signing began have no signature; they are accepted only
+    with an explicit --allow-unsigned-panel, and '' is returned for them.
+    """
+    def one(asset_name: str) -> bytes | None:
+        found = [x for x in info.get('assets', []) if x.get('name') == asset_name]
+        return fetch(found[0]['browser_download_url'], 1024 * 1024) if len(found) == 1 else None
+    sums, signature = one('SHA256SUMS'), one(release_signature.ASSET)
+    if signature is None:
+        if allow_unsigned:
+            return ''
+        raise ValueError('The panel release has no signature; choose a signed release or pass --allow-unsigned-panel for an older one')
+    if sums is None or not release_signature.verify_release(info.get('tag_name') or '', sums, signature):
+        raise ValueError('The signature of the panel release is not valid; the release is not used')
+    for line in sums.decode('ascii').splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].lstrip('*') == name and re.fullmatch(r'[a-fA-F0-9]{64}', parts[0]):
+            return parts[0].lower()
+    raise ValueError(f'The signed SHA256SUMS has no entry for {name}')
+
+def asset(info: dict, name: str, expected: str = '') -> tuple[bytes, dict]:
     matches = [item for item in info.get('assets', []) if item.get('name') == name]
     if len(matches) != 1:
         raise ValueError(f'Release asset is missing or ambiguous: {name}')
     item = matches[0]
     digest = item.get('digest') or ''
-    expected = digest.removeprefix('sha256:') if digest.startswith('sha256:') else ''
+    if not expected:
+        expected = digest.removeprefix('sha256:') if digest.startswith('sha256:') else ''
     if not re.fullmatch(r'[a-fA-F0-9]{64}', expected):
         # Older panel releases can provide a conventional checksum file.
         sums = [x for x in info.get('assets', []) if x.get('name') == 'SHA256SUMS']
@@ -137,9 +172,11 @@ def prepare(args: argparse.Namespace) -> dict:
     args.output.chmod(0o700)
     provenance = []
     try:
-        panel, origin = asset(release(PANEL_REPO, args.panel_version), f'xkeen-panel-{args.arch}')
+        panel_release = release(PANEL_REPO, args.panel_version)
+        approved = signed_sum(panel_release, f'xkeen-panel-{args.arch}', getattr(args, 'allow_unsigned_panel', False))
+        panel, origin = asset(panel_release, f'xkeen-panel-{args.arch}', approved)
         (args.output / 'panel').write_bytes(panel)
-        provenance.append(dict(component='panel', repository=PANEL_REPO, **origin))
+        provenance.append(dict(component='panel', repository=PANEL_REPO, signed=bool(approved), **origin))
         if not args.panel_only:
             xkeen, origin = asset(release('jameszeroX/XKeen', args.xkeen_version), 'xkeen.tar.gz')
             unpack_xkeen(xkeen, args.output)
@@ -176,6 +213,7 @@ def main() -> None:
     parser.add_argument('--xray-version', default='v26.3.27')
     parser.add_argument('--arch', choices=ARCHES, required=True)
     parser.add_argument('--panel-only', action='store_true', help='Preserve an existing working XKeen/Xray stack')
+    parser.add_argument('--allow-unsigned-panel', action='store_true', help='Accept a panel release published before releases were signed')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     result = prepare(args)

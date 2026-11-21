@@ -2,6 +2,7 @@ package updater
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"xkeen-panel/internal/releasesig"
 )
 
 const sumsAsset = "SHA256SUMS"
@@ -25,6 +28,7 @@ type Release struct {
 
 	assetURL string
 	sumsURL  string
+	sigURL   string
 }
 
 // install.sh resolves the same names, so they must never change.
@@ -66,6 +70,9 @@ func (u *Updater) releaseView(payload githubRelease) Release {
 		}
 		if asset.Name == sumsAsset {
 			r.sumsURL = asset.URL
+		}
+		if asset.Name == releasesig.Asset {
+			r.sigURL = asset.URL
 		}
 	}
 	return r
@@ -139,8 +146,9 @@ func (u *Updater) fetchPublished(ctx context.Context, includePreview bool) (Rele
 			continue
 		}
 		release := u.releaseView(payload)
-		// A release can be visible briefly before all CI assets are uploaded.
-		if release.assetURL == "" || release.sumsURL == "" {
+		// A release can be visible briefly before all CI assets are uploaded,
+		// and the signature is added by the maintainer after that.
+		if release.assetURL == "" || release.sumsURL == "" || release.sigURL == "" {
 			continue
 		}
 		if selected.Tag == "" || newer(selectedVersion, version) {
@@ -155,13 +163,25 @@ func (u *Updater) expectedSum(ctx context.Context, release Release) (string, err
 		return "", fmt.Errorf("в релизе %s нет %s — установка без проверки суммы отменена", release.Tag, sumsAsset)
 	}
 
-	resp, err := u.get(ctx, release.sumsURL, "")
-	if err != nil {
-		return "", err
+	if release.sigURL == "" {
+		return "", fmt.Errorf("в релизе %s нет подписи %s — установка отменена", release.Tag, releasesig.Asset)
 	}
-	defer resp.Body.Close()
 
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 64<<10))
+	sums, err := u.fetchSmall(ctx, release.sumsURL)
+	if err != nil {
+		return "", fmt.Errorf("%s не прочитан: %w", sumsAsset, err)
+	}
+	signature, err := u.fetchSmall(ctx, release.sigURL)
+	if err != nil {
+		return "", fmt.Errorf("%s не прочитан: %w", releasesig.Asset, err)
+	}
+	// GitHub can serve any file under this name. Only checksums approved with
+	// a release key decide which binary may replace the running panel.
+	if err := releasesig.Verify(u.keys, release.Tag, sums, signature); err != nil {
+		return "", fmt.Errorf("релиз %s: %w — установка отменена", release.Tag, err)
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(sums))
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == u.asset {
@@ -173,6 +193,25 @@ func (u *Updater) expectedSum(ctx context.Context, release Release) (string, err
 	}
 
 	return "", fmt.Errorf("в %s нет суммы для %s", sumsAsset, u.asset)
+}
+
+// fetchSmall reads a short text asset whole, so that the bytes checked by the
+// signature are the bytes that are then used.
+func (u *Updater) fetchSmall(ctx context.Context, address string) ([]byte, error) {
+	resp, err := u.get(ctx, address, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	const limit = 64 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > limit {
+		return nil, errors.New("файл слишком большой")
+	}
+	return body, nil
 }
 
 func (u *Updater) get(ctx context.Context, url, accept string) (*http.Response, error) {
