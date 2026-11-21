@@ -87,6 +87,45 @@ func TestProtectedRoutingCanonicalFallbackPrecedesForeignDirectAliases(t *testin
 	}
 }
 
+// Removing a subscription puts REJECT first in a selector that had one of its
+// servers chosen. Protected routing keeps the rules of a group in force only
+// when the owner listed a block there; the added REJECT must not count.
+func TestProtectedRoutingKeepsGroupDormantAfterItsServerWasRemoved(t *testing.T) {
+	inForce := func(marked bool) bool {
+		leftover := map[string]interface{}{"name": "Leftover", "type": "select", "proxies": []string{"REJECT", "Bypass"}}
+		if marked {
+			leftover[removedSelectionKey] = true
+		}
+		p := profile{assigned: map[string]string{defaultID: allPoolID}, doc: map[string]interface{}{
+			protectedRoutingKey: protectedModeFixture(t),
+			"proxies":           []interface{}{map[string]interface{}{"name": "Base", "type": "http", "server": "127.0.0.1", "port": 1}},
+			"proxy-groups":      []interface{}{map[string]interface{}{"name": "Bypass", "type": "select", "proxies": []string{"DIRECT"}}, leftover},
+			"rules":             []interface{}{"DOMAIN-SUFFIX,leftover.fixture,Leftover", "MATCH,Bypass"},
+		}}
+		peers := map[string]cardEndpoint{allPoolID: {name: nodePrefix + allPoolID + "-member"}}
+		if _, err := render(&p, cardCatalogForTest(t), peers, true); err != nil {
+			t.Fatal(err)
+		}
+		rules := namesOf(p.doc["rules"])
+		match := slices.Index(rules, "MATCH,"+cardPrefix+defaultID)
+		if match < 0 {
+			t.Fatal("protected fallback is missing")
+		}
+		for _, rule := range rules[:match] {
+			if strings.HasPrefix(rule, "DOMAIN-SUFFIX,leftover.fixture,") {
+				return true
+			}
+		}
+		return false
+	}
+	if !inForce(false) {
+		t.Fatal("a REJECT listed by the owner no longer keeps the group's rule in force")
+	}
+	if inForce(true) {
+		t.Fatal("a REJECT added for a removed server turned a dormant group into a block")
+	}
+}
+
 func TestProtectedRoutingRejectsExplicitAllNetworkExclusion(t *testing.T) {
 	entry, err := xkeen.NormalizeExclusion("0.0.0.0/0", "explicit all-network bypass")
 	if err != nil {

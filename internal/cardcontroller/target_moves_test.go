@@ -183,6 +183,7 @@ func TestDetachProviderGroupsBlocksInsteadOfRefusing(t *testing.T) {
 		},
 		"proxy-groups": []interface{}{
 			group("Manual", "select", []interface{}{"Auto", "DIRECT"}, "gone"),
+			group("OwnerBlock", "select", []interface{}{"DIRECT", "REJECT"}, "gone"),
 			group("Chosen", "select", []interface{}{"DIRECT"}, "gone", "kept"),
 			group("Auto", "url-test", []interface{}{"DIRECT"}, "gone"),
 			group("Mixed", "fallback", []interface{}{"DIRECT"}, "gone", "kept"),
@@ -190,18 +191,19 @@ func TestDetachProviderGroupsBlocksInsteadOfRefusing(t *testing.T) {
 		},
 	}
 	live := map[string]selector{
-		"Manual": {Type: "Selector", Now: "node-gone", All: []string{"Auto", "DIRECT", "node-gone"}},
-		"Chosen": {Type: "Selector", Now: "DIRECT", All: []string{"DIRECT", "node-gone", "node-kept"}},
-		"Auto":   {Type: "URLTest", Now: "node-gone", All: []string{"DIRECT", "node-gone"}},
-		"Mixed":  {Type: "Fallback", Now: "node-gone", All: []string{"DIRECT", "node-gone", "node-kept"}},
-		"Other":  {Type: "Selector", Now: "DIRECT", All: []string{"DIRECT"}},
-		"DIRECT": {Type: "Direct"},
+		"Manual":     {Type: "Selector", Now: "node-gone", All: []string{"Auto", "DIRECT", "node-gone"}},
+		"OwnerBlock": {Type: "Selector", Now: "node-gone", All: []string{"DIRECT", "REJECT", "node-gone"}},
+		"Chosen":     {Type: "Selector", Now: "DIRECT", All: []string{"DIRECT", "node-gone", "node-kept"}},
+		"Auto":       {Type: "URLTest", Now: "node-gone", All: []string{"DIRECT", "node-gone"}},
+		"Mixed":      {Type: "Fallback", Now: "node-gone", All: []string{"DIRECT", "node-gone", "node-kept"}},
+		"Other":      {Type: "Selector", Now: "DIRECT", All: []string{"DIRECT"}},
+		"DIRECT":     {Type: "Direct"},
 	}
 	affected, reselect, err := detachProviderGroups(profile{doc: doc}, []string{"gone"}, map[string]bool{"node-gone": true}, live)
 	if err != nil {
 		t.Fatalf("removal was refused: %v", err)
 	}
-	if !reflect.DeepEqual(reselect, []string{"Manual"}) || !reflect.DeepEqual(affected, map[string]bool{"Manual": true, "Chosen": true, "Auto": true, "Mixed": true}) {
+	if !reflect.DeepEqual(reselect, []string{"Manual", "OwnerBlock"}) || !reflect.DeepEqual(affected, map[string]bool{"Manual": true, "OwnerBlock": true, "Chosen": true, "Auto": true, "Mixed": true}) {
 		t.Fatalf("wrong groups handled: %v %v", affected, reselect)
 	}
 	groups := map[string]map[string]interface{}{}
@@ -215,8 +217,30 @@ func TestDetachProviderGroupsBlocksInsteadOfRefusing(t *testing.T) {
 			t.Fatalf("%s: proxies %v, providers %v", name, g["proxies"], g["use"])
 		}
 	}
-	// The chosen server is removed: block first, keep the other options.
+	// The chosen server is removed: block first, keep the other options. The
+	// added REJECT is marked; a REJECT the owner listed keeps its meaning.
 	check("Manual", []string{"REJECT", "Auto", "DIRECT"}, nil)
+	check("OwnerBlock", []string{"REJECT", "DIRECT"}, nil)
+	if groups["Manual"][removedSelectionKey] != true || groups["OwnerBlock"][removedSelectionKey] != nil {
+		t.Fatal("added and deliberate REJECT members are not told apart")
+	}
+	if !reflect.DeepEqual(blockAfterRemoval(groups["Manual"]), []string{"Auto", "DIRECT"}) || !reflect.DeepEqual(blockAfterRemoval(groups["OwnerBlock"]), []string{"REJECT", "DIRECT"}) {
+		t.Fatal("wrong members considered a deliberate block")
+	}
+	// Removing a second subscription from an already marked group keeps one REJECT.
+	again := map[string]interface{}{"name": "Manual2", "type": "select", "use": []interface{}{"kept"}, "proxies": groups["Manual"]["proxies"], removedSelectionKey: true}
+	if _, _, err := detachProviderGroups(profile{doc: map[string]interface{}{"proxy-providers": map[string]interface{}{}, "proxy-groups": []interface{}{again}}}, []string{"kept"}, map[string]bool{"node-kept": true},
+		map[string]selector{"Manual2": {Type: "Selector", Now: "node-kept", All: []string{"REJECT", "Auto", "DIRECT", "node-kept"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(namesOf(again["proxies"]), []string{"REJECT", "Auto", "DIRECT"}) || again[removedSelectionKey] != true {
+		t.Fatalf("repeated removal changed the marked group wrongly: %v", again["proxies"])
+	}
+	// A mark without its REJECT is stale and is dropped.
+	stale := map[string]interface{}{"proxies": []interface{}{"Auto"}, removedSelectionKey: true}
+	if blockAfterRemoval(stale); stale[removedSelectionKey] != nil {
+		t.Fatal("stale mark survived")
+	}
 	// A deliberate DIRECT and a group that still has servers are left alone.
 	check("Chosen", []string{"DIRECT"}, []string{"kept"})
 	check("Mixed", []string{"DIRECT"}, []string{"kept"})

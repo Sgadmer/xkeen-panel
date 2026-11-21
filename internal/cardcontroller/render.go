@@ -208,7 +208,10 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 			if manualBlocks[name] || str(group["type"]) != "select" {
 				continue
 			}
-			for _, child := range namesOf(group["proxies"]) {
+			// A REJECT added because the chosen server was removed with its
+			// subscription is not the owner's block: the group's rules stay
+			// as dormant or as live as they were before the removal.
+			for _, child := range blockAfterRemoval(group) {
 				if manualBlocks[child] {
 					manualBlocks[name], changed = true, true
 					break

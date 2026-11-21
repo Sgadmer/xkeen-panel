@@ -97,6 +97,15 @@ func TestMihomoDetachOnlySelectedNativeSource(t *testing.T) {
 	if undo == nil {
 		t.Fatal("missing rollback")
 	}
+	blocked, err := c.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range list(blocked.doc["proxy-groups"]) {
+		if group := object(raw); str(group["name"]) == "Main" && (group[removedSelectionKey] != true || !reflect.DeepEqual(namesOf(group["proxies"]), []string{"REJECT", "Auto", "DIRECT"})) {
+			t.Fatalf("the added REJECT is not first or not marked: %v", group["proxies"])
+		}
+	}
 	if err := undo(ctx); err != nil {
 		t.Fatal(err)
 	}

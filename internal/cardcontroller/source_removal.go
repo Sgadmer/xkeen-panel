@@ -49,6 +49,26 @@ func unsafeFallback(name string, live map[string]selector, seen map[string]bool)
 	return false
 }
 
+// removedSelectionKey marks a selector that got REJECT as its first member only
+// because the server chosen in it was removed with its subscription. Unlike a
+// REJECT the owner listed on purpose, this one does not make the group a
+// deliberate block whose rules protected routing keeps in force.
+const removedSelectionKey = "x-xkeen-panel-removed-selection"
+
+// blockAfterRemoval reports the members of a selector while leaving out the
+// REJECT that was added for a removed selection. It drops a stale mark.
+func blockAfterRemoval(group map[string]interface{}) []string {
+	members := namesOf(group["proxies"])
+	if group[removedSelectionKey] != true {
+		return members
+	}
+	if len(members) == 0 || members[0] != "REJECT" {
+		delete(group, removedSelectionKey)
+		return members
+	}
+	return members[1:]
+}
+
 // closedMember says that a remaining group member cannot carry VPN traffic by
 // itself: it is a built-in direct or blocking action.
 func closedMember(name string, live map[string]selector) bool {
@@ -67,7 +87,8 @@ func closedMember(name string, live map[string]selector) bool {
 // that loses its servers fails closed instead:
 //   - a manual selector whose chosen server is removed gets REJECT as its first
 //     member, so Mihomo falls back to blocking the moment the profile reloads.
-//     The caller then selects REJECT explicitly;
+//     The caller then selects REJECT explicitly. The group is marked, so this
+//     REJECT does not turn a dormant group into a deliberate block;
 //   - an automatic group left with nothing but direct exits blocks as well.
 //
 // Other choices of the owner, including a deliberately selected DIRECT, stay.
@@ -103,16 +124,23 @@ func detachProviderGroups(p profile, names []string, removed map[string]bool, li
 		} else {
 			delete(group, "use")
 		}
-		if len(keep) == 0 && !all && group["include-all-proxies"] != true && len(list(group["proxies"])) == 0 {
+		if len(keep) == 0 && !all && group["include-all-proxies"] != true && len(namesOf(group["proxies"])) == 0 {
 			group["proxies"] = []string{"REJECT"}
 		}
 		if strings.EqualFold(g.Type, "Selector") {
 			if removed[g.Now] {
+				listed := blockAfterRemoval(group)
 				members := []string{"REJECT"}
-				for _, member := range namesOf(group["proxies"]) {
+				for _, member := range listed {
 					if member != "REJECT" {
 						members = append(members, member)
 					}
+				}
+				// A REJECT the owner had listed keeps its meaning.
+				if slices.Contains(listed, "REJECT") {
+					delete(group, removedSelectionKey)
+				} else {
+					group[removedSelectionKey] = true
 				}
 				group["proxies"] = members
 				reselect = append(reselect, id)
