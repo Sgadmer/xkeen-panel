@@ -182,7 +182,7 @@ export function SecurityPage() {
                         {codes.map(code => <li key={code} className='select-all'>{code}</li>)}
                     </ul>
                 </Group>
-                <button type='button' className={primary} onClick={() => saveTextFile('xkeen-panel-codes.txt', 'Запасные коды входа в панель XKeen\n\n' + codes.join('\n') + '\n')}>Скачать файлом</button>
+                <button type='button' className={primary} onClick={() => saveTextFile('xkeen-panel-codes.txt', 'Запасные коды входа в панель XKeen\n\n' + codes.join('\n') + '\n', 'text/plain;charset=utf-8')}>Скачать файлом</button>
                 <button type='button' className='min-h-11 cursor-pointer text-tint' onClick={() => void navigator.clipboard?.writeText(codes.join('\n'))}>Скопировать</button>
             </div>}
         </Sheet>

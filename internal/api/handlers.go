@@ -36,6 +36,8 @@ type Handlers struct {
 	// reissues its servers on every download is reported once, not hourly.
 	// Written only while the watchdog's change lock is held.
 	reissueNotes map[string]string
+	// One store of journal presets for the journal page and for the export.
+	journalPresets *trafficjournal.Presets
 }
 
 func NewHandlers(cfg *models.Config, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore) *Handlers {

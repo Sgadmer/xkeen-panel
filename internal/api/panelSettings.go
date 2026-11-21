@@ -111,14 +111,29 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат запроса"})
 		return
 	}
+	saved, status, err := h.Apply(r.Context(), req)
+	if err != nil {
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
 
+// Current returns the settings in force.
+func (h *PanelSettingsHandler) Current() PanelSettings {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.current()
+}
+
+// normalizePanelSettings checks the values a request or an imported file carries.
+func normalizePanelSettings(req PanelSettings) (PanelSettings, error) {
 	seen := map[string]bool{}
 	countries := []string{}
 	for _, c := range req.AvoidCountries {
 		c = strings.ToUpper(strings.TrimSpace(c))
 		if !countryCodeRe.MatchString(c) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "код страны должен состоять из двух латинских букв: " + c})
-			return
+			return PanelSettings{}, errors.New("код страны должен состоять из двух латинских букв: " + c)
 		}
 		if !seen[c] {
 			seen[c] = true
@@ -126,8 +141,17 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if req.RefreshMinutes != 0 && (req.RefreshMinutes < 5 || req.RefreshMinutes > 1440) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "интервал обновления — от 5 минут до суток, или 0 чтобы выключить"})
-		return
+		return PanelSettings{}, errors.New("интервал обновления — от 5 минут до суток, или 0 чтобы выключить")
+	}
+	return PanelSettings{AvoidCountries: countries, RefreshMinutes: req.RefreshMinutes}, nil
+}
+
+// Apply saves the settings and puts the previous ones back when the country
+// filter can not be applied. The status is the HTTP answer for a failure.
+func (h *PanelSettingsHandler) Apply(ctx context.Context, req PanelSettings) (PanelSettings, int, error) {
+	next, err := normalizePanelSettings(req)
+	if err != nil {
+		return PanelSettings{}, http.StatusBadRequest, err
 	}
 
 	h.mu.Lock()
@@ -137,18 +161,16 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 		defer h.unlockCountries()
 	}
 
-	next := PanelSettings{AvoidCountries: countries, RefreshMinutes: req.RefreshMinutes}
 	staged, err := h.stageSettings(next)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось подготовить файл настроек"})
-		return
+		return PanelSettings{}, http.StatusInternalServerError, errors.New("не удалось подготовить файл настроек")
 	}
 	defer os.Remove(staged)
 	previous := h.current()
 	changed := !slices.Equal(previous.AvoidCountries, next.AvoidCountries)
 	h.loadRuntime(next)
 	if changed && h.applyCountries != nil {
-		err = h.applyCountries(r.Context())
+		err = h.applyCountries(ctx)
 	}
 	if err == nil {
 		err = os.Rename(staged, panelSettingsPath(h.config.DataDir))
@@ -157,15 +179,14 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 		h.loadRuntime(previous)
 		var restoreErr error
 		if changed && h.applyCountries != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			restoreErr = h.applyCountries(ctx)
+			restore, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			restoreErr = h.applyCountries(restore)
 			cancel()
 		}
 		if restoreErr != nil {
 			err = errors.Join(err, errors.New("восстановление прежнего фильтра стран не подтверждено"))
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return PanelSettings{}, http.StatusInternalServerError, err
 	}
 
 	select {
@@ -173,5 +194,5 @@ func (h *PanelSettingsHandler) HandlePut(w http.ResponseWriter, r *http.Request)
 	default:
 	}
 
-	writeJSON(w, http.StatusOK, h.current())
+	return h.current(), http.StatusOK, nil
 }

@@ -103,9 +103,11 @@ export function historyQuery(filters: JournalFilters, limit: number, window?: { 
     return query.toString()
 }
 
-export function saveTextFile(name: string, text: string) {
+// A table for a spreadsheet gets the byte-order mark those programs expect;
+// any other file (type given) is saved exactly as it is.
+export function saveTextFile(name: string, text: string, type?: string) {
     const link = document.createElement('a')
-    link.href = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/tab-separated-values;charset=utf-8' }))
+    link.href = URL.createObjectURL(type ? new Blob([text], { type }) : new Blob(['﻿' + text], { type: 'text/tab-separated-values;charset=utf-8' }))
     link.download = name
     document.body.append(link)
     link.click()

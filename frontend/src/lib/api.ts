@@ -7,9 +7,12 @@ export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
 export class ApiError extends Error {
     status: number
-    constructor(message: string, status: number) {
+    // What the panel sent along with the error, when it sent anything.
+    body?: unknown
+    constructor(message: string, status: number, body?: unknown) {
         super(message)
         this.status = status
+        this.body = body
     }
 }
 
@@ -62,7 +65,7 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
         const message = data?.error
             ? data.error.charAt(0).toUpperCase() + data.error.slice(1) + (resp.status === 429 || resp.status === 503 ? '.' + waitHint(resp) : '')
             : UNAVAILABLE
-        throw new ApiError(message, resp.status)
+        throw new ApiError(message, resp.status, data ?? undefined)
     }
     if (data === null) throw new ApiError(UNAVAILABLE, resp.status)
 

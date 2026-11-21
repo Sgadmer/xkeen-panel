@@ -1,4 +1,5 @@
 import {
+    IconArrowsExchange,
     IconBell,
     IconCpu,
     IconDownload,
@@ -46,6 +47,7 @@ export function SettingsPage() {
                         <Row icon={icon('#ff9500', IconBell)} label='Уведомления' hint='Какие события присылать на это устройство' to='/settings/notifications' />
                         <Row icon={icon('#5856d6', IconFingerprint)} label='Вход и безопасность' hint='Пароль, код, запасные коды, ключ доступа, адрес панели' to='/settings/security' />
                         <Row icon={icon('#6366f1', IconCpu)} label='Роутер и XKeen' hint={[core, status?.mode].filter(Boolean).join(' · ') || 'Компоненты, списки адресов, порты'} to='/settings/components' />
+                        <Row icon={icon('#64d2ff', IconArrowsExchange)} label='Перенос настроек' hint='Сохранить в файл или загрузить из файла' to='/settings/transfer' />
                         <Row
                             icon={icon('#8e8e93', IconDownload)}
                             label='О панели и обновление'

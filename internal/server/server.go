@@ -243,6 +243,7 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/panel/settings", s.settings.HandleGet)
 			r.Put("/panel/settings", s.settings.HandlePut)
+			api.NewTransferHandler(handlers, s.settings).Mount(r)
 
 			r.Get("/devices", devicesHandler.HandleList)
 			r.Post("/devices/rename", devicesHandler.HandleRename)

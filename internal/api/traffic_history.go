@@ -48,7 +48,10 @@ func (h *Handlers) MountTrafficHistory(r chi.Router) {
 	if h.config != nil {
 		dataDir = h.config.DataDir
 	}
-	presets := trafficjournal.NewPresets(dataDir)
+	if h.journalPresets == nil {
+		h.journalPresets = trafficjournal.NewPresets(dataDir)
+	}
+	presets := h.journalPresets
 	status := func() trafficjournal.Settings {
 		if h.History != nil {
 			settings := h.History.Status()
