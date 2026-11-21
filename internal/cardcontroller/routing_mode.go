@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"xkeen-panel/internal/xkeen"
 )
 
 const protectedRoutingKey = "x-xkeen-panel-protected-routing"
@@ -46,6 +48,11 @@ func protectedDirectRule(fields []string, target int) bool {
 	switch fields[0] {
 	case "DOMAIN", "DOMAIN-SUFFIX":
 		return validServiceDomain(fields[1])
+	case "DOMAIN-REGEX":
+		// The one expression accepted here is the panel's own rendering of a
+		// pattern exclusion, which is checked for breadth when it is added.
+		_, pattern := xkeen.PatternFromRegex(fields[1])
+		return pattern && target == 2
 	case "IP-CIDR", "IP-CIDR6":
 		prefix, err := netip.ParsePrefix(fields[1])
 		return err == nil && prefix.Bits() > 0
@@ -63,7 +70,7 @@ func validateProtectedExclusions(doc map[string]interface{}) error {
 		return err
 	}
 	for _, entry := range entries.Entries {
-		if prefix, err := netip.ParsePrefix(entry.Value); err == nil && prefix.Bits() == 0 {
+		if prefix, err := netip.ParsePrefix(entry.Value); err == nil && prefix.Bits() == 0 && !entry.Disabled {
 			return errors.New("исключение для всех IP несовместимо с защищённым режимом; сначала удалите это исключение")
 		}
 	}

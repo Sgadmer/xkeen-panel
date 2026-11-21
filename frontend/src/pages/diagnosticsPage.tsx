@@ -8,6 +8,7 @@ import {
 } from '@tabler/icons-react'
 import { Group, PageTitle, Row } from '@/components/ios'
 import { RouterActivity } from '@/components/routerActivity'
+import { ProtectionWarning } from '@/components/protectionWarning'
 import { useLogs, usePool, useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { isSet, timeAgo } from '@/lib/format'
@@ -43,6 +44,7 @@ export function DiagnosticsPage() {
     const [confirming, setConfirming] = useState<
         'restart' | 'stop' | 'pool' | null
     >(null)
+    const [stopping, setStopping] = useState(false)
     const logRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
@@ -116,6 +118,13 @@ export function DiagnosticsPage() {
                 }
             />
 
+            {stopping && <ProtectionWarning title='Остановить прокси?' confirmLabel='Остановить прокси'
+                busy={stop.isPending} error={stop.error?.message}
+                onCancel={() => { setStopping(false); stop.reset() }}
+                onConfirm={() => { stop.mutateAsync().then(() => setStopping(false), () => {}) }}>
+                <p>VPN перестанет работать для всех устройств. Пока прокси остановлен, роутер не направляет трафик в VPN: сайты и приложения будут открываться <strong className='text-foreground'>напрямую</strong>, с домашнего адреса.</p>
+                <p className='text-muted-foreground'>Если защита сервисов не позволяет остановку, панель откажет и ничего не изменит.</p>
+            </ProtectionWarning>}
             <RouterActivity />
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <div className='flex flex-col gap-5'>
@@ -225,15 +234,9 @@ export function DiagnosticsPage() {
                             />
                         ) : (
                             <Row
-                                label={
-                                    confirming === 'stop'
-                                        ? 'Нажмите ещё раз — VPN отключится'
-                                        : 'Остановить прокси'
-                                }
+                                label='Остановить прокси'
                                 tone='destructive'
-                                onClick={() =>
-                                    confirm('stop', () => stop.mutate())
-                                }
+                                onClick={() => { stop.reset(); setStopping(true) }}
                                 disabled={busy}
                             />
                         ))}

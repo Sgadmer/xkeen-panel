@@ -331,13 +331,24 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	// protected classifiers still run before the original exceptions below.
 	head := 0
 	var analyticsBypasses []string
+	// Pattern exclusions are wide by nature. They keep their place among the
+	// owner's leading rules on disk, but are evaluated below every service card:
+	// a pattern can not take an address away from a card, telemetry included.
+	var leading, patterns []string
 	for _, rule := range original {
 		fields, target := targetPart(rule)
 		if fields[target] != "DIRECT" || fields[0] == "MATCH" || protectedRouting && !protectedDirectRule(fields, target) {
 			break
 		}
-		analyticsBypasses = append(analyticsBypasses, "("+ruleCondition(fields, target)+")")
 		head++
+		if fields[0] == "DOMAIN-REGEX" && target == 2 {
+			if _, pattern := xkeen.PatternFromRegex(fields[1]); pattern {
+				patterns = append(patterns, rule)
+				continue
+			}
+		}
+		leading = append(leading, rule)
+		analyticsBypasses = append(analyticsBypasses, "("+ruleCondition(fields, target)+")")
 	}
 	priority := []string{}
 	var analyticsRules, dedicatedRules []string
@@ -530,9 +541,10 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 	rules = append(rules, dedicatedRules...)
 	rules = append(rules, analyticsRules...)
 	rules = append(rules, priority[:claudeRuleCount]...)
-	rules = append(rules, original[:head]...)
+	rules = append(rules, leading...)
 	rules = append(rules, specific...)
 	rules = append(rules, priority[claudeRuleCount:]...)
+	rules = append(rules, patterns...)
 	defaultKey := p.assigned[defaultID]
 	if defaultKey != "" || registry.Enabled || protectedRouting {
 		if registry.Enabled && defaultKey == "" && !native[defaultTarget] {

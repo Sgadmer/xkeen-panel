@@ -301,7 +301,7 @@ export function ServiceRoutesPage() {
                 <p className='mt-1 min-h-5 truncate text-sm leading-5 text-muted-foreground' title={summary || undefined}>
                     {busy ? 'Меняем маршрут…' : summary}
                 </p>
-                {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} />}
+                {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} direct={service.target === 'direct'} />}
                 <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
                     protectionEnabled={claudeProtection} />
             </section>

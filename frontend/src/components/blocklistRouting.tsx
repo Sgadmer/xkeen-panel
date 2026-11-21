@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Group, Row } from '@/components/ios'
+import { ProtectionWarning } from '@/components/protectionWarning'
 import { api } from '@/lib/api'
 import { ServiceListsProtection } from '@/components/serviceListsProtection'
 
@@ -33,8 +35,9 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
         },
         onError: () => { void client.invalidateQueries({ queryKey: key }) },
     })
+    const [confirming, setConfirming] = useState(false)
     const data = state.data
-    const error = update.error?.message || state.error?.message || data?.error
+    const error = (confirming ? undefined : update.error?.message) || state.error?.message || data?.error
     const protectedMode = data?.mode === 'protected' || !data?.mode && !data?.enabled && data?.protected_fallback === true
     return <div className='flex flex-col gap-5'>
         <div id='service-lists'><ServiceListsProtection /></div>
@@ -50,7 +53,7 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
                 </label>
                 <label className='flex min-h-20 cursor-pointer items-center gap-3 py-3'>
                     <input type='radio' name='routing-mode' value='blocklist' checked={data.mode === 'blocklist' || !data.mode && data.enabled}
-                        onChange={() => update.mutate(true)} className='size-5 shrink-0 accent-indigo-500' />
+                        onChange={() => { update.reset(); setConfirming(true) }} className='size-5 shrink-0 accent-indigo-500' />
                     <span className='min-w-0 flex-1'>
                         <span className='block text-[17px]'>Только по списку блокировок</span>
                         <span className='mt-1 block text-[13px] text-muted-foreground'>Адреса из Re:filter идут через основной VPN. Остальные адреса без правила сервиса открываются напрямую.</span>
@@ -72,7 +75,14 @@ export function BlocklistRouting({ onApplied }: { onApplied?: () => void }) {
             {data?.enabled && <button type='button' className='min-h-11 py-2 text-tint disabled:opacity-60' disabled={update.isPending}
                 onClick={() => update.mutate('refresh')}>Перечитать геобазы роутера</button>}
         </Group>
-        {update.isPending && <p role='status' className='px-4 text-sm text-tint'>Проверяем и применяем правила…</p>}
+        {confirming && <ProtectionWarning title='Перейти на режим «по списку блокировок»?' confirmLabel='Перейти на режим по списку'
+            busy={update.isPending} error={update.error?.message}
+            onCancel={() => { setConfirming(false); update.reset() }}
+            onConfirm={() => { update.mutateAsync(true).then(() => setConfirming(false), () => {}) }}>
+            <p>Через VPN пойдут только адреса из списка блокировок и из карточек сервисов. Всё остальное откроется <strong className='text-foreground'>напрямую</strong>, с домашнего адреса.</p>
+            <p className='rounded-xl bg-warning/10 p-3 text-warning'>Приложения обращаются и к адресам, которых ещё нет в правилах их карточки. В этом режиме такие запросы уйдут напрямую — даже при включённом kill switch карточки.</p>
+        </ProtectionWarning>}
+        {update.isPending && !confirming && <p role='status' className='px-4 text-sm text-tint'>Проверяем и применяем правила…</p>}
         {error && <p role='alert' className='px-4 text-sm text-destructive'>{error}</p>}
     </div>
 }

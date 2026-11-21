@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ProtectionWarning } from '@/components/protectionWarning'
 import {
     IconBell,
     IconAdjustmentsHorizontal,
@@ -39,6 +41,7 @@ export function SettingsPage() {
         mutationFn: (id: string) => api.del('/api/account/passkey', { id }),
         onSettled: () => qc.invalidateQueries({ queryKey: ['passkeys'] }),
     })
+    const [removing, setRemoving] = useState(false)
     const passkey = passkeys.data?.passkeys?.[0]
     const faceIdSetupLink = passkeys.isSuccess && !passkey && !passkeySupported()
     const passkeyError = addPasskey.error || removePasskey.error || passkeys.error
@@ -99,7 +102,7 @@ export function SettingsPage() {
                             {passkey ? (
                                 <Row icon={icon('#30d158', IconFingerprint)} label='Ключ доступа'
                                     hint={`${passkey.slice(0, 8)}…`}
-                                    trailing={<button type='button' onClick={() => removePasskey.mutate(passkey)}
+                                    trailing={<button type='button' onClick={() => { removePasskey.reset(); setRemoving(true) }}
                                         disabled={removePasskey.isPending}
                                         className='min-h-9 cursor-pointer px-1 text-[15px] text-destructive'>Удалить</button>}
                                 />
@@ -110,6 +113,12 @@ export function SettingsPage() {
                             ) : passkeys.isPending ? <Row label='Загружаем ключи…' /> : null}
                         </Group>
                     )}
+                    {removing && passkey && <ProtectionWarning title='Удалить ключ доступа?' confirmLabel='Удалить ключ' delay={0}
+                        busy={removePasskey.isPending} error={removePasskey.error?.message}
+                        onCancel={() => { setRemoving(false); removePasskey.reset() }}
+                        onConfirm={() => { removePasskey.mutateAsync(passkey).then(() => setRemoving(false), () => {}) }}>
+                        <p>Вход по Face ID или ключу доступа перестанет работать на всех устройствах. Войти можно будет с паролем и кодом из приложения-аутентификатора.</p>
+                    </ProtectionWarning>}
                     <Group><Row label='Выйти' tone='destructive' onClick={logout} /></Group>
                 </div>
             </div>

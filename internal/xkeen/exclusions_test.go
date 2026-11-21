@@ -35,7 +35,8 @@ func TestNormalizeExclusion(t *testing.T) {
 }
 
 func TestNormalizeExclusionRejectsAmbiguousAndUnsafeInput(t *testing.T) {
-	for _, input := range []string{"", "*.example.com", "https://user:secret@example.com/a", "ftp://example.com", "https:///example.com", "example.com/path", "example.com:443", "999.1.2.3", "10.0.0.0/33", "2001:db8::%eth0", "regexp:.*", "geosite:ru", "domain:example.com;echo secret", "https://example.com:bad/path", "-bad.example", "a..example", "https://example.com\nattacker.test"} {
+	// "*.example.com" became a valid pattern exclusion; a whole zone is not one.
+	for _, input := range []string{"", "*.com", "*", "https://user:secret@example.com/a", "ftp://example.com", "https:///example.com", "example.com/path", "example.com:443", "999.1.2.3", "10.0.0.0/33", "2001:db8::%eth0", "regexp:.*", "geosite:ru", "domain:example.com;echo secret", "https://example.com:bad/path", "-bad.example", "a..example", "https://example.com\nattacker.test"} {
 		if _, err := NormalizeExclusion(input, ""); err == nil {
 			t.Errorf("accepted invalid exclusion %q", input)
 		}

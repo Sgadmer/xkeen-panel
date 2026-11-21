@@ -13,6 +13,7 @@ import {
 } from '@tabler/icons-react'
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { DeviceEditor } from '@/components/deviceEditor'
+import { ProtectionWarning } from '@/components/protectionWarning'
 import { api } from '@/lib/api'
 import type { Device, DevicesResponse } from '@/types'
 
@@ -62,6 +63,7 @@ export function DeviceGroups({
 }) {
     const qc = useQueryClient()
     const [editing, setEditing] = useState<Device | null>(null)
+    const [leaving, setLeaving] = useState<Device | null>(null)
     const [notice, setNotice] = useState('')
     const opener = useRef<HTMLButtonElement>(null)
     const groups = useRef<HTMLDivElement>(null)
@@ -116,7 +118,12 @@ export function DeviceGroups({
                 trailing={
                     <Switch
                         checked={d.vpn}
-                        onChange={vpn => toggle.mutate({ mac: d.mac, vpn })}
+                        onChange={vpn => {
+                            toggle.reset()
+                            // Taking a device out of the VPN lowers protection: ask first.
+                            if (vpn) toggle.mutate({ mac: d.mac, vpn })
+                            else setLeaving(d)
+                        }}
                         label={`VPN для ${d.name}`}
                         disabled={!data.policy_found || toggle.isPending}
                     />
@@ -152,6 +159,13 @@ export function DeviceGroups({
                     <Group title='Не в сети'>{offline.map(row)}</Group>
                 )}
             </div>
+            {leaving && <ProtectionWarning key={leaving.mac} title='Отключить VPN для устройства?' confirmLabel='Пустить напрямую'
+                busy={toggle.isPending}
+                onCancel={() => setLeaving(null)}
+                onConfirm={() => { toggle.mutate({ mac: leaving.mac, vpn: false }); setLeaving(null) }}>
+                <p>Устройство <strong className='text-foreground'>{leaving.name}</strong> будет выходить в интернет напрямую, с домашнего адреса. Роутер перестанет направлять его трафик в VPN, поэтому карточки сервисов и kill switch на него действовать не будут.</p>
+                <p className='text-muted-foreground'>Claude, ChatGPT и другие сервисы на этом устройстве увидят ваш настоящий адрес.</p>
+            </ProtectionWarning>}
             {editing && <DeviceEditor key={editing.mac}
                 device={data.devices.find(d => d.mac === editing.mac) ?? editing}
                 returnFocus={() => opener.current?.isConnected ? opener.current : groups.current}
@@ -173,6 +187,7 @@ export function NewDevicesGroup({ data }: { data: DevicesResponse }) {
         onSettled: () => qc.invalidateQueries({ queryKey: ['devices'] }),
     })
 
+    const [confirming, setConfirming] = useState(false)
     return (
         <Group
             footer={
@@ -190,12 +205,22 @@ export function NewDevicesGroup({ data }: { data: DevicesResponse }) {
                 trailing={
                     <Switch
                         checked={data.new_devices_vpn}
-                        onChange={vpn => newDevices.mutate(vpn)}
+                        onChange={vpn => {
+                            newDevices.reset()
+                            if (vpn) newDevices.mutate(vpn)
+                            else setConfirming(true)
+                        }}
                         label='Новые устройства через VPN'
                         disabled={newDevices.isPending}
                     />
                 }
             />
+            {confirming && <ProtectionWarning title='Новые устройства — напрямую?' confirmLabel='Пускать напрямую'
+                onCancel={() => setConfirming(false)}
+                onConfirm={() => { newDevices.mutate(false); setConfirming(false) }}>
+                <p>Каждое устройство, которое впервые подключится к домашней сети, будет выходить в интернет <strong className='text-foreground'>напрямую</strong>, пока вы не включите для него VPN вручную.</p>
+                <p className='text-muted-foreground'>То же произойдёт с устройствами, которые сейчас идут «как вся сеть».</p>
+            </ProtectionWarning>}
         </Group>
     )
 }

@@ -122,6 +122,17 @@ func ServiceForHost(host string) string {
 	return ""
 }
 
+// ServiceSuffixes returns the built-in domains of a service card. Each one
+// stands for the domain itself and everything below it.
+func ServiceSuffixes(id string) []string {
+	for _, service := range serviceCatalog {
+		if service.id == id {
+			return strings.Fields(service.suffixes)
+		}
+	}
+	return nil
+}
+
 func knownService(id string) bool {
 	for _, service := range serviceCatalog {
 		if id == service.id {

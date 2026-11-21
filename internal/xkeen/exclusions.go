@@ -27,6 +27,17 @@ type Exclusion struct {
 	Type    string `json:"type"`
 	Value   string `json:"value"`
 	Comment string `json:"comment"`
+	// Kept in the list but not applied: the address follows the usual rules.
+	Disabled bool `json:"disabled,omitempty"`
+}
+
+// Stored reports whether the entry is exactly what NormalizeExclusion makes of
+// its own value and comment. Whether it is switched off is the owner's choice
+// and not part of that form.
+func (e Exclusion) Stored() bool {
+	normalized, err := NormalizeExclusion(e.Value, e.Comment)
+	normalized.Disabled = e.Disabled
+	return err == nil && normalized == e
 }
 
 type Exclusions struct {
@@ -71,9 +82,17 @@ func NormalizeExclusion(value, comment string) (Exclusion, error) {
 		value = strings.TrimPrefix(value, "domain:")
 	} else if strings.HasPrefix(value, "full:") {
 		kind, value = "full", strings.TrimPrefix(value, "full:")
+	} else if strings.HasPrefix(value, patternPrefix) {
+		value = strings.TrimPrefix(value, patternPrefix)
 	}
 	value = strings.ToLower(strings.TrimSuffix(value, "."))
-	if ip, err := netip.ParseAddr(value); err == nil && ip.Zone() == "" {
+	if strings.Contains(value, "*") {
+		pattern, err := normalizePattern(value)
+		if err != nil {
+			return Exclusion{}, err
+		}
+		kind, value = "pattern", patternPrefix+pattern
+	} else if ip, err := netip.ParseAddr(value); err == nil && ip.Zone() == "" {
 		kind, value = "ip", ip.Unmap().String()
 	} else if prefix, err := netip.ParsePrefix(value); err == nil {
 		kind, value = "ip", prefix.Masked().String()
@@ -120,8 +139,7 @@ func LoadExclusions(dataDir string) (Exclusions, error) {
 	}
 	seen := map[string]bool{}
 	for _, entry := range result.Entries {
-		normalized, err := NormalizeExclusion(entry.Value, entry.Comment)
-		if err != nil || entry != normalized || seen[entry.ID] {
+		if !entry.Stored() || seen[entry.ID] {
 			return Exclusions{}, fmt.Errorf("сохранённые исключения повреждены")
 		}
 		seen[entry.ID] = true
@@ -179,15 +197,17 @@ func BuildExclusionsConfig(rt Runtime, entries Exclusions) (map[string]interface
 	}
 	rules := []interface{}{}
 	for _, entry := range entries.Entries {
-		normalized, err := NormalizeExclusion(entry.Value, entry.Comment)
-		if err != nil || entry != normalized {
+		if !entry.Stored() {
 			return nil, fmt.Errorf("некорректное исключение")
+		}
+		if entry.Disabled {
+			continue
 		}
 		field := "domain"
 		if entry.Type == "ip" {
 			field = "ip"
 		}
-		rules = append(rules, map[string]interface{}{"type": "field", "ruleTag": exclusionRulePrefix + entry.ID, "inboundTag": clients, field: []string{entry.Value}, "outboundTag": direct})
+		rules = append(rules, map[string]interface{}{"type": "field", "ruleTag": exclusionRulePrefix + entry.ID, "inboundTag": clients, field: []string{xrayDomain(entry)}, "outboundTag": direct})
 	}
 	routing := mapOf(document["routing"])
 	for _, raw := range asSlice(routing["rules"]) {

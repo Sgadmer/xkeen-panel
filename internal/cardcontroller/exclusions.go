@@ -36,6 +36,13 @@ func directEntry(rule string) (xkeen.Exclusion, bool) {
 		} else {
 			value = "domain:" + value
 		}
+	case "DOMAIN-REGEX":
+		// Only an expression the panel itself writes for a pattern exclusion.
+		pattern, ok := xkeen.PatternFromRegex(value)
+		if len(fields) != 3 || !ok {
+			return xkeen.Exclusion{}, false
+		}
+		value = "pattern:" + pattern
 	case "IP-CIDR", "IP-CIDR6":
 		if len(fields) != 4 || fields[3] != "no-resolve" {
 			return xkeen.Exclusion{}, false
@@ -61,6 +68,9 @@ func exclusionRule(e xkeen.Exclusion) string {
 	if e.Type == "full" {
 		return "DOMAIN," + strings.TrimPrefix(e.Value, "full:") + ",DIRECT"
 	}
+	if pattern, ok := xkeen.ExclusionPattern(e); ok {
+		return "DOMAIN-REGEX," + xkeen.PatternRegex(pattern) + ",DIRECT"
+	}
 	cidr := e.Value
 	if a, err := netip.ParseAddr(cidr); err == nil {
 		cidr = netip.PrefixFrom(a, a.BitLen()).String()
@@ -84,8 +94,7 @@ func managedExclusions(doc map[string]interface{}) (xkeen.Exclusions, bool, erro
 	}
 	seen := map[string]bool{}
 	for _, e := range entries.Entries {
-		normalized, err := xkeen.NormalizeExclusion(e.Value, e.Comment)
-		if err != nil || normalized != e || seen[exclusionRule(e)] {
+		if !e.Stored() || seen[exclusionRule(e)] {
 			return entries, true, errors.New("повреждены данные исключения Mihomo")
 		}
 		seen[exclusionRule(e)] = true
@@ -146,7 +155,10 @@ func replaceExclusionRules(p *profile, old, next xkeen.Exclusions) {
 	}
 	rules := []interface{}{}
 	for _, e := range next.Entries {
-		rules = append(rules, exclusionRule(e))
+		// An entry that is switched off stays in the list without its rule.
+		if !e.Disabled {
+			rules = append(rules, exclusionRule(e))
+		}
 	}
 	leading := true
 	for _, raw := range list(p.doc["rules"]) {
@@ -165,22 +177,53 @@ func replaceExclusionRules(p *profile, old, next xkeen.Exclusions) {
 	p.doc["rules"], p.doc[exclusionKey] = rules, next
 }
 
-func (c *Controller) updateExclusions(ctx context.Context, dir string, change func(*xkeen.Exclusions) error) (xkeen.Exclusions, error) {
+// exclusionsView is the list the page shows. Covered names, per entry, the
+// service card whose addresses the entry overlaps while that card is protected
+// by its kill switch: the entry was added before the card was protected.
+type exclusionsView struct {
+	xkeen.Exclusions
+	Covered map[string]string `json:"covered,omitempty"`
+}
+
+func (c *Controller) exclusionsView(p profile, entries xkeen.Exclusions) exclusionsView {
+	view := exclusionsView{Exclusions: entries}
+	guard := c.newExclusionGuard(p)
+	for _, entry := range entries.Entries {
+		if entry.Disabled {
+			continue
+		}
+		if _, name, _ := guard.conflict(entry); name != "" {
+			if view.Covered == nil {
+				view.Covered = map[string]string{}
+			}
+			view.Covered[entry.ID] = name
+		}
+	}
+	return view
+}
+
+func (c *Controller) updateExclusions(ctx context.Context, dir string, change func(profile, *xkeen.Exclusions) error) (exclusionsView, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p, err := c.read()
 	if err != nil {
-		return xkeen.Exclusions{}, err
+		return exclusionsView{}, err
 	}
 	old, err := currentExclusions(p, dir)
 	if err != nil {
-		return old, err
+		return exclusionsView{Exclusions: old}, err
 	}
 	if change == nil {
-		return old, nil
+		return c.exclusionsView(p, old), nil
 	}
+	view, err := c.changeExclusions(ctx, dir, p, old, change)
+	return c.exclusionsView(p, view), err
+}
+
+func (c *Controller) changeExclusions(ctx context.Context, dir string, p profile, old xkeen.Exclusions, change func(profile, *xkeen.Exclusions) error) (xkeen.Exclusions, error) {
+	var err error
 	next := xkeen.Exclusions{Entries: append([]xkeen.Exclusion{}, old.Entries...)}
-	if err = change(&next); err != nil {
+	if err = change(p, &next); err != nil {
 		return old, err
 	}
 	// Prepare the compatibility copy before the core is touched. The embedded
@@ -218,7 +261,7 @@ func (c *Controller) updateExclusions(ctx context.Context, dir string, change fu
 
 // MountExclusions belongs inside the companion's authenticated API router.
 func (c *Controller) MountExclusions(r chi.Router, dir string) {
-	send := func(w http.ResponseWriter, entries xkeen.Exclusions, err error) {
+	send := func(w http.ResponseWriter, entries exclusionsView, err error) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		if err != nil {
@@ -240,15 +283,15 @@ func (c *Controller) MountExclusions(r chi.Router, dir string) {
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
 		dec.DisallowUnknownFields()
 		if dec.Decode(&req) != nil || dec.Decode(new(interface{})) != io.EOF {
-			send(w, xkeen.Exclusions{}, errors.New("неверный формат запроса"))
+			send(w, exclusionsView{}, errors.New("неверный формат запроса"))
 			return
 		}
 		entry, err := xkeen.NormalizeExclusion(req.Value, req.Comment)
 		if err != nil {
-			send(w, xkeen.Exclusions{}, err)
+			send(w, exclusionsView{}, err)
 			return
 		}
-		v, e := c.updateExclusions(r.Context(), dir, func(s *xkeen.Exclusions) error {
+		v, e := c.updateExclusions(r.Context(), dir, func(p profile, s *xkeen.Exclusions) error {
 			if len(s.Entries) >= xkeen.MaxExclusions {
 				return errors.New("достигнут предел в 500 исключений")
 			}
@@ -257,14 +300,77 @@ func (c *Controller) MountExclusions(r chi.Router, dir string) {
 					return errors.New("такое исключение уже добавлено")
 				}
 			}
+			if _, _, refusal := c.newExclusionGuard(p).conflict(entry); refusal != nil {
+				return refusal
+			}
 			s.Entries = append(s.Entries, entry)
+			return nil
+		})
+		send(w, v, e)
+	})
+	// Change the address or the note of an entry, or switch it off and on.
+	r.Put("/exclusions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Value    *string `json:"value"`
+			Comment  *string `json:"comment"`
+			Disabled *bool   `json:"disabled"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&req) != nil || dec.Decode(new(interface{})) != io.EOF || req.Value == nil && req.Comment == nil && req.Disabled == nil {
+			send(w, exclusionsView{}, errors.New("неверный формат запроса"))
+			return
+		}
+		id := chi.URLParam(r, "id")
+		v, e := c.updateExclusions(r.Context(), dir, func(p profile, s *xkeen.Exclusions) error {
+			at := -1
+			for i, entry := range s.Entries {
+				if entry.ID == id {
+					at = i
+				}
+			}
+			if at < 0 {
+				return errors.New("исключение не найдено")
+			}
+			current := s.Entries[at]
+			value, comment := current.Value, current.Comment
+			if req.Value != nil {
+				value = *req.Value
+			}
+			if req.Comment != nil {
+				comment = *req.Comment
+			}
+			next, err := xkeen.NormalizeExclusion(value, comment)
+			if err != nil {
+				return err
+			}
+			next.Disabled = current.Disabled
+			if req.Disabled != nil {
+				next.Disabled = *req.Disabled
+			}
+			if next == current {
+				return nil
+			}
+			for i, other := range s.Entries {
+				if i != at && exclusionRule(other) == exclusionRule(next) {
+					return errors.New("такое исключение уже добавлено")
+				}
+			}
+			// A new address, or an entry coming back into force, is checked like
+			// a new exclusion. Editing the note of an old entry is not.
+			if !next.Disabled && (next.ID != current.ID || current.Disabled) {
+				if _, _, refusal := c.newExclusionGuard(p).conflict(next); refusal != nil {
+					return refusal
+				}
+			}
+			s.Entries[at] = next
 			return nil
 		})
 		send(w, v, e)
 	})
 	r.Delete("/exclusions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
-		v, e := c.updateExclusions(r.Context(), dir, func(s *xkeen.Exclusions) error {
+		v, e := c.updateExclusions(r.Context(), dir, func(_ profile, s *xkeen.Exclusions) error {
 			for i, entry := range s.Entries {
 				if entry.ID == id {
 					s.Entries = append(s.Entries[:i], s.Entries[i+1:]...)
