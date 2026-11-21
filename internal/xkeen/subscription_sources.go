@@ -434,6 +434,13 @@ func sourceServerKey(s models.Server) string {
 	return ServerIdentity(s)
 }
 
+// sameEndpoint tells whether two entries lead to the same host, port and
+// protocol, whatever keys they carry.
+func sameEndpoint(a, b models.Server) bool {
+	return len(a.RawProfile) == 0 && len(b.RawProfile) == 0 && a.Address != "" &&
+		strings.EqualFold(a.Address, b.Address) && a.Port == b.Port && a.Port != 0 && a.Protocol == b.Protocol
+}
+
 // Numeric IDs belong to an occurrence inside a source. Card assignments use
 // ServiceTargetID, so the same endpoint can survive removal of either owner.
 func (sm *SubscriptionManager) replaceSourceServersLocked(source models.SubscriptionSource, fresh []models.Server, continued bool) ([]models.Server, []TargetMove) {
@@ -471,10 +478,14 @@ func (sm *SubscriptionManager) replaceSourceServersLocked(source models.Subscrip
 	}
 	// A provider may reissue the parameters of every server on each download
 	// while keeping its name. To the owner this is still the same server, so
-	// it keeps its ID and country correction. A latency measured through the
-	// previous parameters says nothing about the new ones and is not carried
-	// over. Only a name that is unique among the leftovers on both sides
-	// identifies such an entry.
+	// it keeps its ID and country correction. Only a name that is unique among
+	// the leftovers on both sides identifies such an entry.
+	//
+	// A successful measurement is kept while the entry still points at the same
+	// host and port: the delay belongs to the path, not to the reissued keys,
+	// and without it the pools ranked by delay would be rebuilt after every
+	// download. The next scheduled check replaces it. A failed check is not
+	// kept: new parameters are exactly what may have fixed it.
 	type label struct {
 		profile bool
 		name    string
@@ -499,6 +510,9 @@ func (sm *SubscriptionManager) replaceSourceServersLocked(source models.Subscrip
 		name := labelOf(*s)
 		if matches := previous[name]; continued && name.name != "" && len(matches) == 1 && renamed[name] == 1 {
 			s.ID, s.CountryOverride = matches[0].ID, matches[0].CountryOverride
+			if prev := matches[0]; sameEndpoint(prev, *s) && prev.Latency > 0 && prev.CheckError == "" {
+				s.Latency, s.LastChecked, s.ProbeKind = prev.Latency, prev.LastChecked, prev.ProbeKind
+			}
 			for _, field := range changedOutboundFields(matches[0], *s) {
 				fields[field] = true
 			}

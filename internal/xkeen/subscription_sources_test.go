@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"xkeen-panel/internal/models"
 )
@@ -107,6 +108,53 @@ func TestSourcesPreserveOwnershipSelectionAndStableIDs(t *testing.T) {
 	again, err := reloaded.AddSource(ctx, SourceInput{Name: "Новый", Kind: "server", Content: uriB})
 	if err != nil || again[0].ID <= add[1].ID {
 		t.Fatal("server ID reused after last source removal")
+	}
+}
+
+// A provider that reissues keys on every download must not wipe what the
+// panel measured: the pools ranked by delay would be rebuilt each time.
+func TestReissuedServerKeepsItsMeasuredDelay(t *testing.T) {
+	ctx := context.Background()
+	const (
+		reissued = "vless://99999999-2222-3333-4444-555555555555@1.2.3.4:443?type=tcp&security=reality&sni=example.com&fp=chrome&pbk=KEY&sid=cd&flow=xtls-rprx-vision"
+		moved    = "vless://99999999-2222-3333-4444-555555555555@5.6.7.8:443?type=tcp&security=reality&sni=example.com&fp=chrome&pbk=KEY&sid=ef&flow=xtls-rprx-vision"
+	)
+	srv, change := subServer(t, body(realityURI+"#NY"))
+	sm := NewSubscriptionManager(t.TempDir())
+	added, err := sm.AddSource(ctx, SourceInput{Name: "Provider", Kind: "subscription", URL: srv.URL + "/token"})
+	if err != nil || len(added) != 1 {
+		t.Fatalf("first import: %v, %d servers", err, len(added))
+	}
+	id, checked := added[0].SourceID, time.Now().Add(-time.Minute).Truncate(time.Second)
+	measure := func(latency int, problem string) {
+		sm.mu.Lock()
+		defer sm.mu.Unlock()
+		s := &sm.data.Servers[0]
+		s.Latency, s.ProbeKind, s.LastChecked, s.CheckError = latency, "https", checked, problem
+	}
+	refresh := func(uri string) models.Server {
+		t.Helper()
+		change(body(uri + "#NY"))
+		fresh, err := sm.RefreshSource(ctx, id)
+		if err != nil || len(fresh) != 1 || fresh[0].ID != added[0].ID {
+			t.Fatalf("refresh lost the server: %v %+v", err, fresh)
+		}
+		return fresh[0]
+	}
+
+	measure(42, "")
+	if got := refresh(reissued); got.Latency != 42 || got.ProbeKind != "https" || !got.LastChecked.Equal(checked) {
+		t.Fatalf("new keys on the same address dropped the measurement: %+v", got)
+	}
+	// A failure may have been caused by the very keys that were replaced.
+	measure(-1, "нет ответа")
+	if got := refresh(realityURI); got.ProbeKind != "" || got.CheckError != "" || !got.LastChecked.IsZero() {
+		t.Fatalf("a failed check outlived the reissue: %+v", got)
+	}
+	// Another address is another path: its delay is unknown.
+	measure(42, "")
+	if got := refresh(moved); got.Latency == 42 || got.ProbeKind != "" || !got.LastChecked.IsZero() {
+		t.Fatalf("a measurement followed the server to another address: %+v", got)
 	}
 }
 
