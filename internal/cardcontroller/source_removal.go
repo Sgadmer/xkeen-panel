@@ -49,8 +49,31 @@ func unsafeFallback(name string, live map[string]selector, seen map[string]bool)
 	return false
 }
 
-func detachProviderGroups(p profile, names []string, removed map[string]bool, live map[string]selector) (map[string]bool, error) {
+// closedMember says that a remaining group member cannot carry VPN traffic by
+// itself: it is a built-in direct or blocking action.
+func closedMember(name string, live map[string]selector) bool {
+	switch strings.ToUpper(name) {
+	case "DIRECT", "COMPATIBLE", "PASS", "PASS-RULE", "REJECT", "REJECT-DROP":
+		return true
+	}
+	switch strings.ToLower(live[name].Type) {
+	case "direct", "pass", "compatible", "reject", "rejectdrop":
+		return true
+	}
+	return false
+}
+
+// detachProviderGroups never refuses a removal the owner asked for. A group
+// that loses its servers fails closed instead:
+//   - a manual selector whose chosen server is removed gets REJECT as its first
+//     member, so Mihomo falls back to blocking the moment the profile reloads.
+//     The caller then selects REJECT explicitly;
+//   - an automatic group left with nothing but direct exits blocks as well.
+//
+// Other choices of the owner, including a deliberately selected DIRECT, stay.
+func detachProviderGroups(p profile, names []string, removed map[string]bool, live map[string]selector) (map[string]bool, []string, error) {
 	affected := map[string]bool{}
+	var reselect []string
 	for _, value := range list(p.doc["proxy-groups"]) {
 		group := object(value)
 		id := str(group["name"])
@@ -67,13 +90,7 @@ func detachProviderGroups(p profile, names []string, removed map[string]bool, li
 		}
 		g, ok := live[id]
 		if !ok {
-			return nil, errors.New("состав зависимой группы Mihomo не подтверждён")
-		}
-		if strings.EqualFold(g.Type, "Selector") && removed[g.Now] {
-			return nil, errors.New("в группе Mihomo закреплён удаляемый узел. Сначала выберите автовыбор или сервер другого источника")
-		}
-		if !strings.EqualFold(g.Type, "Selector") && unsafeFallback(id, live, map[string]bool{}) {
-			return nil, errors.New("автоматическая группа провайдера допускает прямой выход. Измените её состав перед удалением подписки")
+			return nil, nil, errors.New("состав зависимой группы Mihomo не подтверждён")
 		}
 		// A configured country filter restores the saved owner fallback when
 		// restrictions are lifted. Removal must remain closed in both states.
@@ -89,12 +106,38 @@ func detachProviderGroups(p profile, names []string, removed map[string]bool, li
 		if len(keep) == 0 && !all && group["include-all-proxies"] != true && len(list(group["proxies"])) == 0 {
 			group["proxies"] = []string{"REJECT"}
 		}
+		if strings.EqualFold(g.Type, "Selector") {
+			if removed[g.Now] {
+				members := []string{"REJECT"}
+				for _, member := range namesOf(group["proxies"]) {
+					if member != "REJECT" {
+						members = append(members, member)
+					}
+				}
+				group["proxies"] = members
+				reselect = append(reselect, id)
+			}
+		} else if unsafeFallback(id, live, map[string]bool{}) {
+			serving := false
+			for _, member := range g.All {
+				if !removed[member] && !closedMember(member, live) {
+					serving = true
+					break
+				}
+			}
+			if !serving {
+				for _, key := range []string{"use", "include-all", "include-all-providers", "include-all-proxies"} {
+					delete(group, key)
+				}
+				group["proxies"] = []string{"REJECT"}
+			}
+		}
 		affected[id] = true
 	}
 	for _, name := range names {
 		delete(object(p.doc["proxy-providers"]), name)
 	}
-	return affected, nil
+	return affected, reselect, nil
 }
 
 // DetachSource changes the native provider only after confirming ownership by
@@ -144,7 +187,7 @@ func (c *Controller) DetachSource(ctx context.Context, source string) (func(cont
 	if err != nil {
 		return nil, err
 	}
-	affected, err := detachProviderGroups(p, names, removed, live)
+	affected, reselect, err := detachProviderGroups(p, names, removed, live)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +195,27 @@ func (c *Controller) DetachSource(ctx context.Context, source string) (func(cont
 	if err != nil {
 		return nil, errors.New("не удалось подготовить профиль без удаляемого источника")
 	}
-	if err = c.install(ctx, p, body, p.doc, live, nil, autoCountryGroups{}); err != nil {
+	// install restores every manual selection it knew before the reload. A
+	// selection that points at a removed server cannot be restored; leave it
+	// out here and block that group explicitly below.
+	kept := live
+	if len(reselect) > 0 {
+		kept = make(map[string]selector, len(live))
+		for name, group := range live {
+			kept[name] = group
+		}
+		for _, name := range reselect {
+			group := kept[name]
+			group.Now = ""
+			kept[name] = group
+		}
+	}
+	if err = c.install(ctx, p, body, p.doc, kept, nil, autoCountryGroups{}); err != nil {
+		// The earlier profile is back. Its own selections may need restoring
+		// for the groups left out above; the original error is what matters.
+		if after, e := p.api.selectors(ctx); e == nil {
+			_ = restoreSelectors(ctx, p.api, live, after)
+		}
 		return nil, err
 	}
 	undo := func(ctx context.Context) error {
@@ -177,7 +240,18 @@ func (c *Controller) DetachSource(ctx context.Context, source string) (func(cont
 		}
 		return restoreSelectors(ctx, p.api, live, after)
 	}
-	if err := confirmProviderRemoval(ctx, p.api, names, removed, affected); err != nil {
+	err = nil
+	for _, name := range reselect {
+		// REJECT is already what the reloaded group falls back to. Selecting it
+		// makes the block the stored choice instead of a side effect of order.
+		if err = p.api.request(ctx, "PUT", "/proxies/"+url.PathEscape(name), map[string]string{"name": "REJECT"}, nil); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = confirmProviderRemoval(ctx, p.api, names, removed, affected)
+	}
+	if err != nil {
 		recovery, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		if undo(recovery) != nil {

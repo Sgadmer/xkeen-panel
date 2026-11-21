@@ -83,16 +83,33 @@ func TestMihomoDetachOnlySelectedNativeSource(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Removing the subscription whose server is selected is allowed. The group
+	// blocks until the owner chooses again; it must not move to Auto or DIRECT.
 	selectManual("remote-node")
-	if _, err := c.DetachSource(ctx, remote.URL+"/unit-test"); err == nil {
-		t.Fatal("detached native provider while its node was selected")
+	undo, err := c.DetachSource(ctx, remote.URL+"/unit-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := p.api.selectors(ctx)
+	if err != nil || live["Main"].Now != "REJECT" || live["Auto"].Now != "REJECT" || live["Other"].Now != "other-node" {
+		t.Fatalf("removing the selected server did not block its groups: %v %v %v", live["Main"], live["Auto"], live["Other"])
+	}
+	if undo == nil {
+		t.Fatal("missing rollback")
+	}
+	if err := undo(ctx); err != nil {
+		t.Fatal(err)
 	}
 	checkDisk, _ := os.ReadFile(path)
 	if !bytes.Equal(original, checkDisk) {
-		t.Fatal("changed profile before resolving native manual selection")
+		t.Fatal("rollback did not restore the profile with the selected server")
 	}
+	if live, err = p.api.selectors(ctx); err != nil || live["Main"].Now != "remote-node" {
+		t.Fatalf("rollback lost the manual selection: %v", live["Main"])
+	}
+	// A choice that does not depend on the removed subscription stays as it is.
 	selectManual("Auto")
-	undo, err := c.DetachSource(ctx, remote.URL+"/unit-test")
+	undo, err = c.DetachSource(ctx, remote.URL+"/unit-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +117,7 @@ func TestMihomoDetachOnlySelectedNativeSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live, err := p.api.selectors(ctx)
+	live, err = p.api.selectors(ctx)
 	if err != nil || live["Auto"].Now != "REJECT" || live["Main"].Now != "Auto" || live["Other"].Now != "other-node" {
 		t.Fatalf("route mismatch after removal: %v %v %v", live["Auto"], live["Main"], live["Other"])
 	}

@@ -448,6 +448,11 @@ func (c *Controller) EnableServiceAutoDefault(ctx context.Context) (View, error)
 func (c *Controller) Reconcile(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.reconcile(ctx, nil)
+}
+
+// follow, when set, adjusts the saved selections inside the same reload.
+func (c *Controller) reconcile(ctx context.Context, follow func(*profile) error) error {
 	p, err := c.read()
 	if err != nil {
 		return err
@@ -461,7 +466,11 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		}
 		group, auto := nativeDefault(p, live)
 		if auto != "" && (group == auto || live[group].Now == auto) && len(p.pool(allPoolID).members(c.poolNodes(c.catalog()))) > 0 {
-			return c.setScope(ctx, allPoolID)
+			if err := c.setScope(ctx, allPoolID); err != nil || follow == nil {
+				return err
+			}
+			_, err = c.apply(ctx, "", "", follow)
+			return err
 		}
 	}
 	if _, enabled := p.doc[stateKey]; !enabled {
@@ -476,7 +485,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 			return err
 		}
 	}
-	_, err = c.apply(ctx, "", "", nil)
+	_, err = c.apply(ctx, "", "", follow)
 	if err == nil && !policy.Protects("claude") && installer.ClaudeFirewallNeedsSync(false) {
 		err = installer.SetInstalledClaudeFirewall(ctx, false)
 	}

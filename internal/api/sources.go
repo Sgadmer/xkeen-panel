@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"xkeen-panel/internal/models"
@@ -66,6 +68,7 @@ func (h *Handlers) HandleAddSource(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
+		tx.takeMoves(h)
 		return h.verifyAndApplySource(r.Context(), servers, tx)
 	})
 	writeSourceResponse(w, response, err)
@@ -104,13 +107,81 @@ func (h *Handlers) refreshSource(ctx context.Context, id string) (map[string]int
 		if err != nil {
 			return nil, err
 		}
+		tx.takeMoves(h)
 		if h.Cards != nil {
 			if err = h.Cards.RefreshMatchingProviders(ctx, []string{source.URL}); err != nil {
 				return nil, err
 			}
 		}
-		return h.verifyAndApplySource(ctx, fresh, tx)
+		response, err := h.verifyAndApplySource(ctx, fresh, tx)
+		if err == nil {
+			h.logMoves(source.Name, tx)
+		}
+		return response, err
 	})
+}
+
+// The journal shows why a selected server kept its place although the
+// provider replaced its parameters. It names the changed settings, never
+// their values, servers or addresses. An unchanged note is not repeated on
+// every refresh unless a selection actually followed a server this time.
+func (h *Handlers) logMoves(source string, tx *subscriptionApplySnapshot) {
+	if len(tx.moves) == 0 {
+		return
+	}
+	note := fmt.Sprintf("%s: провайдер изменил параметры серверов (%d) под прежними названиями", source, len(tx.moves))
+	if len(tx.fields) > 0 {
+		note += "; изменились настройки: " + strings.Join(tx.fields, ", ")
+	}
+	if tx.rebound == 0 && h.reissueNotes[source] == note {
+		return
+	}
+	if h.reissueNotes == nil {
+		h.reissueNotes = map[string]string{}
+	}
+	h.reissueNotes[source] = note
+	h.watchdog.Log("[SUBSCRIPTION] %s; сохранено выборов: %d", note, tx.rebound)
+}
+
+// HandleReplaceSourceURL — POST /api/sources/{id}/url
+func (h *Handlers) HandleReplaceSourceURL(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		URL string `json:"url"`
+	}
+	if !readSourceRequest(w, r, &input) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	response, err := h.withSubscriptionTransaction(func(tx *subscriptionApplySnapshot) (map[string]interface{}, error) {
+		tx.sourceScoped = true
+		source, err := sourceFromSnapshot(tx, id)
+		if err != nil {
+			return nil, err
+		}
+		// The profile's own provider keeps downloading the address written in
+		// the profile. Swapping it under a running core is a separate, riskier
+		// operation than replacing a link in the panel's catalogue.
+		if h.Cards != nil && source.URL != "" {
+			linked, err := h.Cards.NativeSourceLinks([]models.SubscriptionSource{source})
+			if err != nil {
+				return nil, err
+			}
+			if linked[source.ID] {
+				return nil, errors.New("эту подписку использует встроенный провайдер профиля Mihomo. Добавьте новую ссылку отдельным источником и удалите этот: выбранные серверы с теми же параметрами останутся на месте")
+			}
+		}
+		fresh, err := h.subscription.ReplaceSourceURL(r.Context(), id, input.URL)
+		if err != nil {
+			return nil, err
+		}
+		tx.takeMoves(h)
+		response, err := h.verifyAndApplySource(r.Context(), fresh, tx)
+		if err == nil {
+			h.logMoves(source.Name, tx)
+		}
+		return response, err
+	})
+	writeSourceResponse(w, response, err)
 }
 
 func (h *Handlers) HandleRefreshSource(w http.ResponseWriter, r *http.Request) {

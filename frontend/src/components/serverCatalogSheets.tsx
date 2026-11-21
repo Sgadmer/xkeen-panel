@@ -64,16 +64,21 @@ function SourceEditor({ source, onBack, onDone }: { source: ServerSource; onBack
     const qc = useQueryClient()
     const [name, setName] = useState(source.name)
     const [confirmDelete, setConfirmDelete] = useState(false)
+    // The link is never stored in browser storage or filled from saved secrets.
+    const [link, setLink] = useState('')
+    const validLink = /^https?:\/\/\S+$/.test(link.trim())
     const path = '/api/sources/' + encodeURIComponent(source.id)
     const action = useMutation({
-        mutationFn: async (kind: 'rename' | 'refresh' | 'delete') => {
+        mutationFn: async (kind: 'rename' | 'refresh' | 'delete' | 'replace') => {
             if (kind === 'delete') return api.del<SubscriptionUpdateResponse>(path)
             if (kind === 'rename') return api.put<SubscriptionUpdateResponse>(path, { name: name.trim() })
+            if (kind === 'replace') return api.post<SubscriptionUpdateResponse>(path + '/url', { url: link.trim() })
             return api.post<SubscriptionUpdateResponse>(path + '/refresh')
         },
         onSuccess: async (result, kind) => {
             await invalidateServerData(qc)
-            const message = { rename: 'Название сохранено.', refresh: 'Подписка обновлена.', delete: 'Источник удалён.' }[kind]
+            const message = { rename: 'Название сохранено.', refresh: 'Подписка обновлена.', delete: 'Источник удалён.',
+                replace: 'Ссылка заменена. Серверы с прежними названиями остались выбранными.' }[kind]
             onDone([message, ...importWarnings(result.import_report, result.warnings),
                 ...(result.pool_error ? [safeNotice(result.pool_error, 'Не удалось обновить пул.')] : [])].join(' '))
         },
@@ -96,9 +101,23 @@ function SourceEditor({ source, onBack, onDone }: { source: ServerSource; onBack
             {source.can_refresh && <Row label={action.isPending && action.variables === 'refresh' ? 'Обновляем…' : 'Обновить подписку'}
                 hint={ago ? 'Последнее обновление · ' + ago : undefined} tone='tint' disabled={action.isPending} onClick={() => action.mutate('refresh')} />}
         </Group>
+        {source.can_refresh && <Group title='Провайдер выдал новую ссылку'>
+            {source.native_provider
+                ? <p className='py-3 text-sm text-muted-foreground'>Этот источник привязан к профилю Mihomo, поэтому ссылку в нём заменить нельзя. Добавьте новую ссылку отдельным источником и удалите этот. Серверы с теми же параметрами останутся выбранными.</p>
+                : <form className='space-y-2 py-3' onSubmit={event => { event.preventDefault(); if (validLink && !action.isPending) action.mutate('replace') }}>
+                    <label className='flex flex-col gap-1 text-sm'>Новая ссылка подписки
+                        <input className={field} type='password' autoComplete='off' autoCapitalize='none' spellCheck={false} maxLength={8192} placeholder='https://…'
+                            value={link} disabled={action.isPending} onChange={event => setLink(event.target.value)} />
+                    </label>
+                    <p className='text-[13px] text-muted-foreground'>Нужна, если подписка перестала обновляться, потому что провайдер сменил её адрес. Серверы с прежними названиями останутся выбранными в сервисах и пулах.</p>
+                    <button disabled={action.isPending || !validLink} className='min-h-10 font-semibold text-tint disabled:opacity-40'>
+                        {action.isPending && action.variables === 'replace' ? 'Заменяем ссылку…' : 'Заменить ссылку'}
+                    </button>
+                </form>}
+        </Group>}
         <Group footer={confirmDelete ? (source.native_provider
-            ? 'Серверы исчезнут из каталога и мультипулов. Связанные провайдеры Mihomo отключатся. Пустые группы будут блокировать трафик. Если в группе закреплён удаляемый узел, сначала смените выбор.'
-            : 'Серверы этого источника исчезнут из каталога и мультипулов. Перед удалением можно назначить сервисам другой сервер.') : undefined}>
+            ? 'Серверы исчезнут из каталога. Пулы заполнятся серверами других подписок. Связанный провайдер Mihomo отключится. Группы профиля, где был выбран сервер этой подписки, начнут блокировать трафик, пока вы не выберете другой.'
+            : 'Серверы исчезнут из каталога. Пулы заполнятся серверами других подписок. Сервис с отдельным сервером, которого больше нет ни в одной подписке, будет заблокирован, пока вы не выберете другой.') : undefined}>
             <Row label={confirmDelete ? 'Подтвердить удаление «' + source.name + '»' : 'Удалить источник'} tone='destructive' disabled={action.isPending}
                 onClick={() => confirmDelete ? action.mutate('delete') : setConfirmDelete(true)} />
             {confirmDelete && <Row label='Оставить источник' disabled={action.isPending} onClick={() => setConfirmDelete(false)} />}

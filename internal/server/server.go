@@ -167,6 +167,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/sources", handlers.HandleAddSource)
 			r.Put("/sources/{id}", handlers.HandleRenameSource)
 			r.Post("/sources/{id}/refresh", handlers.HandleRefreshSource)
+			r.Post("/sources/{id}/url", handlers.HandleReplaceSourceURL)
 			r.Delete("/sources/{id}", handlers.HandleDeleteSource)
 			r.Get("/routing-mode", handlers.HandleGetRoutingPolicy)
 			r.Put("/routing-mode", handlers.HandlePutRoutingPolicy)

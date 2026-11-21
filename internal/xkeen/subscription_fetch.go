@@ -2,9 +2,12 @@ package xkeen
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -91,15 +94,15 @@ func (sm *SubscriptionManager) downloadAndParseContext(parent context.Context, r
 
 func subscriptionRedirectPolicy(req *http.Request, via []*http.Request) error {
 	if len(via) > 5 {
-		return fmt.Errorf("слишком много перенаправлений подписки")
+		return &subscriptionRedirectError{"слишком много перенаправлений подписки"}
 	}
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-		return fmt.Errorf("неподдерживаемое перенаправление подписки")
+		return &subscriptionRedirectError{"неподдерживаемое перенаправление подписки"}
 	}
 	if len(via) > 0 {
 		previous := via[len(via)-1]
 		if previous.URL.Scheme == "https" && req.URL.Scheme != "https" {
-			return fmt.Errorf("небезопасное перенаправление подписки")
+			return &subscriptionRedirectError{"небезопасное перенаправление подписки"}
 		}
 		// net/http normally forwards custom headers and builds Referer from
 		// the previous secret URL. Neither device identity nor that URL may
@@ -132,9 +135,7 @@ func (sm *SubscriptionManager) fetchSubscriptionProfile(ctx context.Context, raw
 	req.Header.Set("x-hwid", hwid)
 	resp, err := client.Do(req)
 	if err != nil {
-		// url.Error includes the full secret URL. Do not wrap it or pass
-		// upstream error bodies into logs or the browser.
-		return nil, &subscriptionFetchError{message: "не удалось загрузить подписку: ошибка сети, TLS или перенаправления"}
+		return nil, &subscriptionFetchError{message: subscriptionTransportMessage(err)}
 	}
 	defer resp.Body.Close()
 	if subscriptionTrueHeader(resp.Header, "x-hwid-max-devices-reached") || subscriptionTrueHeader(resp.Header, "x-hwid-limit") {
@@ -215,6 +216,37 @@ func (sm *SubscriptionManager) fetchSubscriptionProfile(ctx context.Context, raw
 	sm.mu.Unlock()
 	return usable, nil
 }
+
+// url.Error includes the full secret URL. Name the kind of failure with fixed
+// text only; never wrap the error or pass upstream bodies to logs or the
+// browser. A dead address is the usual sign that the provider moved its
+// subscription server, so say what the owner can do about it.
+func subscriptionTransportMessage(err error) string {
+	const prefix = "не удалось загрузить подписку: "
+	const stale = ". Возможно, ссылка устарела: получите у провайдера новую"
+	var redirect *subscriptionRedirectError
+	var dns *net.DNSError
+	var timeout net.Error
+	var authority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	var verification *tls.CertificateVerificationError
+	switch {
+	case errors.As(err, &redirect):
+		return prefix + redirect.Error()
+	case errors.As(err, &dns) && dns.IsNotFound:
+		return prefix + "адрес сервера подписки не найден" + stale
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
+		return prefix + "сервер подписки не ответил вовремя" + stale
+	case errors.As(err, &authority), errors.As(err, &hostname), errors.As(err, &invalid), errors.As(err, &verification):
+		return prefix + "сервер подписки предъявил недействительный TLS-сертификат"
+	}
+	return prefix + "ошибка сети, TLS или перенаправления"
+}
+
+type subscriptionRedirectError struct{ message string }
+
+func (err *subscriptionRedirectError) Error() string { return err.message }
 
 func subscriptionTrueHeader(headers http.Header, name string) bool {
 	switch strings.ToLower(strings.TrimSpace(headers.Get(name))) {

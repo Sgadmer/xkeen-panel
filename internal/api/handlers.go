@@ -32,6 +32,10 @@ type Handlers struct {
 	detector     *xkeen.Detector
 	pool         *xkeen.PoolStore
 	restartCore  func(string) (string, error) // optional deterministic test runner
+	// reissueNotes holds the last journal note per source, so a provider that
+	// reissues its servers on every download is reported once, not hourly.
+	// Written only while the watchdog's change lock is held.
+	reissueNotes map[string]string
 }
 
 func NewHandlers(cfg *models.Config, sub *xkeen.SubscriptionManager, wd *monitor.Watchdog, det *xkeen.Detector, pool *xkeen.PoolStore) *Handlers {
@@ -113,6 +117,11 @@ func (h *Handlers) applySubscription(servers []models.Server, resp map[string]in
 	rt := h.detector.Runtime()
 	needsRestart := false
 	if xkeen.ServiceRoutesArmed(rt) {
+		followed, followErr := xkeen.FollowServiceTargets(rt, servers, transaction.moves)
+		if followErr != nil {
+			return followErr
+		}
+		transaction.rebound += followed
 		needsRestart, err = xkeen.ReconcileServiceRoutes(rt, h.config.OutboundsFile, servers, "", "")
 		if err != nil {
 			return err

@@ -20,6 +20,95 @@ import (
 	"xkeen-panel/internal/xkeen"
 )
 
+func TestSourceLinkReplacementKeepsServersAndLeavesNativeProviderAlone(t *testing.T) {
+	const (
+		issued   = "vless://11111111-2222-3333-4444-555555555555@192.0.2.1:443?type=tcp&security=reality&sni=example.com&fp=chrome&pbk=KEY&sid=ab&flow=xtls-rprx-vision#NY"
+		reissued = "vless://99999999-2222-3333-4444-555555555555@192.0.2.2:443?type=tcp&security=reality&sni=example.com&fp=chrome&pbk=KEY&sid=cd&flow=xtls-rprx-vision#NY"
+	)
+	root := t.TempDir()
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	defer core.Close()
+	serve := func(body string) string {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+		t.Cleanup(server.Close)
+		return server.URL + "/secret-token"
+	}
+	retired, moved, native := serve(issued), serve(reissued), serve(issued)
+	u, _ := url.Parse(core.URL)
+	host, port, _ := net.SplitHostPort(u.Host)
+	// The profile's own provider downloads the third link by itself.
+	profile := map[string]interface{}{"mode": "rule", "external-controller": net.JoinHostPort(host, port), "secret": "test-secret", "rules": []string{"MATCH,REJECT"},
+		"proxy-providers": map[string]interface{}{"owned": map[string]interface{}{"type": "http", "url": native, "path": "owned.yaml"}}}
+	data, _ := json.Marshal(profile)
+	path := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	manager := xkeen.NewSubscriptionManager(root)
+	initPath := filepath.Join(root, "S05xkeen")
+	if err := os.WriteFile(initPath, []byte("name_client=mihomo\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	detector := xkeen.NewDetector(root, "", initPath, "", "", path, "")
+	cfg := &models.Config{DataDir: root}
+	h := NewHandlers(cfg, manager, monitor.NewWatchdog(cfg, manager, detector), detector, xkeen.NewPoolStore(root))
+	h.Cards = cardcontroller.New(path, root, xkeen.Runtime{Core: xkeen.CoreMihomo}, manager.GetServers)
+	ids := map[string]string{}
+	for name, link := range map[string]string{"Moved provider": retired, "Profile provider": native} {
+		added, err := manager.AddSource(context.Background(), xkeen.SourceInput{Kind: "subscription", Name: name, URL: link})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = added[0].SourceID
+	}
+	manager.TakeTargetMoves()
+	find := func(source string) models.Server {
+		for _, s := range manager.GetServers() {
+			if s.SourceID == source {
+				return s
+			}
+		}
+		t.Fatal("source lost its server")
+		return models.Server{}
+	}
+	before := find(ids["Moved provider"])
+	if err := manager.SetCountryOverride(before.ID, "US"); err != nil {
+		t.Fatal(err)
+	}
+	router := chi.NewRouter()
+	router.Post("/sources/{id}/url", h.HandleReplaceSourceURL)
+	request := func(id, body string, want int) string {
+		t.Helper()
+		out := httptest.NewRecorder()
+		router.ServeHTTP(out, httptest.NewRequest("POST", "/sources/"+id+"/url", strings.NewReader(body)))
+		if out.Code != want || strings.Contains(out.Body.String(), "secret-token") || strings.Contains(out.Body.String(), "-2222-3333") {
+			t.Fatalf("replace link of %s: status %d, body %s", id, out.Code, out.Body.String())
+		}
+		return out.Body.String()
+	}
+	link := func(value string) string {
+		encoded, _ := json.Marshal(map[string]string{"url": value})
+		return string(encoded)
+	}
+	request(ids["Moved provider"], link(moved), 200)
+	after := find(ids["Moved provider"])
+	if after.ID != before.ID || after.CountryOverride != "US" || after.Address != "192.0.2.2" || xkeen.ServiceTargetID(after) == xkeen.ServiceTargetID(before) {
+		t.Fatalf("replacing the link did not continue the same server: %+v", after)
+	}
+	// The same link again, a link another source already uses, and bad input.
+	request(ids["Moved provider"], link(moved), 400)
+	request(ids["Moved provider"], link(native), 400)
+	request(ids["Moved provider"], `{"url":"`+retired+`","name":"x"}`, 400)
+	request("missing", link(retired), 404)
+	// A source that the profile downloads on its own is not rewritten here.
+	if body := request(ids["Profile provider"], link(retired), 400); !strings.Contains(body, "Mihomo") {
+		t.Fatalf("native provider refusal does not explain itself: %s", body)
+	}
+	if kept := find(ids["Profile provider"]); kept.Address != "192.0.2.1" {
+		t.Fatal("a refused replacement changed the catalogue")
+	}
+}
+
 func TestSourceHTTPFailedRefreshDoesNotBlockOtherSource(t *testing.T) {
 	root := t.TempDir()
 	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))

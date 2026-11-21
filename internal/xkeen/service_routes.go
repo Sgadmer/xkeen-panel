@@ -233,6 +233,42 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 	return view, nil
 }
 
+// FollowServiceTargets carries saved service selections over to servers whose
+// parameters a subscription refresh reissued under an unchanged name. The
+// outbounds are rebuilt by the reconciliation that the caller runs next, in the
+// same transaction that can restore this file.
+func FollowServiceTargets(rt Runtime, servers []models.Server, moves []TargetMove) (int, error) {
+	if len(moves) == 0 || !ServiceRoutesArmed(rt) {
+		return 0, nil
+	}
+	state, err := loadServiceRoutes(rt)
+	if err != nil {
+		return 0, err
+	}
+	present := map[string]bool{}
+	for _, server := range servers {
+		if id := ServiceTargetID(server); id != "" {
+			present[id] = true
+		}
+	}
+	replacement := FollowableTargets(moves, present)
+	followed := 0
+	for service, target := range state.Assignments {
+		if to := replacement[target]; to != "" && !present[target] {
+			state.Assignments[service] = to
+			followed++
+		}
+	}
+	if followed == 0 {
+		return 0, nil
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return 0, err
+	}
+	return followed, writeFileAtomic(ServiceRoutesPath(rt), raw, 0600)
+}
+
 // ReconcileServiceRoutes re-resolves saved identities against a fresh snapshot.
 // Absence or an unusable existing worker materializes a block immediately.
 // key is nonempty only for an explicit assignment, whose preparation errors

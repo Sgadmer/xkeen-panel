@@ -53,6 +53,7 @@ func (h *Handlers) importSubscription(ctx context.Context, source string) (map[s
 		if err != nil {
 			return nil, err
 		}
+		transaction.takeMoves(h)
 		return h.verifyAndApplySource(ctx, servers, transaction)
 	})
 }
@@ -83,9 +84,11 @@ func (h *Handlers) applyCatalog(ctx context.Context, transaction *subscriptionAp
 	response := h.catalogResponse()
 	if h.Cards != nil {
 		transaction.runtimeTouched = true
-		if err := h.Cards.Reconcile(ctx); err != nil {
+		rebound, err := h.Cards.ReconcileMoves(ctx, transaction.moves)
+		if err != nil {
 			return nil, err
 		}
+		transaction.rebound = rebound
 		h.watchdog.CheckNow()
 		return response, nil
 	}

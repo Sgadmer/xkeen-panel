@@ -31,6 +31,26 @@ type subscriptionApplySnapshot struct {
 	runtimeTouched bool
 	sourceScoped   bool
 	restoreNative  func(context.Context) error
+	// moves lists servers whose parameters changed under an unchanged name.
+	moves   []xkeen.TargetMove
+	fields  []string
+	rebound int
+}
+
+// takeMoves collects the identity changes of the import that just succeeded.
+func (snapshot *subscriptionApplySnapshot) takeMoves(h *Handlers) {
+	snapshot.moves = append(snapshot.moves, h.subscription.TakeTargetMoves()...)
+	snapshot.fields = h.subscription.ChangedFields()
+}
+
+// A failed transaction restores the previous catalogue. Selections that had
+// already followed a move must return to the restored servers as well.
+func (snapshot *subscriptionApplySnapshot) reverseMoves() []xkeen.TargetMove {
+	reversed := make([]xkeen.TargetMove, 0, len(snapshot.moves))
+	for _, move := range snapshot.moves {
+		reversed = append(reversed, xkeen.TargetMove{SourceID: move.SourceID, From: move.To, To: move.From})
+	}
+	return reversed
 }
 
 func (h *Handlers) withSubscriptionTransaction(apply func(*subscriptionApplySnapshot) (map[string]interface{}, error)) (map[string]interface{}, error) {
@@ -50,7 +70,8 @@ func (h *Handlers) withSubscriptionTransaction(apply func(*subscriptionApplySnap
 				recovery = append(recovery, snapshot.restoreNative(ctx))
 			}
 			if snapshot.runtimeTouched {
-				recovery = append(recovery, h.Cards.Reconcile(ctx))
+				_, reconcileErr := h.Cards.ReconcileMoves(ctx, snapshot.reverseMoves())
+				recovery = append(recovery, reconcileErr)
 			}
 			if errors.Join(recovery...) != nil {
 				return nil, fmt.Errorf("%w; восстановление подписки и маршрутов Mihomo не подтверждено", err)

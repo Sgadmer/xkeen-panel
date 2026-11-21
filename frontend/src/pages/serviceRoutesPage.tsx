@@ -265,7 +265,9 @@ export function ServiceRoutesPage() {
         if (!view) return null
         const isClaude = service.id === 'claude'
         const selected = view.targets.find(t => t.id === service.target)
-        const summary = query.isError ? 'Не удалось обновить маршрут' : routeSummary(service)
+        // A selected server that left every subscription cannot be shown in the picker.
+        const lost = !!service.target && service.target !== 'direct' && !selected
+        const summary = query.isError ? 'Не удалось обновить маршрут' : lost ? 'Сервер пропал из подписок · выберите маршрут заново' : routeSummary(service)
         const busy = pendingService?.service_id === service.id || !!pendingService?.ai_group && isAiService(service.id)
         const label = 'service-' + service.id
         return (

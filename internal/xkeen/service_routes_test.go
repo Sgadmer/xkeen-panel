@@ -68,6 +68,58 @@ func TestServiceRoutesPreserveDirectAndPinExactTarget(t *testing.T) {
 	}
 }
 
+func TestServiceSelectionFollowsReissuedServer(t *testing.T) {
+	rt, path, _, _ := profileApplyBaseline(t)
+	servers := poolServers()
+	first, second := ServiceTargetID(servers[0]), ServiceTargetID(servers[1])
+	if n, err := FollowServiceTargets(rt, servers, []TargetMove{{From: first, To: second}}); err != nil || n != 0 {
+		t.Fatalf("followed a change before any service was assigned: %d %v", n, err)
+	}
+	if _, err := reconcileServiceRoutes(rt, path, servers, "claude", first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconcileServiceRoutes(rt, path, servers, "openai", second); err != nil {
+		t.Fatal(err)
+	}
+	reissued := servers[0]
+	reissued.RawURI = strings.Replace(realityURI, "11111111", "99999999", 1)
+	next := ServiceTargetID(reissued)
+	if next == "" || next == first {
+		t.Fatal("reissued parameters must change the identity")
+	}
+	fresh := []models.Server{reissued, servers[1]}
+	moves := []TargetMove{{SourceID: "legacy", From: first, To: next}}
+	// Another subscription still offers exactly the chosen parameters.
+	if n, err := FollowServiceTargets(rt, append([]models.Server{servers[0]}, fresh...), moves); err != nil || n != 0 {
+		t.Fatalf("moved a selection whose server still exists: %d %v", n, err)
+	}
+	if n, err := FollowServiceTargets(rt, fresh, moves); err != nil || n != 1 {
+		t.Fatalf("selection did not follow the reissued server: %d %v", n, err)
+	}
+	if _, err := reconcileServiceRoutes(rt, path, fresh, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	view, err := ReadServiceRoutes(rt, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range view.Services {
+		switch service.ID {
+		case "claude":
+			if service.Target != next || service.Blocked {
+				t.Fatalf("Claude lost its reissued server: %+v", service)
+			}
+		case "openai":
+			if service.Target != second || service.Blocked {
+				t.Fatalf("an unrelated selection changed: %+v", service)
+			}
+		}
+	}
+	if rules := policyRules(t, rt); mapOf(rules[0])["outboundTag"] != servicePrefix+next {
+		t.Fatal("route still points at the retired parameters")
+	}
+}
+
 func TestServicePriorityWithExclusionsAndSeparateClaudeIngress(t *testing.T) {
 	rt, path, _, _ := profileApplyBaseline(t)
 	profileApplyWrite(t, filepath.Join(rt.XrayConfDir, "03_private.json"), map[string]interface{}{"inbounds": []interface{}{

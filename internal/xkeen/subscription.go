@@ -21,6 +21,8 @@ type SubscriptionManager struct {
 	pendingImportReport  ImportReport
 	rollbackImportReport ImportReport
 	rollbackSnapshotKey  string
+	pendingMoves         []TargetMove
+	changedFields        []string
 	// Optional injection for deterministic HTTP/TLS tests; production uses the
 	// standard verified-TLS transport. Redirect policy is always enforced.
 	httpClient *http.Client

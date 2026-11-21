@@ -110,6 +110,85 @@ func TestSourcesPreserveOwnershipSelectionAndStableIDs(t *testing.T) {
 	}
 }
 
+func TestRefreshKeepsServerWhoseParametersChangedUnderItsName(t *testing.T) {
+	ctx := context.Background()
+	const (
+		first    = realityURI + "#NY"
+		reissued = "vless://99999999-2222-3333-4444-555555555555@1.2.3.4:443?type=tcp&security=reality&sni=example.com&fp=chrome&pbk=KEY&sid=cd&flow=xtls-rprx-vision#NY"
+		other    = wsURI + "#Berlin"
+	)
+	srv, change := subServer(t, body(first, other))
+	sm := NewSubscriptionManager(t.TempDir())
+	added, err := sm.AddSource(ctx, SourceInput{Name: "Provider", Kind: "subscription", URL: srv.URL + "/token"})
+	if err != nil || len(added) != 2 || len(sm.TakeTargetMoves()) != 0 {
+		t.Fatalf("first import: %v, %d servers", err, len(added))
+	}
+	id, before := added[0].SourceID, ServiceTargetID(added[0])
+	if before == "" || added[0].Name != "NY" {
+		t.Fatal("fixture has no named target identity")
+	}
+	if err := sm.SetCountryOverride(added[0].ID, "US"); err != nil {
+		t.Fatal(err)
+	}
+	change(body(reissued, other))
+	fresh, err := sm.RefreshSource(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := ServiceTargetID(fresh[0])
+	if after == "" || after == before || fresh[0].ID != added[0].ID || fresh[0].CountryOverride != "US" || fresh[1].ID != added[1].ID {
+		t.Fatalf("reissued parameters replaced the server instead of updating it: %+v", fresh[0])
+	}
+	moves := sm.TakeTargetMoves()
+	if len(moves) != 1 || moves[0] != (TargetMove{SourceID: id, From: before, To: after}) {
+		t.Fatalf("unexpected identity changes: %+v", moves)
+	}
+	// The journal may name the reissued settings, never their values.
+	fields := strings.Join(sm.ChangedFields(), " ")
+	if !strings.Contains(fields, "shortId") || strings.Contains(fields, "99999999") || strings.Contains(fields, "sni") || len(sm.ChangedFields()) != 2 {
+		t.Fatalf("changed settings reported wrongly: %q", fields)
+	}
+	if len(sm.TakeTargetMoves()) != 0 {
+		t.Fatal("identity changes handed over twice")
+	}
+
+	// Two entries share the name now. Neither can claim the previous server.
+	twin := strings.Replace(reissued, "99999999", "88888888", 1)
+	another := strings.Replace(reissued, "99999999", "77777777", 1)
+	change(body(twin, another, other))
+	fresh, err = sm.RefreshSource(ctx, id)
+	if err != nil || len(fresh) != 3 {
+		t.Fatalf("ambiguous refresh: %v, %d servers", err, len(fresh))
+	}
+	if fresh[0].ID == added[0].ID || fresh[1].ID == added[0].ID || fresh[0].CountryOverride != "" || len(sm.TakeTargetMoves()) != 0 {
+		t.Fatal("ambiguous name was treated as the previous server")
+	}
+
+	// A different link through the older single-source call is another provider.
+	legacy := NewSubscriptionManager(t.TempDir())
+	one, _ := subServer(t, body(first))
+	two, _ := subServer(t, body(reissued))
+	old, err := legacy.UpdateURL(one.URL + "/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := legacy.UpdateURL(two.URL + "/b")
+	if err != nil || replaced[0].ID == old[0].ID || len(legacy.TakeTargetMoves()) != 0 {
+		t.Fatalf("another provider inherited a server by name: %v", err)
+	}
+	// An explicit replacement of the link continues the same subscription.
+	back, err := legacy.ReplaceSourceURL(ctx, "legacy", one.URL+"/a")
+	if err != nil || back[0].ID != replaced[0].ID || len(legacy.TakeTargetMoves()) != 1 {
+		t.Fatalf("replacing the link lost the server: %v", err)
+	}
+	if _, err := legacy.ReplaceSourceURL(ctx, "legacy", one.URL+"/a"); err == nil {
+		t.Fatal("accepted the current link as a replacement")
+	}
+	if _, err := legacy.ReplaceSourceURL(ctx, "missing", two.URL+"/b"); !errors.Is(err, ErrSourceNotFound) {
+		t.Fatal("replaced the link of a missing source")
+	}
+}
+
 func TestRemoteSourcesRefreshIndependentlyAndKeepSecretsPrivate(t *testing.T) {
 	ctx := context.Background()
 	var failed atomic.Bool
