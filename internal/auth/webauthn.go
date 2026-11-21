@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"os"
+	"reflect"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )
@@ -69,6 +70,11 @@ func (um *UserManager) UpdateWebAuthnCredential(cred *webauthn.Credential) {
 	}
 	for i := range um.user.Credentials {
 		if string(um.user.Credentials[i].ID) == string(cred.ID) {
+			// Most passkeys never advance their counter. Rewriting the account
+			// file on every login would only add chances to damage it.
+			if reflect.DeepEqual(um.user.Credentials[i], *cred) {
+				return
+			}
 			um.user.Credentials[i] = *cred
 			_ = um.persistLocked()
 			return

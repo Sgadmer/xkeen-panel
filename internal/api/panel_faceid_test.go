@@ -140,7 +140,7 @@ func TestFaceIDRequiresTrustedTLSAndOwnPanel(t *testing.T) {
 	}
 	req := httptest.NewRequest("POST", "http://forged.example/api/account/passkey/register/begin", nil)
 	req.Header.Set("X-Forwarded-Host", "forged.example")
-	wa := NewWebAuthnHandler(nil, nil, cfg)
+	wa := NewWebAuthnHandler(nil, cfg)
 	wa.FaceID = f
 	actual, err := wa.webAuthn(req)
 	if err != nil || actual.Config.RPID != host || len(actual.Config.RPOrigins) != 1 || actual.Config.RPOrigins[0] != origin {
@@ -160,7 +160,7 @@ func TestFaceIDRejectsInvalidInputsAndExplicitConfigWins(t *testing.T) {
 		}
 	}
 	cfg := &models.Config{DataDir: t.TempDir(), WebAuthnRPID: "pinned.example", WebAuthnOrigins: []string{"https://pinned.example"}}
-	h := NewWebAuthnHandler(nil, nil, cfg)
+	h := NewWebAuthnHandler(nil, cfg)
 	h.FaceID = &PanelFaceID{}
 	actual, err := h.webAuthn(httptest.NewRequest("POST", "http://spoof.example/", nil))
 	if err != nil || actual.Config.RPID != "pinned.example" {

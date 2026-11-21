@@ -17,15 +17,36 @@ import { api } from '@/lib/api'
 import { isIOSDevice, passkeySupported } from '@/lib/webauthn'
 import type { AuthStatus } from '@/types'
 
+const REMEMBER_KEY = 'xkeen_remember_device'
+
+function rememberedChoice() {
+    try {
+        return localStorage.getItem(REMEMBER_KEY) === '1'
+    } catch {
+        return false
+    }
+}
+
 export function LoginPage() {
     const { login, loginWithPasskey } = useAuth()
     const [username, setUsername] = useState('')
     const [password, setPassword] = useState('')
-    const [totpCode, setTotpCode] = useState('')
+    const [code, setCode] = useState('')
+    const [spare, setSpare] = useState(false)
+    const [remember, setRemember] = useState(rememberedChoice)
     const [error, setError] = useState('')
 
+    const keepChoice = (value: boolean) => {
+        setRemember(value)
+        try {
+            localStorage.setItem(REMEMBER_KEY, value ? '1' : '0')
+        } catch {
+            // The choice still applies to this sign-in.
+        }
+    }
+
     const loginMutation = useMutation({
-        mutationFn: () => login(username, password, totpCode),
+        mutationFn: () => login(username, password, code, remember),
         onError: (err: Error) => setError(err.message),
     })
 
@@ -35,11 +56,12 @@ export function LoginPage() {
     })
 
     const passkeyMutation = useMutation({
-        mutationFn: () => loginWithPasskey(),
+        mutationFn: () => loginWithPasskey(remember),
         onError: (err: Error) => setError(err.message),
     })
 
     const showPasskey = passkeySupported() && authStatus.data?.passkey_enabled
+    const codeReady = spare ? code.replace(/[\s-]/g, '').length === 16 : code.length === 6
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault()
@@ -87,7 +109,7 @@ export function LoginPage() {
                         )}
 
                         {error && (
-                            <div className='mb-4 p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm text-destructive'>
+                            <div role='alert' className='mb-4 p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm text-destructive'>
                                 {error}
                             </div>
                         )}
@@ -122,31 +144,69 @@ export function LoginPage() {
                                 />
                             </div>
                             <div className='space-y-2'>
-                                <Label htmlFor='login-totp'>TOTP-код</Label>
-                                <Input
-                                    id='login-totp'
-                                    name='totp'
-                                    type='text'
-                                    inputMode='numeric'
-                                    autoComplete='one-time-code'
-                                    pattern='[0-9]*'
-                                    maxLength={6}
-                                    value={totpCode}
-                                    onChange={e =>
-                                        setTotpCode(
-                                            e.target.value.replace(/\D/g, ''),
-                                        )
-                                    }
-                                    placeholder='000000'
-                                    required
-                                    className='text-center text-xl tracking-[0.3em] placeholder:tracking-[0.3em]'
-                                />
+                                <Label htmlFor='login-totp'>{spare ? 'Запасной код' : 'Код из приложения-аутентификатора'}</Label>
+                                {spare ? (
+                                    <Input
+                                        id='login-totp'
+                                        name='spare-code'
+                                        type='text'
+                                        autoComplete='off'
+                                        autoCapitalize='characters'
+                                        spellCheck={false}
+                                        maxLength={24}
+                                        value={code}
+                                        onChange={e => setCode(e.target.value.toUpperCase())}
+                                        placeholder='XXXX-XXXX-XXXX-XXXX'
+                                        required
+                                        className='text-center text-lg tracking-[0.12em]'
+                                    />
+                                ) : (
+                                    <Input
+                                        id='login-totp'
+                                        name='totp'
+                                        type='text'
+                                        inputMode='numeric'
+                                        autoComplete='one-time-code'
+                                        pattern='[0-9]*'
+                                        maxLength={6}
+                                        value={code}
+                                        onChange={e =>
+                                            setCode(
+                                                e.target.value.replace(/\D/g, ''),
+                                            )
+                                        }
+                                        placeholder='000000'
+                                        required
+                                        className='text-center text-xl tracking-[0.3em] placeholder:tracking-[0.3em]'
+                                    />
+                                )}
+                                <button
+                                    type='button'
+                                    className='min-h-9 cursor-pointer text-sm text-tint'
+                                    onClick={() => { setSpare(value => !value); setCode(''); setError('') }}
+                                >
+                                    {spare ? 'Ввести код из приложения' : 'Нет доступа к приложению? Ввести запасной код'}
+                                </button>
                             </div>
+                            <label className='flex min-h-11 cursor-pointer items-start gap-3 text-sm'>
+                                <input
+                                    type='checkbox'
+                                    checked={remember}
+                                    onChange={e => keepChoice(e.target.checked)}
+                                    className='mt-0.5 size-5 shrink-0 accent-[var(--primary)]'
+                                />
+                                <span>
+                                    Запомнить это устройство
+                                    <span className='block text-xs text-muted-foreground'>
+                                        Вход сохранится, пока вы пользуетесь панелью, и закончится через 30 дней без посещений. Без отметки — через сутки.
+                                    </span>
+                                </span>
+                            </label>
                             <Button
                                 type='submit'
                                 disabled={
                                     loginMutation.isPending ||
-                                    totpCode.length !== 6
+                                    !codeReady
                                 }
                                 className='w-full'
                             >

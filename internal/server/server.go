@@ -81,12 +81,15 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.RequestLogger(&pathLogFormatter{middleware.DefaultLogFormatter{Logger: log.Default(), NoColor: true}}))
 	r.Use(middleware.Recoverer)
 
-	// Login rate limiter: 5 attempts per minute
-	rateLimiter := api.NewRateLimiter(5, time.Minute)
+	// A plain cap on how often one address may knock at all. The guards inside
+	// the handlers count failures and pause sign-in for growing periods.
+	rateLimiter := api.NewRateLimiter(30, time.Minute)
 
 	// Handlers
-	authHandler := api.NewAuthHandler(s.userManager, rateLimiter, s.config)
-	webAuthnHandler := api.NewWebAuthnHandler(s.userManager, rateLimiter, s.config)
+	authHandler := api.NewAuthHandler(s.userManager, s.config)
+	webAuthnHandler := api.NewWebAuthnHandler(s.userManager, s.config)
+	authHandler.Guard.OnPause = s.loginPaused("с паролем")
+	webAuthnHandler.Guard.OnPause = s.loginPaused("по ключу доступа")
 	updateHandler := api.NewUpdateHandler(s.updater)
 	devicesHandler := api.NewDevicesHandler(s.detector, keenetic.DefaultAddr)
 	setupHandler := api.NewSetupHandler(s.detector, s.subscription, s.watchdog, devicesHandler)
@@ -127,6 +130,9 @@ func (s *Server) Handler() http.Handler {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Use(middleware.NoCache)
+		// Pasted subscriptions are the only large requests; their handlers
+		// apply their own, larger limit.
+		r.Use(api.LimitBody(1<<20, "/api/sources"))
 		// Authentication, no JWT required
 		r.Route("/auth", func(r chi.Router) {
 			r.Get("/status", authHandler.HandleAuthStatus)
@@ -154,6 +160,7 @@ func (s *Server) Handler() http.Handler {
 			r.Use(middleware.Timeout(120 * time.Second))
 
 			r.Get("/status", handlers.HandleStatus)
+			r.Post("/session/refresh", authHandler.HandleRefresh)
 			r.Get("/diagnostics", api.NewDiagnosticsHandler(lifetime, s.Cards, devicesHandler))
 			handlers.MountTrafficHistory(r)
 			r.Get("/access", handlers.HandlePanelAccess)
@@ -294,6 +301,21 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	return r
+}
+
+// loginPaused writes a pause of sign-in to the panel journal. The address is
+// the only detail: it is what the owner needs to find the device.
+func (s *Server) loginPaused(way string) func(string, time.Duration) {
+	return func(address string, wait time.Duration) {
+		if s.watchdog == nil {
+			return
+		}
+		if address == "*" {
+			s.watchdog.Log("[SECURITY] Много неудачных попыток входа %s с разных адресов — этот способ входа приостановлен на %s", way, wait)
+			return
+		}
+		s.watchdog.Log("[SECURITY] Неудачные попытки входа %s с адреса %s — для него вход приостановлен на %s", way, address, wait)
+	}
 }
 
 func (s *Server) Start() error {

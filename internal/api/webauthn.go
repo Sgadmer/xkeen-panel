@@ -32,19 +32,21 @@ type webAuthnSession struct {
 
 type WebAuthnHandler struct {
 	userManager *auth.UserManager
-	rateLimiter *RateLimiter
 	cfg         *models.Config
 	FaceID      *PanelFaceID
+	// Guard pauses passkey sign-in after repeated failures. It is separate from
+	// the password guard, so failures of one way in never close the other.
+	Guard *LoginGuard
 
 	mu       sync.Mutex
 	sessions map[string]webAuthnSession
 }
 
-func NewWebAuthnHandler(um *auth.UserManager, rl *RateLimiter, cfg *models.Config) *WebAuthnHandler {
+func NewWebAuthnHandler(um *auth.UserManager, cfg *models.Config) *WebAuthnHandler {
 	return &WebAuthnHandler{
 		userManager: um,
-		rateLimiter: rl,
 		cfg:         cfg,
+		Guard:       NewLoginGuard(),
 		sessions:    make(map[string]webAuthnSession),
 	}
 }
@@ -237,6 +239,7 @@ func (h *WebAuthnHandler) HandleRegisterFinish(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	clearCeremonyCookie(w, registerCookie, registerPath)
 	session := h.takeSession(cookieValue(r, registerCookie))
 	if session == nil {
@@ -294,6 +297,12 @@ func (h *WebAuthnHandler) HandleLoginBegin(w http.ResponseWriter, r *http.Reques
 
 // HandleLoginFinish — POST /api/auth/login/passkey/finish (no JWT, rate-limited)
 func (h *WebAuthnHandler) HandleLoginFinish(w http.ResponseWriter, r *http.Request) {
+	address := clientIP(r, h.cfg.TrustProxyHeaders)
+	if wait := h.Guard.Wait(address); wait > 0 {
+		tooManyAttempts(w, wait)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	wa, err := h.webAuthn(r)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
@@ -314,12 +323,14 @@ func (h *WebAuthnHandler) HandleLoginFinish(w http.ResponseWriter, r *http.Reque
 
 	cred, err := wa.FinishLogin(user, *session, r)
 	if err != nil {
+		h.Guard.Fail(address)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "passkey не прошёл проверку"})
 		return
 	}
 
 	// Cloned authenticator: the signature counter did not advance, a compromise signal
 	if cred.Authenticator.CloneWarning {
+		h.Guard.Fail(address)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "passkey отклонён (clone warning)"})
 		return
 	}
@@ -327,13 +338,13 @@ func (h *WebAuthnHandler) HandleLoginFinish(w http.ResponseWriter, r *http.Reque
 	h.userManager.UpdateWebAuthnCredential(cred)
 
 	u := h.userManager.GetUser()
-	token, err := auth.GenerateToken(u.Username, u.JWTSecret)
+	token, err := auth.IssueToken(u.Username, u.JWTSecret, r.URL.Query().Get("remember") == "1")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ошибка генерации токена"})
 		return
 	}
 
-	h.rateLimiter.Reset(clientIP(r, h.cfg.TrustProxyHeaders))
+	h.Guard.Success(address)
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 

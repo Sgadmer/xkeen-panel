@@ -60,7 +60,7 @@ export async function registerPasskey(): Promise<void> {
 }
 
 // getPasskeyToken runs the login ceremony and returns the JWT.
-export async function getPasskeyToken(): Promise<string> {
+export async function getPasskeyToken(remember = false): Promise<string> {
     const opts: any = await api.post<any>('/api/auth/login/passkey/begin')
     const pk = opts.publicKey
     pk.challenge = b64urlToBuf(pk.challenge)
@@ -75,7 +75,7 @@ export async function getPasskeyToken(): Promise<string> {
 
     const resp = cred.response as AuthenticatorAssertionResponse
     const data = await api.post<{ token: string }>(
-        '/api/auth/login/passkey/finish',
+        '/api/auth/login/passkey/finish' + (remember ? '?remember=1' : ''),
         {
             id: cred.id,
             rawId: bufToB64url(cred.rawId),

@@ -4,6 +4,7 @@ import { getToken, clearToken } from '@/lib/api'
 import type { Status } from '@/types'
 import type { UpdateState } from '@/types'
 import { observeTabNotification } from '@/lib/notifications'
+import { setLiveUpdates } from '@/lib/liveUpdates'
 
 export function useEventSource() {
     const qc = useQueryClient()
@@ -23,6 +24,7 @@ export function useEventSource() {
 
             es.onopen = () => {
                 attempt.current = 0
+                setLiveUpdates(true)
             }
 
             es.addEventListener('status', e => {
@@ -78,6 +80,7 @@ export function useEventSource() {
             es.onerror = () => {
                 es.close()
                 esRef.current = null
+                setLiveUpdates(false)
 
                 // The token may have expired
                 if (!getToken()) {
@@ -100,6 +103,7 @@ export function useEventSource() {
             clearTimeout(reconnectTimer.current)
             esRef.current?.close()
             esRef.current = null
+            setLiveUpdates(false)
         }
     }, [qc])
 }

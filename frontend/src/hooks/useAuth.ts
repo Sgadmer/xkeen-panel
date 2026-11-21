@@ -7,11 +7,12 @@ export const useAuth = () => {
     const navigate = useNavigate()
 
     const login = useCallback(
-        async (username: string, password: string, totpCode: string) => {
+        async (username: string, password: string, code: string, remember = false) => {
             const data = await api.post<{ token: string }>('/api/auth/login', {
                 username,
                 password,
-                totp_code: totpCode,
+                totp_code: code,
+                remember,
             })
             setToken(data.token)
             navigate('/')
@@ -19,8 +20,8 @@ export const useAuth = () => {
         [navigate],
     )
 
-    const loginWithPasskey = useCallback(async () => {
-        const token = await getPasskeyToken()
+    const loginWithPasskey = useCallback(async (remember = false) => {
+        const token = await getPasskeyToken(remember)
         setToken(token)
         navigate('/')
     }, [navigate])

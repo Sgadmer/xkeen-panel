@@ -5,12 +5,22 @@ export const setToken = (token: string) =>
     localStorage.setItem(TOKEN_KEY, token)
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
-class ApiError extends Error {
+export class ApiError extends Error {
     status: number
     constructor(message: string, status: number) {
         super(message)
         this.status = status
     }
+}
+
+// Shown when the answer is not the panel's own: the request failed on the way,
+// or the router's proxy answered with its error page while the panel restarts.
+const UNAVAILABLE = 'Панель сейчас не отвечает. Возможно, она перезапускается — повторите через несколько секунд.'
+
+function waitHint(resp: Response) {
+    const seconds = Number(resp.headers.get('Retry-After'))
+    if (!Number.isFinite(seconds) || seconds <= 0) return ''
+    return seconds < 90 ? ` Повторите через ${Math.ceil(seconds)} с.` : ` Повторите через ${Math.ceil(seconds / 60)} мин.`
 }
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -24,7 +34,12 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
         headers['Authorization'] = `Bearer ${token}`
     }
 
-    const resp = await fetch(url, { ...options, headers })
+    let resp: Response
+    try {
+        resp = await fetch(url, { ...options, headers })
+    } catch {
+        throw new ApiError(UNAVAILABLE, 0)
+    }
 
     // A 401 means an expired session only for authenticated requests. Login
     // endpoints are excluded — there may be no token yet, or a stale one on
@@ -36,11 +51,20 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
         throw new ApiError('Сессия истекла', 401)
     }
 
-    const data = await resp.json()
+    let data: { error?: string } | null = null
+    try {
+        data = await resp.json()
+    } catch {
+        // Not JSON: handled below as an answer that did not come from the panel.
+    }
 
     if (!resp.ok) {
-        throw new ApiError(data.error || 'Ошибка запроса', resp.status)
+        const message = data?.error
+            ? data.error.charAt(0).toUpperCase() + data.error.slice(1) + (resp.status === 429 || resp.status === 503 ? '.' + waitHint(resp) : '')
+            : UNAVAILABLE
+        throw new ApiError(message, resp.status)
     }
+    if (data === null) throw new ApiError(UNAVAILABLE, resp.status)
 
     return data as T
 }
@@ -62,4 +86,16 @@ export const api = {
             method: 'DELETE',
             body: body ? JSON.stringify(body) : undefined,
         }),
+}
+
+// A remembered device keeps its session while the panel is in use: the server
+// hands out a fresh token once the current one is half a day old.
+export async function refreshSession() {
+    if (!getToken()) return
+    try {
+        const answer = await request<{ token?: string }>('/api/session/refresh', { method: 'POST' })
+        if (answer.token) setToken(answer.token)
+    } catch {
+        // The next visit tries again; an expired session is handled by request().
+    }
 }

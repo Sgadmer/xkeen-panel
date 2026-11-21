@@ -85,6 +85,10 @@ func main() {
 		log.Fatalf("Ошибка загрузки пользователя: %v", err)
 	}
 
+	if userManager.RestoredFromCopy() {
+		log.Print("Файл учётной записи был повреждён; панель восстановила его из копии")
+	}
+
 	if *cardsListen != "" && userManager.SetupRequired() {
 		log.Fatal("Для запуска панели с -cards-listen требуется сохранённая учётная запись")
 	}
@@ -342,6 +346,7 @@ func main() {
 		Addr:              listenAddr,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 		Handler:           srv.Handler(),
 		// SSE streams never go idle, so Shutdown would wait out its timeout unless cancelling ctx ends them
 		BaseContext: func(net.Listener) context.Context { return ctx },

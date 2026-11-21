@@ -60,6 +60,34 @@ type Watchdog struct {
 	mihomoName      string
 	mihomoProtocol  string
 	mihomoSelective bool
+
+	// When the route was last reported as working. A line for every check
+	// would push the events worth reading out of the journal.
+	healthyLogged time.Time
+}
+
+const healthyLogEvery = time.Hour
+
+// logHealthy records that the route works: at once after a failure or a start,
+// and once an hour while nothing changes.
+func (w *Watchdog) logHealthy(format string, args ...interface{}) {
+	w.mu.Lock()
+	quiet := !w.healthyLogged.IsZero() && time.Since(w.healthyLogged) < healthyLogEvery
+	if !quiet {
+		w.healthyLogged = time.Now()
+	}
+	w.mu.Unlock()
+	if !quiet {
+		w.writeLog(format, args...)
+	}
+}
+
+// logUnhealthy records a failed check; the next success is reported at once.
+func (w *Watchdog) logUnhealthy(format string, args ...interface{}) {
+	w.mu.Lock()
+	w.healthyLogged = time.Time{}
+	w.mu.Unlock()
+	w.writeLog(format, args...)
 }
 
 func NewWatchdog(cfg *models.Config, sub *xkeen.SubscriptionManager, det *xkeen.Detector) *Watchdog {
@@ -191,9 +219,9 @@ func (w *Watchdog) check(restoreSelection bool) {
 		}
 		w.mu.Unlock()
 		if err != nil {
-			w.writeLog("[MIHOMO] Проверка общего маршрута: %v", err)
+			w.logUnhealthy("[MIHOMO] Проверка общего маршрута: %v", err)
 		} else {
-			w.writeLog("[OK] Общий маршрут Mihomo работает (%dms)", result.Latency)
+			w.logHealthy("[OK] Общий маршрут Mihomo работает (%dms)", result.Latency)
 		}
 		w.publishStatus()
 		if tryRecovery {
@@ -242,7 +270,7 @@ func (w *Watchdog) check(restoreSelection bool) {
 		if !internet {
 			w.failCount = 0
 			w.mu.Unlock()
-			w.writeLog("[FAIL] У роутера нет интернета (%v) — смена сервера не поможет", err)
+			w.logUnhealthy("[FAIL] У роутера нет интернета (%v) — смена сервера не поможет", err)
 			w.publishStatus()
 			return
 		}
@@ -250,7 +278,7 @@ func (w *Watchdog) check(restoreSelection bool) {
 		w.failCount++
 		w.mu.Unlock()
 
-		w.writeLog("[FAIL] Прокси не отвечает (%v), попытка %d/%d", err, w.failCount, w.config.MaxFails)
+		w.logUnhealthy("[FAIL] Прокси не отвечает (%v), попытка %d/%d", err, w.failCount, w.config.MaxFails)
 		w.publishStatus()
 
 		if w.IsActive() && w.failCount >= w.config.MaxFails {
@@ -277,9 +305,9 @@ func (w *Watchdog) check(restoreSelection bool) {
 	w.mu.Unlock()
 
 	if proxy == nil {
-		w.writeLog("[OK] Интернет есть (%dms), но прокси не проверен — нет локального входа в ядро", latency)
+		w.logHealthy("[OK] Интернет есть (%dms), но прокси не проверен — нет локального входа в ядро", latency)
 	} else {
-		w.writeLog("[OK] Прокси работает (%dms)", latency)
+		w.logHealthy("[OK] Прокси работает (%dms)", latency)
 	}
 	w.publishStatus()
 	if !w.IsActive() {
@@ -943,13 +971,16 @@ func (w *Watchdog) GetLogs(n int) []string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	if n <= 0 || n > len(w.logs) {
+	if n <= 0 {
 		n = len(w.logs)
 	}
-
-	// Fall back to the file when the in-memory log is shorter
+	// After a restart the lines in memory start from zero while the file still
+	// holds what happened before. Use the file whenever more was asked for.
 	if n > len(w.logs) && w.config.LogFile != "" {
 		return w.readLogFile(n)
+	}
+	if n > len(w.logs) {
+		n = len(w.logs)
 	}
 
 	result := make([]string, n)

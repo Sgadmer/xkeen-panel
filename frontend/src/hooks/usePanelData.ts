@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { useLiveUpdates } from '@/lib/liveUpdates'
 import type {
     AutoScope,
     DevicesResponse,
@@ -15,9 +16,12 @@ import type {
 } from '@/types'
 
 export function useStatus() {
+    // The event stream normally pushes the status. Without it, ask now and then.
+    const live = useLiveUpdates()
     return useQuery({
         queryKey: ['status'],
         queryFn: () => api.get<Status>('/api/status'),
+        refetchInterval: live ? false : 10000,
     })
 }
 

@@ -104,6 +104,9 @@ type User struct {
 
 	WebAuthnID  []byte                `json:"webauthn_id,omitempty"`
 	Credentials []webauthn.Credential `json:"credentials,omitempty"`
+
+	// Hashes of the spare one-time codes for when the authenticator is lost.
+	RecoveryCodes []string `json:"recovery_codes,omitempty"`
 }
 
 // Server is one entry of the subscription.
@@ -210,6 +213,8 @@ type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	TOTPCode string `json:"totp_code"`
+	// Keep this device signed in while the panel is being used.
+	Remember bool `json:"remember,omitempty"`
 }
 
 // SelectServerRequest selects a server.

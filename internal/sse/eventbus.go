@@ -7,7 +7,9 @@ import (
 )
 
 const (
-	maxClients     = 4
+	// One stream per open tab. A household with a few phones and a computer
+	// easily has more than four; each idle stream costs a goroutine and a buffer.
+	maxClients     = 16
 	chanBufferSize = 16
 )
 
