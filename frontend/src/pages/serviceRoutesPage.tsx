@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { IconChevronDown, IconShield } from '@tabler/icons-react'
+import { IconChevronDown, IconSearch, IconShield } from '@tabler/icons-react'
 import { AiRouteWarning } from '@/components/aiRouteWarning'
 import { aiServiceIds, isAiService } from '@/lib/aiServiceGroup'
 import { ServiceLogo } from '@/components/serviceLogo'
@@ -221,6 +221,7 @@ export function ServiceRoutesPage() {
     const qc = useQueryClient()
     const avoidCountries = usePanelSettings().data?.avoid_countries
     const [notice, setNotice] = useState('')
+    const [search, setSearch] = useState('')
     const [warning, setWarning] = useState<{serviceId: string; serviceName: string; targetId: string; targetLabel: string; targetKind?: ServiceTarget['kind']} | null>(null)
     const key = ['service-routes']
     const query = useQuery({
@@ -247,6 +248,9 @@ export function ServiceRoutesPage() {
     })
     const view = query.data
     const order = useServiceOrder(view?.services ?? [])
+    const others = order.services.filter(service => !isAiService(service.id))
+    const wanted = search.trim().toLowerCase()
+    const found = wanted ? others.filter(service => service.name.toLowerCase().includes(wanted) || service.id.includes(wanted)) : others
     const mihomo = view?.scope === 'mihomo'
     const needsMigration = mihomo && view.service_auto_default === false
     const unassigned = needsMigration ? view.services.filter(service => !service.target) : []
@@ -313,10 +317,9 @@ export function ServiceRoutesPage() {
     return (
         <>
             <div className='flex flex-wrap items-center justify-between gap-x-4 gap-y-1'>
-                <PageTitle title='Маршруты сервисов' subtitle='Откройте «Маршрут» у нужного сервиса и выберите, как он будет выходить в интернет.' />
+                <PageTitle title='Сервисы' subtitle='Выберите в карточке, как сервис выходит в интернет.' />
                 {order.services.length > 1 && <ServiceOrderControl services={order.services.filter(service => !isAiService(service.id))} save={order.save} />}
             </div>
-            {mihomo && <Link to='/settings/routing#service-lists' className='self-start text-sm text-tint'>Обновляемые списки и распознавание сервисов</Link>}
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
             {warning && <AiRouteWarning key={warning.serviceId + ':' + warning.targetId}
@@ -328,20 +331,21 @@ export function ServiceRoutesPage() {
                 onGroup={() => { if (!change.isPending) change.mutate({ service_id: 'ai-group', target_id: warning.targetId, ai_group: true }) }} />}
             {view && (
                 <>
-                    <div className='flex items-start gap-3 rounded-card bg-card p-4'>
+                    {mihomo ? <p className='px-1 text-sm text-muted-foreground'>
+                        Kill switch в карточке: если её VPN-сервер не отвечает, сервис ждёт связи и не выходит напрямую.{' '}
+                        <Link to='/settings/protection' className='text-tint'>Общая защита</Link>{' · '}
+                        <Link to='/settings/components#service-lists' className='text-tint'>Списки адресов сервисов</Link>
+                    </p> : <div className='flex items-start gap-3 rounded-card bg-card p-4'>
                         <IconShield aria-hidden className='mt-0.5 size-5 shrink-0 text-tint' />
                         <div>
-                            <p className='font-semibold'>{view.scope === 'mihomo' && view.active ? 'Маршруты Mihomo' : (view.active && view.guard_ready ? 'Защита маршрутов включена' : 'Защита маршрутов не подтверждена')}</p>
+                            <p className='font-semibold'>{view.active && view.guard_ready ? 'Защита маршрутов включена' : 'Защита маршрутов не подтверждена'}</p>
                             <p className='mt-1 text-sm text-muted-foreground'>
-                                {view.scope === 'mihomo'
-                                    ? 'Kill switch защищает от случайного выхода без VPN. Если выбранный VPN-сервер перестанет отвечать, сервис с включённой защитой подождёт восстановления связи. Сайты с маршрутом «Напрямую» продолжат работать.'
-                                    : view.guard_ready
+                                {view.guard_ready
                                     ? (view.active ? 'При потере назначенного VPN защищённый маршрут блокируется.' : 'Выберите VPN для Claude, чтобы включить маршруты сервисов.')
                                     : 'Для применения нужен работающий сетевой фильтр на роутере.'}
                             </p>
-                            {view.scope === 'mihomo' && <Link to='/settings#kill-switch' className='mt-1 inline-block text-sm text-tint'>Общий kill switch в настройках</Link>}
                         </div>
-                    </div>
+                    </div>}
                     {needsMigration && <div className='rounded-card bg-card p-4'>
                         <h2 className='font-semibold'>Автовыбор для сервисов</h2>
                         <p className='mt-1 text-sm text-muted-foreground'>
@@ -358,17 +362,33 @@ export function ServiceRoutesPage() {
                     <section aria-labelledby='ai-group-title' className='rounded-[28px] border border-tint/30 bg-tint/5 p-3 sm:p-4'>
                         <header className='mb-4 px-1'>
                             <h2 id='ai-group-title' className='flex items-center gap-2 text-lg font-semibold'><IconShield aria-hidden className='size-5 text-tint' /> AI и аналитика</h2>
-                            <p className='mt-2 max-w-5xl text-sm leading-relaxed text-foreground/90'>Крайне рекомендуем выбрать один и тот же конфиг для всех четырёх карточек. AI-приложения и агенты отправляют служебные запросы, которые могут идти по правилам аналитики, а не самого AI-сервиса. Один сервер помогает сохранить одинаковый выход и уменьшить риск проблем с аккаунтом, особенно у Claude / Anthropic.</p>
-                            <p className='mt-3 max-w-5xl rounded-xl border border-warning/20 bg-warning/5 px-3 py-2 text-sm leading-relaxed'><strong className='font-semibold text-warning'>Если нужен голосовой чат.</strong> Для голоса Claude и ChatGPT подходят не все VPN-локации, даже если переписка работает. Иногда нужно попробовать несколько серверов. Если голос не нужен, выбирайте любую локацию, где нормально работает сам сервис.</p>
-                            <p className='mt-1 text-sm text-muted-foreground'>Для постоянного общего выхода выбирайте конкретный сервер: один пул может использовать разные узлы. Порядок этих карточек закреплён.</p>
+                            <p className='mt-2 max-w-5xl text-sm leading-relaxed text-foreground/90'>Выберите один и тот же сервер для всех четырёх карточек: так у AI-сервисов и их служебных запросов будет один выход.</p>
+                            <details className='group/ai mt-1 max-w-5xl text-sm'>
+                                <summary className='flex min-h-9 cursor-pointer list-none items-center gap-1 text-tint [&::-webkit-details-marker]:hidden'>
+                                    Почему это важно и что с голосовым чатом
+                                    <IconChevronDown aria-hidden className='size-4 shrink-0 transition-transform group-open/ai:rotate-180' />
+                                </summary>
+                                <div className='space-y-2 pb-1 leading-relaxed text-muted-foreground'>
+                                    <p>AI-приложения и агенты отправляют служебные запросы, которые идут по правилам аналитики, а не самого AI-сервиса. Один сервер сохраняет одинаковый выход и снижает риск проблем с аккаунтом, особенно у Claude / Anthropic.</p>
+                                    <p>Для постоянного общего выхода выбирайте конкретный сервер: один пул может использовать разные узлы.</p>
+                                    <p><strong className='font-semibold text-warning'>Голосовой чат.</strong> Для голоса Claude и ChatGPT подходят не все VPN-локации, даже если переписка работает. Иногда нужно попробовать несколько серверов.</p>
+                                </div>
+                            </details>
                         </header>
                         <div className='grid gap-3 sm:grid-cols-2 2xl:grid-cols-4'>
                             {aiServiceIds.flatMap(id => { const service = view.services.find(item => item.id === id); return service ? [renderService(service)] : [] })}
                         </div>
                     </section>
+                    {others.length > 6 && <label className='flex min-h-11 items-center gap-2 rounded-xl bg-fill px-3 sm:max-w-sm'>
+                        <IconSearch aria-hidden className='size-4 shrink-0 text-muted-foreground' stroke={2.2} />
+                        <span className='sr-only'>Найти сервис</span>
+                        <input type='search' value={search} onChange={event => setSearch(event.target.value)} placeholder='Найти сервис'
+                            className='min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted-foreground' />
+                    </label>}
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
-                        {order.services.filter(service => !isAiService(service.id)).map(renderService)}
+                        {found.map(renderService)}
                     </div>
+                    {others.length > 0 && found.length === 0 && <p className='px-1 text-sm text-muted-foreground'>Такого сервиса нет в списке.</p>}
                     <p role='status' className='text-sm text-muted-foreground'>{notice}</p>
                 </>
             )}

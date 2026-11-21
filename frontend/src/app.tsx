@@ -16,10 +16,13 @@ import { UpdatePage } from '@/pages/updatePage'
 import { XkeenSettingsPage } from '@/pages/xkeenSettingsPage'
 import { DiagnosticsPage } from '@/pages/diagnosticsPage'
 import { AccessPage } from '@/pages/accessPage'
-import { RoutingModePage } from '@/pages/routingModePage'
+import { ProtectionPage } from '@/pages/protectionPage'
+import { AutomationPage } from '@/pages/automationPage'
+import { SecurityPage } from '@/pages/securityPage'
 import { ComponentsPage } from '@/pages/componentsPage'
 import { WelcomePage } from '@/pages/welcomePage'
 import { ProtectedRoute } from '@/components/protectedRoute'
+import { moveToSecureAddress } from '@/lib/secureAddress'
 import type { AuthStatus } from '@/types'
 
 export function App() {
@@ -29,7 +32,11 @@ export function App() {
     useEffect(() => {
         fetch('/api/auth/status')
             .then(r => r.json())
-            .then(data => setAuthStatus(data))
+            .then(async (data: AuthStatus) => {
+                // The page is being replaced: keep the loading screen until it is.
+                if (await moveToSecureAddress(data)) return new Promise<never>(() => {})
+                setAuthStatus(data)
+            })
             .catch(() => setAuthStatus({ setup_required: false }))
             .finally(() => setLoading(false))
     }, [])
@@ -78,7 +85,10 @@ export function App() {
                             <Route path='settings' element={<SettingsPage />} />
                             <Route path='settings/notifications' element={<NotificationsPage />} />
                             <Route path='settings/access' element={<AccessPage />} />
-                            <Route path='settings/routing' element={<RoutingModePage />} />
+                            <Route path='settings/protection' element={<ProtectionPage />} />
+                            <Route path='settings/automation' element={<AutomationPage />} />
+                            <Route path='settings/security' element={<SecurityPage />} />
+                            <Route path='settings/routing' element={<Navigate to='/settings/protection' replace />} />
                             <Route path='settings/components' element={<ComponentsPage />} />
                             <Route
                                 path='settings/update'

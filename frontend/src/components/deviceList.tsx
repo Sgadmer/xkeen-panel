@@ -9,12 +9,14 @@ import {
     IconDeviceWatch,
     IconHome,
     IconPencil,
+    IconSearch,
     type Icon,
 } from '@tabler/icons-react'
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { DeviceEditor } from '@/components/deviceEditor'
 import { ProtectionWarning } from '@/components/protectionWarning'
 import { api } from '@/lib/api'
+import { plural } from '@/lib/format'
 import type { Device, DevicesResponse } from '@/types'
 
 const KINDS: { re: RegExp; icon: Icon; color: string }[] = [
@@ -41,6 +43,16 @@ const KINDS: { re: RegExp; icon: Icon; color: string }[] = [
     },
 ]
 
+const OFFLINE_KEY = 'xkeen.devices.offline.v1'
+
+function offlineShown() {
+    try {
+        return localStorage.getItem(OFFLINE_KEY) === '1'
+    } catch {
+        return false
+    }
+}
+
 function kindOf(name: string) {
     return (
         KINDS.find(k => k.re.test(name)) ?? {
@@ -65,6 +77,12 @@ export function DeviceGroups({
     const [editing, setEditing] = useState<Device | null>(null)
     const [leaving, setLeaving] = useState<Device | null>(null)
     const [notice, setNotice] = useState('')
+    const [query, setQuery] = useState('')
+    const [showOffline, setShowOffline] = useState(offlineShown)
+    const toggleOffline = () => setShowOffline(open => {
+        try { localStorage.setItem(OFFLINE_KEY, open ? '0' : '1') } catch { /* until the page is closed */ }
+        return !open
+    })
     const opener = useRef<HTMLButtonElement>(null)
     const groups = useRef<HTMLDivElement>(null)
     const toggle = useMutation({
@@ -132,11 +150,23 @@ export function DeviceGroups({
         )
     }
 
-    const online = data.devices.filter(d => d.active)
-    const offline = data.devices.filter(d => !d.active)
+    const wanted = query.trim().toLowerCase()
+    const shown = wanted ? data.devices.filter(d => d.name.toLowerCase().includes(wanted) || d.mac.toLowerCase().includes(wanted)) : data.devices
+    const online = shown.filter(d => d.active)
+    const offline = shown.filter(d => !d.active)
+    // A long tail of devices that are away stays folded until it is asked for.
+    const foldable = manage && !wanted && offline.length > 5
+    const offlineOpen = !foldable || showOffline
 
     return (
         <>
+            {manage && data.devices.length > 8 && <label className='flex min-h-11 items-center gap-2 rounded-xl bg-fill px-3 lg:max-w-sm'>
+                <IconSearch aria-hidden className='size-4 shrink-0 text-muted-foreground' stroke={2.2} />
+                <span className='sr-only'>Найти устройство</span>
+                <input type='search' value={query} onChange={event => setQuery(event.target.value)} placeholder='Найти устройство'
+                    className='min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted-foreground' />
+            </label>}
+            {wanted && shown.length === 0 && <p className='px-4 text-sm text-muted-foreground'>Такого устройства нет в списке.</p>}
             {notice && <p role='status' className='px-4 text-sm text-muted-foreground'>{notice}</p>}
             {toggle.error && (
                 <p className='px-4 text-[13px] text-destructive'>
@@ -156,7 +186,14 @@ export function DeviceGroups({
                     <Group title='В сети'>{online.map(row)}</Group>
                 )}
                 {offline.length > 0 && (
-                    <Group title='Не в сети'>{offline.map(row)}</Group>
+                    <Group title={foldable ? <button type='button' aria-expanded={offlineOpen} onClick={toggleOffline}
+                        className='flex w-full cursor-pointer items-center justify-between gap-2 uppercase'>
+                        <span>Не в сети · {offline.length}</span>
+                        <span className='normal-case text-tint'>{offlineOpen ? 'Свернуть' : 'Показать'}</span>
+                    </button> : 'Не в сети'}>
+                        {offlineOpen ? offline.map(row) : <Row label={`${offline.length} ${plural(offline.length, 'устройство', 'устройства', 'устройств')}`}
+                            hint={`Через VPN: ${offline.filter(d => d.vpn).length}`} onClick={toggleOffline} />}
+                    </Group>
                 )}
             </div>
             {leaving && <ProtectionWarning key={leaving.mac} title='Отключить VPN для устройства?' confirmLabel='Пустить напрямую'

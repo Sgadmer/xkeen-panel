@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { IconLoader2 } from '@tabler/icons-react'
-import { Group, PageTitle } from '@/components/ios'
+import { Group } from '@/components/ios'
 import { BlocklistRouting } from '@/components/blocklistRouting'
 import { useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
@@ -87,8 +87,4 @@ function XrayRoutingModeForm({ onApplied }: { onApplied?: () => void }) {
         {save.error && <p role='alert' className='px-4 text-[14px] text-destructive'>{safeNotice(save.error.message, 'Режим не удалось применить. Прежние настройки сохранены.')}</p>}
         <p role='status' className='px-4 text-[14px] text-tint empty:hidden'>{notice}</p>
     </form>
-}
-
-export function RoutingModePage() {
-    return <><PageTitle title='Маршрутизация VPN' subtitle='Выберите, какие подключения должны идти через VPN.' back={{ to: '/settings', label: 'Настройки' }} /><RoutingModeForm /></>
 }

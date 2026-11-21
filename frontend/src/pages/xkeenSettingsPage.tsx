@@ -7,7 +7,7 @@ import { useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import type { ListResponse, SettingsResponse, Status } from '@/types'
 
-const back = { to: '/settings', label: 'Настройки' }
+const back = { to: '/settings/components', label: 'Роутер и XKeen' }
 
 type ListName = 'port_proxying' | 'port_exclude' | 'ip_exclude'
 

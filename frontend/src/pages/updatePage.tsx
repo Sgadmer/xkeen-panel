@@ -43,13 +43,13 @@ export function UpdatePage() {
         onError: () => qc.invalidateQueries({ queryKey: ['update'] }),
     })
 
-    if (!u) return <PageTitle title='Обновления' back={back} />
+    if (!u) return <PageTitle title='О панели и обновление' back={back} />
 
     if (u.locked) {
         return (
             <>
                 <PageTitle
-                    title='Обновления'
+                    title='О панели и обновление'
                     subtitle={`Установлена ${u.current}`}
                     back={back}
                 />
@@ -94,7 +94,7 @@ export function UpdatePage() {
     if (!u.supported) {
         return (
             <>
-                <PageTitle title='Обновления' back={back} />
+                <PageTitle title='О панели и обновление' back={back} />
                 <Group>
                     <Row
                         label='Самообновление недоступно'
@@ -109,12 +109,12 @@ export function UpdatePage() {
     return (
         <>
             <PageTitle
-                title='Обновление панели'
+                title='О панели и обновление'
                 subtitle={`Установлена ${u.current}`}
                 back={back}
             />
 
-            <Group footer='Здесь обновляется только панель. Версии XKeen, Xray и геобазы управляются в разделе «Компоненты».'>
+            <Group footer='Здесь обновляется только панель. Версии XKeen, Xray и геобазы управляются в разделе «Роутер и XKeen».'>
                 <Row label='Источник обновлений' detail={u.repository ?? 'Sgadmer/xkeen-panel'} />
                 <Row label='Канал обновлений' detail={u.channel === 'preview' ? 'Стабильные и предварительные' : 'Стабильные'} hint={u.channel === 'preview' ? 'Установлена beta: проверяются опубликованные beta и стабильные версии.' : 'Предварительные версии автоматически не выбираются.'} />
             </Group>

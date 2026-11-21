@@ -138,7 +138,7 @@ export function ExclusionsPage() {
     return (
         <>
             <PageTitle
-                title='Исключения VPN'
+                title='Исключения'
                 subtitle='Указанные адреса открываются напрямую через провайдера.'
             />
 

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +25,10 @@ type object = map[string]interface{}
 
 func Handler(frontend fs.FS) http.Handler {
 	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.0-beta.4", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
+	mihomo := os.Getenv(mihomoCoreEnv) == "mihomo"
+	if mihomo {
+		status = demoMihomoStatus(status)
+	}
 	servers := []object{{"id": 0, "name": "Нидерланды · основной", "address": "nl.example.com", "port": 443, "protocol": "vless", "active": true, "latency_ms": 48, "country": "NL", "probe_kind": "https"}, {"id": 1, "name": "Германия · резервный", "address": "de.example.com", "port": 443, "protocol": "vless", "active": false, "latency_ms": 61, "country": "DE", "probe_kind": "https"}, {"id": 2, "name": "Финляндия", "address": "fi.example.com", "port": 443, "protocol": "vless", "active": false, "latency_ms": 74, "country": "FI", "probe_kind": "https"}}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -48,6 +53,12 @@ func Handler(frontend fs.FS) http.Handler {
 				return
 			}
 			var data interface{}
+			if mihomo {
+				if answer, ok := demoMihomo(r.URL.Path); ok {
+					json.NewEncoder(w).Encode(answer)
+					return
+				}
+			}
 			switch r.URL.Path {
 			case "/api/auth/status":
 				data = object{"setup_required": false}
@@ -69,6 +80,12 @@ func Handler(frontend fs.FS) http.Handler {
 				data = object{"subscription_refresh_minutes": 60, "avoid_countries": []string{"RU", "BY"}}
 			case "/api/account/passkey":
 				data = object{"passkeys": []string{}}
+			case "/api/servers/check/job":
+				data = object{"run": 0, "running": false, "ids": []int{}, "results": []object{}}
+			case "/api/sources":
+				data = object{"sources": []object{{"id": "demo-source", "name": "Пример подписки", "kind": "subscription", "host": "subscription.example.com", "server_count": 3}}}
+			case "/api/account":
+				data = object{"username": "admin", "recovery_codes_left": 8, "passkeys": 0, "remember": true}
 			case "/api/update":
 				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "channel": "preview", "current": "v3.0.0-beta.4", "latest": object{"tag": "v3.0.0-beta.4", "prerelease": true, "url": "https://github.com/Sgadmer/xkeen-panel/releases/tag/v3.0.0-beta.4"}, "supported": true, "available": false, "auto": false, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
 			case "/api/setup/state":

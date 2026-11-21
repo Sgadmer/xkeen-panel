@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { IconLoader2 } from '@tabler/icons-react'
+import { RefilterBase } from '@/components/blocklistRouting'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
+import { ServiceListsProtection } from '@/components/serviceListsProtection'
 import { SettingChangeDialog, type SettingChange } from '@/components/settingChangeDialog'
 import { api } from '@/lib/api'
 
@@ -80,6 +82,12 @@ export function ComponentsPage() {
         onSuccess: data => { qc.setQueryData(['components'], data); setGeoDraft(null); setNotice('Источники и расписание сохранены. Для первой загрузки нажмите «Проверить обновление геобаз».') },
     })
     const state = query.data
+    const { hash } = useLocation()
+    const loaded = !!state
+    // A link from a service card lands on the lists it speaks about.
+    useEffect(() => {
+        if (loaded && hash === '#service-lists') document.getElementById('service-lists')?.scrollIntoView()
+    }, [loaded, hash])
     const busy = !!state?.job && !state.job.finished
     const working = busy || check.isPending || apply.isPending || rollback.isPending || saveGeo.isPending || settingApply.isPending || pendingSetting !== null
     const disabled = !state?.supported || working
@@ -122,7 +130,7 @@ export function ComponentsPage() {
     }
 
     return <>
-        <PageTitle title='Компоненты и геобазы' back={{ to: '/settings', label: 'Настройки' }} />
+        <PageTitle title='Роутер и XKeen' subtitle='Версии, списки адресов, порты' back={{ to: '/settings', label: 'Настройки' }} />
         {query.isPending ? <p className='px-4 text-muted-foreground'>Проверяем установку…</p> : query.error ? <p role='alert' className='px-4 text-destructive'>{query.error.message}</p> : null}
         {state && <>
             <Group title='Установлено' footer={state.core === 'mihomo' ? 'Выбор версий XKeen и Xray доступен при активном ядре Xray.' : state.reason}>
@@ -141,9 +149,10 @@ export function ComponentsPage() {
                     </div>
                 </div>
             </Group>}
-            {state.core === 'mihomo' && <Group title='Геобазы Mihomo'>
-                <Row label='Re:filter' hint='Список сайтов и IP-адресов для режима «VPN по списку блокировок».' to='/settings/routing' />
-            </Group>}
+            {state.core === 'mihomo' && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-start'>
+                <div id='service-lists' className='scroll-mt-4'><ServiceListsProtection /></div>
+                <RefilterBase />
+            </div>}
             {state.supported && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
                 <VersionChoice component='xkeen' title='Версия XKeen' disabled={disabled} onPreview={inspect} />
                 <VersionChoice component='xray' title='Версия Xray' disabled={disabled} onPreview={inspect} />
@@ -203,7 +212,7 @@ export function ComponentsPage() {
                 {state.backups.map(backup => (backup.setting ? state.core === 'mihomo' && canEditSettings : state.supported) ? <BackupRow key={backup.id} backup={backup} disabled={working} onRollback={id => rollback.mutate(id)} />
                     : <Row key={backup.id} label={`${componentName(backup.component)} · ${backup.version}`} detail={new Date(backup.created).toLocaleDateString('ru-RU')} />)}
             </Group>}
-            <p className='px-4 text-[13px] text-muted-foreground'>Обновления кода панели находятся в разделе <Link className='text-tint' to='/settings/update'>«Обновление панели»</Link>. Подписка обновляется независимо от компонентов.</p>
+            <p className='px-4 text-[13px] text-muted-foreground'>Обновления кода панели находятся в разделе <Link className='text-tint' to='/settings/update'>«О панели и обновление»</Link>. Подписка обновляется независимо от компонентов.</p>
         </>}
         {canEditSettings && settingIntent && <SettingChangeDialog
             name={settingIntent.setting.name}

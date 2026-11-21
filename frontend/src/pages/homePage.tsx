@@ -9,6 +9,7 @@ import {
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { useSetupState } from '@/pages/welcomePage'
 import { Logo } from '@/components/logo'
+import { ProtectionSummary } from '@/components/protectionSummary'
 import {
     useDevices,
     useLogs,
@@ -70,6 +71,10 @@ export function HomePage() {
         : mode === 'profile' || !pool?.selection_kind && current?.protocol === 'xray-profile' ? 'Профиль провайдера · ' + (pool?.selection_name || current?.name || '')
         : 'Сервер выбран вручную'
     const events = panelEvents(logs, 5)
+    // A server named after its country would otherwise be printed twice.
+    const place = countryName(code)
+    const sameName = !!place && !!endpoint && endpoint.replace(/[^\p{L}\p{N} ]/gu, '').trim().toLowerCase() === place.toLowerCase()
+    const latency = !direct && !blocked && !awaitingMember && status && status.latency_ms > 0 ? `${status.latency_ms} мс` : ''
 
     const inVpn = devices?.devices.filter(d => d.vpn).length ?? 0
     const online = devices?.devices.filter(d => d.active).length ?? 0
@@ -119,10 +124,7 @@ export function HomePage() {
                                         'Сервер не выбран'}
                                 </div>
                                 <div className='truncate text-[15px] tracking-[-0.24px] text-muted-foreground'>
-                                    {endpoint}
-                                    {!direct && !blocked && !awaitingMember && status &&
-                                        status.latency_ms > 0 &&
-                                        ` · ${status.latency_ms} мс`}
+                                    {[sameName ? '' : endpoint, latency].filter(Boolean).join(' · ')}
                                 </div>
                             </div>
                         </div>
@@ -221,6 +223,7 @@ export function HomePage() {
                                 </IconTile>
                             }
                             value={status?.panel_version ?? '—'}
+                            wrap
                             caption={
                                 update?.available && update.latest
                                     ? `доступна ${update.latest.tag}`
@@ -232,10 +235,15 @@ export function HomePage() {
                     </div>
                 </div>
 
+                <div className='flex min-w-0 flex-col gap-4'>
+                <ProtectionSummary />
                 <section className='flex flex-col gap-1.5'>
-                    <h2 className='px-4 text-[13px] uppercase tracking-[-0.08px] text-muted-foreground'>
-                        События
-                    </h2>
+                    <div className='flex items-baseline justify-between gap-3 px-4'>
+                        <h2 className='text-[13px] uppercase tracking-[-0.08px] text-muted-foreground'>
+                            События панели
+                        </h2>
+                        {status?.core === 'mihomo' && <Link to='/journal' className='text-[13px] text-tint'>Журнал соединений</Link>}
+                    </div>
                     <div className='divide-y divide-white/10 rounded-card bg-card px-4'>
                         {events.length === 0 && (
                             <p className='py-3 text-[15px] text-muted-foreground'>
@@ -255,6 +263,7 @@ export function HomePage() {
                         ))}
                     </div>
                 </section>
+                </div>
             </div>
         </>
     )
@@ -286,11 +295,14 @@ function Widget({
     icon,
     value,
     caption,
+    wrap,
 }: {
     to: string
     icon: ReactNode
     value: ReactNode
     caption: string
+    // A long value (a version) is shown whole on two lines instead of cut.
+    wrap?: boolean
 }) {
     return (
         <Link
@@ -298,7 +310,7 @@ function Widget({
             className='flex min-h-28 flex-col gap-2 rounded-card bg-card p-4'
         >
             {icon}
-            <span className='truncate text-[22px] font-bold tracking-[-0.26px]'>
+            <span className={wrap ? 'break-all text-[17px] font-bold leading-tight tracking-[-0.26px]' : 'truncate text-[22px] font-bold tracking-[-0.26px]'}>
                 {value}
             </span>
             <span className='text-[13px] leading-snug text-muted-foreground'>

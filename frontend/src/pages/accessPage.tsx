@@ -147,7 +147,7 @@ export function AccessPage() {
     const secureHere = window.location.protocol === 'https:' && window.isSecureContext &&
         (ready ? window.location.origin === ready.origin : !!access?.passkey_domain_configured)
     return <>
-        <PageTitle title='Вход с компьютера и телефона' back={{ to: '/settings', label: 'Настройки' }} />
+        <PageTitle title='Адрес панели и QR-код' subtitle='Как открыть панель с компьютера и телефона' back={{ to: '/settings/security', label: 'Вход и безопасность' }} />
         <div id='face-id'>
             <Group title='Face ID на iPhone' footer='Если Face ID не нужен, настройку HTTPS можно пропустить. По локальному адресу панели можно войти с логином, паролем и одноразовым кодом.'>
                 {query.isLoading && <Row label='Проверяем HTTPS-адрес панели…' />}
@@ -170,8 +170,8 @@ export function AccessPage() {
         <Group title='Подключение в Safari' footer='При следующих входах откройте тот же HTTPS-адрес, нажмите «Войти по Face ID» и подтвердите вход на iPhone.'>
             <Row label='1. Подключите iPhone к домашнему Wi-Fi' hint='Откройте HTTPS-адрес панели в Safari.' />
             <Row label='2. Войдите с паролем и одноразовым кодом' />
-            <Row label='3. В настройках нажмите «Включить вход по Face ID»' hint='Сохраните ключ доступа на iPhone и подтвердите действие по Face ID.' />
-            {secureHere && <Row label='Открыть настройки панели' tone='tint' to='/settings' />}
+            <Row label='3. В разделе «Вход и безопасность» нажмите «Включить вход по Face ID»' hint='Сохраните ключ доступа на iPhone и подтвердите действие по Face ID.' />
+            {secureHere && <Row label='Открыть «Вход и безопасность»' tone='tint' to='/settings/security' />}
         </Group>
         {(!ready || window.location.origin !== ready.origin) && <Group title='Локальный адрес панели' footer='Этот адрес работает в домашней сети. Для Face ID на iPhone используйте HTTPS-адрес.'>
             <Row label='Адрес панели' hint={<span className='break-all'>{access?.url ?? window.location.origin + '/'}</span>} />

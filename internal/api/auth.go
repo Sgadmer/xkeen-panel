@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"xkeen-panel/internal/auth"
 	"xkeen-panel/internal/models"
@@ -15,6 +16,51 @@ type AuthHandler struct {
 	cfg         *models.Config
 	// Guard pauses password sign-in after repeated failures.
 	Guard *LoginGuard
+	// Secure, when set, checks the panel's HTTPS address and returns it, or ""
+	// while that address is not set up or does not answer.
+	Secure func(context.Context) string
+
+	secure struct {
+		sync.Mutex
+		url  string
+		at   time.Time
+		busy bool
+	}
+}
+
+// CheckSecureAddress schedules the first check, so that the first visitor
+// after a start already gets the address. The check goes through the router
+// back to this panel, which must be listening by then.
+func (h *AuthHandler) CheckSecureAddress() {
+	time.AfterFunc(5*time.Second, func() { h.secureURL() })
+}
+
+// secureURL is the HTTPS address a browser on the plain address should move
+// to. The check dials the router, so it runs in the background and this
+// request answers with what the last check found. That is a hint: the browser
+// tries the address itself before it leaves the plain one.
+func (h *AuthHandler) secureURL() string {
+	if h.Secure == nil {
+		return ""
+	}
+	h.secure.Lock()
+	defer h.secure.Unlock()
+	age := time.Since(h.secure.at)
+	if age > 20*time.Second && !h.secure.busy {
+		h.secure.busy = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			found := h.Secure(ctx)
+			cancel()
+			h.secure.Lock()
+			h.secure.url, h.secure.at, h.secure.busy = found, time.Now(), false
+			h.secure.Unlock()
+		}()
+	}
+	if age > 24*time.Hour {
+		return ""
+	}
+	return h.secure.url
 }
 
 func NewAuthHandler(um *auth.UserManager, cfg *models.Config) *AuthHandler {
@@ -27,10 +73,14 @@ const loginRefused = "неверный логин, пароль или одно�
 
 // HandleAuthStatus — GET /api/auth/status
 func (h *AuthHandler) HandleAuthStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	status := map[string]interface{}{
 		"setup_required":  h.userManager.SetupRequired(),
 		"passkey_enabled": h.userManager.HasWebAuthnCredentials(),
-	})
+	}
+	if address := h.secureURL(); address != "" {
+		status["https_url"] = address
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // HandleSetup — POST /api/auth/setup

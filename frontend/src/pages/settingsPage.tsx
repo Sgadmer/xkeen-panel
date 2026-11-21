@@ -1,21 +1,19 @@
-import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ProtectionWarning } from '@/components/protectionWarning'
 import {
     IconBell,
-    IconAdjustmentsHorizontal,
-    IconArrowsExchange,
     IconCpu,
     IconDownload,
     IconFingerprint,
+    IconListSearch,
+    IconRefresh,
+    IconShieldLock,
     IconWand,
 } from '@tabler/icons-react'
 import { Group, IconTile, PageTitle, Row } from '@/components/ios'
-import { GlobalKillSwitch } from '@/components/killSwitch'
+import { ProtectionSummary } from '@/components/protectionSummary'
 import { useAuth } from '@/hooks/useAuth'
-import { useStatus, useUpdate } from '@/hooks/usePanelData'
-import { api } from '@/lib/api'
-import { passkeySupported, registerPasskey } from '@/lib/webauthn'
+import { usePanelSettings, useStatus, useUpdate } from '@/hooks/usePanelData'
+import { intervalLabel } from '@/components/settingsSheets'
+import { useSetupState } from '@/pages/welcomePage'
 
 const icon = (color: string, Glyph: typeof IconCpu) => (
     <IconTile color={color}>
@@ -23,102 +21,53 @@ const icon = (color: string, Glyph: typeof IconCpu) => (
     </IconTile>
 )
 
+// Six sections, each named for what the owner wants to do there.
 export function SettingsPage() {
-    const qc = useQueryClient()
     const { logout } = useAuth()
     const status = useStatus().data
     const update = useUpdate().data
-
-    const passkeys = useQuery({
-        queryKey: ['passkeys'],
-        queryFn: () => api.get<{ passkeys: string[] }>('/api/account/passkey'),
-    })
-    const addPasskey = useMutation({
-        mutationFn: () => registerPasskey(),
-        onSettled: () => qc.invalidateQueries({ queryKey: ['passkeys'] }),
-    })
-    const removePasskey = useMutation({
-        mutationFn: (id: string) => api.del('/api/account/passkey', { id }),
-        onSettled: () => qc.invalidateQueries({ queryKey: ['passkeys'] }),
-    })
-    const [removing, setRemoving] = useState(false)
-    const passkey = passkeys.data?.passkeys?.[0]
-    const faceIdSetupLink = passkeys.isSuccess && !passkey && !passkeySupported()
-    const passkeyError = addPasskey.error || removePasskey.error || passkeys.error
-    const core = status?.core === 'mihomo' ? 'Mihomo' : status?.core === 'xray' ? 'Xray' : status?.core
+    const settings = usePanelSettings().data
+    const setup = useSetupState().data
+    const mihomo = status?.core === 'mihomo'
+    const core = mihomo ? 'Mihomo' : status?.core === 'xray' ? 'Xray' : status?.core
 
     return (
         <>
             <PageTitle title='Настройки' />
 
-            <nav aria-label='Разделы настроек' className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
-                <Group title='XKeen'>
-                    <Row icon={icon('#0a84ff', IconArrowsExchange)} label='Режим VPN и сервисы' hint={status?.core === 'mihomo' ? 'По списку блокировок или по правилам профиля' : 'Выбранные сервисы или весь трафик'} to='/settings/routing' />
-                    <Row icon={icon('#6366f1', IconCpu)} label='Компоненты и геобазы' hint={status?.core === 'mihomo' ? 'Установленные компоненты и базы Re:filter' : 'Версии XKeen/Xray, обновления и геоданные'} to='/settings/components' />
-                    <Row
-                        icon={icon('#0a84ff', IconAdjustmentsHorizontal)}
-                        label='Порты и системные исключения'
-                        to='/settings/xkeen'
-                    />
-                </Group>
-
-                <Group title='Панель'>
-                    <Row icon={icon('#ff9500', IconBell)} label='Уведомления' hint='Системные уведомления на этом устройстве' to='/settings/notifications' />
-                    <Row icon={icon('#0a84ff', IconWand)} label='Вход с ПК и телефона' hint='HTTPS-адрес панели, QR-код и Face ID на iPhone' to='/settings/access' />
-                    <Row
-                        icon={icon('#8e8e93', IconDownload)}
-                        label='Обновление панели'
-                        detail={
-                            update?.locked ? (
-                                'Заблокировано'
-                            ) : update?.available && update.latest ? (
-                                <span className='text-tint'>
-                                    {update.latest.tag}
-                                </span>
-                            ) : undefined
-                        }
-                        to='/settings/update'
-                    />
-                    {faceIdSetupLink && <Row icon={icon('#30d158', IconFingerprint)} label='Настроить Face ID на iPhone'
-                        hint='Получить HTTPS-адрес панели для Safari' to='/settings/access#face-id' />}
-                    <Row icon={icon('#5856d6', IconWand)} label='Мастер настройки' to='/welcome' />
-                </Group>
-            </nav>
-
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
-                <div className='flex min-w-0 flex-col gap-5'>
-                    <Group title='Сведения'>
-                        <dl className='grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 py-3 text-sm'>
-                            <dt className='text-muted-foreground'>Ядро</dt><dd>{[core, status?.mode].filter(Boolean).join(' · ') || '—'}</dd>
-                            <dt className='text-muted-foreground'>Версия XKeen</dt><dd>{status?.xkeen_version || '—'}</dd>
-                            <dt className='text-muted-foreground'>Версия панели</dt><dd className='break-words'>{status?.panel_version || '—'}</dd>
-                        </dl>
+                <nav aria-label='Разделы настроек' className='flex min-w-0 flex-col gap-5'>
+                    <Group>
+                        <Row icon={icon('#30d158', IconShieldLock)} label='Защита' hint='Kill switch и неопознанный трафик' to='/settings/protection' />
+                        <Row icon={icon('#ff9f0a', IconRefresh)} label='Подписки и автоматика'
+                            hint={settings ? `Подписки обновляются: ${intervalLabel(settings.subscription_refresh_minutes)}` : 'Обновление подписок, замена сервера, страны'}
+                            to='/settings/automation' />
+                        <Row icon={icon('#0a84ff', IconListSearch)} label='Журнал' hint='Сколько соединений помнить и где хранить' to='/journal?settings=1' />
+                        <Row icon={icon('#ff9500', IconBell)} label='Уведомления' hint='Какие события присылать на это устройство' to='/settings/notifications' />
+                        <Row icon={icon('#5856d6', IconFingerprint)} label='Вход и безопасность' hint='Пароль, код, запасные коды, ключ доступа, адрес панели' to='/settings/security' />
+                        <Row icon={icon('#6366f1', IconCpu)} label='Роутер и XKeen' hint={[core, status?.mode].filter(Boolean).join(' · ') || 'Компоненты, списки адресов, порты'} to='/settings/components' />
+                        <Row
+                            icon={icon('#8e8e93', IconDownload)}
+                            label='О панели и обновление'
+                            hint={status?.panel_version ? 'Версия ' + status.panel_version : undefined}
+                            detail={
+                                update?.locked ? (
+                                    'Заблокировано'
+                                ) : update?.available && update.latest ? (
+                                    <span className='text-tint'>
+                                        {update.latest.tag}
+                                    </span>
+                                ) : undefined
+                            }
+                            to='/settings/update'
+                        />
                     </Group>
-                    {status?.core === 'mihomo' && <div id='kill-switch'><GlobalKillSwitch /></div>}
-                </div>
+                    {setup && !setup.complete && <Group>
+                        <Row icon={icon('#5856d6', IconWand)} label='Завершить настройку' hint='Мастер проведёт по оставшимся шагам.' to='/welcome' />
+                    </Group>}
+                </nav>
                 <div className='flex min-w-0 flex-col gap-5'>
-                    {!faceIdSetupLink && (
-                        <Group title='Вход по Face ID' footer={passkeyError && <span role='alert' className='text-destructive'>{passkeyError.message}</span>}>
-                            {passkey ? (
-                                <Row icon={icon('#30d158', IconFingerprint)} label='Ключ доступа'
-                                    hint={`${passkey.slice(0, 8)}…`}
-                                    trailing={<button type='button' onClick={() => { removePasskey.reset(); setRemoving(true) }}
-                                        disabled={removePasskey.isPending}
-                                        className='min-h-9 cursor-pointer px-1 text-[15px] text-destructive'>Удалить</button>}
-                                />
-                            ) : passkeys.isSuccess ? (
-                                <Row icon={icon('#30d158', IconFingerprint)} tone='tint'
-                                    label={addPasskey.isPending ? 'Создаю ключ…' : 'Включить вход по Face ID'}
-                                    onClick={() => addPasskey.mutate()} disabled={addPasskey.isPending} />
-                            ) : passkeys.isPending ? <Row label='Загружаем ключи…' /> : null}
-                        </Group>
-                    )}
-                    {removing && passkey && <ProtectionWarning title='Удалить ключ доступа?' confirmLabel='Удалить ключ' delay={0}
-                        busy={removePasskey.isPending} error={removePasskey.error?.message}
-                        onCancel={() => { setRemoving(false); removePasskey.reset() }}
-                        onConfirm={() => { removePasskey.mutateAsync(passkey).then(() => setRemoving(false), () => {}) }}>
-                        <p>Вход по Face ID или ключу доступа перестанет работать на всех устройствах. Войти можно будет с паролем и кодом из приложения-аутентификатора.</p>
-                    </ProtectionWarning>}
+                    <ProtectionSummary />
                     <Group><Row label='Выйти' tone='destructive' onClick={logout} /></Group>
                 </div>
             </div>

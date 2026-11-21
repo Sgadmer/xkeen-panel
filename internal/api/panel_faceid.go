@@ -290,6 +290,17 @@ func (f *PanelFaceID) verifiedURL(ctx context.Context) (*url.URL, error) {
 	return parsePanelOrigin(in.Origin)
 }
 
+// SecureAddress is the panel's HTTPS address, with the closing slash, once the
+// router serves it with a trusted certificate and it reaches this panel. It is
+// empty until then.
+func (f *PanelFaceID) SecureAddress(ctx context.Context) string {
+	address, err := f.verifiedURL(ctx)
+	if err != nil {
+		return ""
+	}
+	return address.String() + "/"
+}
+
 func (f *PanelFaceID) status(ctx context.Context) faceIDView {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import {
     IconCircleCheckFilled,
     IconCircleXFilled,
@@ -125,7 +126,6 @@ export function DiagnosticsPage() {
                 <p>VPN перестанет работать для всех устройств. Пока прокси остановлен, роутер не направляет трафик в VPN: сайты и приложения будут открываться <strong className='text-foreground'>напрямую</strong>, с домашнего адреса.</p>
                 <p className='text-muted-foreground'>Если защита сервисов не позволяет остановку, панель откажет и ничего не изменит.</p>
             </ProtectionWarning>}
-            <RouterActivity />
             <div className='grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start'>
                 <div className='flex flex-col gap-5'>
                     <Group
@@ -294,7 +294,7 @@ export function DiagnosticsPage() {
                     </Group>
                 </div>
 
-                <Group title='Журнал'>
+                <Group title='События панели' footer={<>Что делала сама панель. Куда обращаются устройства — во вкладке <Link to='/journal' className='text-tint'>«Журнал»</Link>.</>}>
                     <div
                         ref={logRef}
                         className='max-h-[60dvh] overflow-y-auto py-3 lg:max-h-[calc(100dvh-14rem)]'
@@ -310,6 +310,8 @@ export function DiagnosticsPage() {
                     </div>
                 </Group>
             </div>
+            {/* Checks and controls come first; the load charts are looked at less often. */}
+            <RouterActivity />
         </>
     )
 }

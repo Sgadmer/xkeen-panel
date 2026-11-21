@@ -124,6 +124,15 @@ func (s *Server) Handler() http.Handler {
 	if s.Cards != nil {
 		handlers.FaceID = api.NewPanelFaceID(s.config, s.CardsListen, devicesHandler)
 		webAuthnHandler.FaceID = handlers.FaceID
+		if handlers.FaceID != nil {
+			authHandler.Secure = handlers.FaceID.SecureAddress
+			authHandler.CheckSecureAddress()
+		}
+	}
+	accountHandler := api.NewAccountHandler(s.userManager, s.config)
+	accountHandler.Guard.OnPause = s.loginPaused("в настройках входа")
+	if s.watchdog != nil {
+		accountHandler.Log = s.watchdog.Log
 	}
 	componentsHandler := api.NewComponentsHandler(handlers)
 
@@ -206,6 +215,8 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/servers/check/job", handlers.HandleProbeJob)
 			r.Post("/servers/check/job", handlers.HandleProbeJob)
 			r.Post("/servers/country", handlers.HandleSetCountry)
+
+			accountHandler.Mount(r)
 
 			// Passkey management
 			r.Post("/account/passkey/register/begin", webAuthnHandler.HandleRegisterBegin)

@@ -65,7 +65,8 @@ export function JournalPage() {
     const [searchDraft, setSearchDraft] = useState(filters.search)
     const [paused, setPaused] = useState(false)
     const [details, setDetails] = useState<ViewEntry | null>(null)
-    const [settingsOpen, setSettingsOpen] = useState(false)
+    // "Настройки → Журнал" opens this page with its settings sheet already up.
+    const [settingsOpen, setSettingsOpen] = useState(() => params.get('settings') === '1')
     const [presetSheet, setPresetSheet] = useState<'save' | 'manage' | null>(null)
     const [presetName, setPresetName] = useState('')
     const [capture, setCaptureState] = useState<Capture | null>(storedCapture)
@@ -94,12 +95,13 @@ export function JournalPage() {
     useEffect(() => {
         if (restored.current) return
         restored.current = true
-        if ([...params.keys()].length > 0) {
+        if ([...params.keys()].some(key => key !== 'settings')) {
             rememberFilters(filters)
             return
         }
         const saved = rememberedFilters()
         if (saved && !sameFilters(saved, defaultFilters)) setParams(paramsFromFilters(saved), { replace: true })
+        else if (params.has('settings')) setParams(paramsFromFilters(filters), { replace: true })
     }, [params, filters, setParams])
     useEffect(() => { setSearchDraft(filters.search) }, [filters.search])
     useEffect(() => {

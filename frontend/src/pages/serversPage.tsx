@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
     IconActivityHeartbeat,
     IconCheck,
@@ -21,7 +22,6 @@ import {
     Segmented,
     Switch,
 } from '@/components/ios'
-import { ServerAutomation } from '@/components/serverAutomation'
 import { MultiPoolsSheet, SourcesSheet } from '@/components/serverCatalogSheets'
 import { Badge } from '@/components/ui/badge'
 import { AddSiteSheet, SiteSheet, siteSummary } from '@/components/siteSheets'
@@ -64,6 +64,16 @@ type Tab = 'pool' | 'all'
 
 const TAB_KEY = 'servers_tab'
 const COUNTRY_ORDER_KEY = 'servers_country_order'
+// The import notice the owner has already read and closed.
+const NOTICE_KEY = 'xkeen.servers.notice.v1'
+
+function savedNotice() {
+    try {
+        return localStorage.getItem(NOTICE_KEY) ?? ''
+    } catch {
+        return ''
+    }
+}
 const countryCollator = new Intl.Collator('ru', { sensitivity: 'base' })
 
 function countryPoolOption(scope: AutoScope, avoided: string[]) {
@@ -139,7 +149,14 @@ export function ServersPage() {
     const [query, setQuery] = useState('')
     const [country, setCountryFilter] = useState('all')
     const [order, setOrder] = useState<CountryOrder>(savedCountryOrder)
-    const [catalogSheet, setCatalogSheet] = useState<'sources' | 'pools' | null>(null)
+    const [params, setParams] = useSearchParams()
+    // Settings link here with ?sources=1 to open the list of subscriptions.
+    const [catalogSheet, setCatalogSheet] = useState<'sources' | 'pools' | null>(() => params.get('sources') === '1' ? 'sources' : null)
+    const closeCatalog = () => {
+        setCatalogSheet(null)
+        if (params.has('sources')) setParams({}, { replace: true })
+    }
+    const [hiddenNotice, setHiddenNotice] = useState(savedNotice)
     const [editingPool, setEditingPool] = useState<string | null>(null)
     const [tab, setTabState] = useState<Tab>(savedTab)
     const [addingSite, setAddingSite] = useState(false)
@@ -282,6 +299,14 @@ export function ServersPage() {
         </div>
     )
 
+    const automationLink = (
+        <Group>
+            <Row icon={<IconTile color='#ff9f0a'><IconRefresh className='size-[17px]' stroke={2.2} /></IconTile>}
+                label='Подписки и автоматика' hint='Как часто обновлять подписки, когда менять сервер, какие страны не брать'
+                to='/settings/automation' />
+        </Group>
+    )
+
     const profiles = providerModes.filter(s => matches(query, s.name, serverCountry(s), s.source_name))
     const providerCard = profiles.length > 0 && (
         <Group title={<span className='flex min-w-0 items-center justify-between gap-2'>
@@ -340,13 +365,15 @@ export function ServersPage() {
                 }
             />
 
-            {warnings.length > 0 && (
-                <p
-                    role='status'
-                    className='px-4 text-[15px] text-muted-foreground'
-                >
-                    {warnings.join(' ')}
-                </p>
+            {warnings.length > 0 && warnings.join(' ') !== hiddenNotice && (
+                <div role='status' className='flex items-start gap-3 px-4 text-[15px] text-muted-foreground'>
+                    <p className='min-w-0 flex-1'>{warnings.join(' ')}</p>
+                    <button type='button' className='shrink-0 cursor-pointer text-tint' onClick={() => {
+                        const text = warnings.join(' ')
+                        setHiddenNotice(text)
+                        try { localStorage.setItem(NOTICE_KEY, text) } catch { /* hidden until reload */ }
+                    }}>Скрыть</button>
+                </div>
             )}
             {checkError && (
                 <p role='alert' className='px-4 text-[15px] text-destructive'>
@@ -477,7 +504,7 @@ export function ServersPage() {
                     </div>
 
                     <div className='flex flex-col gap-4'>
-                        <ServerAutomation />
+                        {automationLink}
                         {!mihomo && <Group
                             title='Сайты'
                             footer={
@@ -530,8 +557,6 @@ export function ServersPage() {
             {view === 'all' && (
                 <>
                     {tiles}
-                    <ServerAutomation />
-                    {providerCard}
 
                     {servers.length > 0 && (
                         <div className='flex min-w-0 max-w-full flex-col gap-3'>
@@ -576,11 +601,14 @@ export function ServersPage() {
                             Ничего не нашлось
                         </p>
                     )}
+                    {/* The list comes first; what is rarely touched follows it. */}
+                    {providerCard}
+                    {automationLink}
                 </>
             )}
 
-            <SourcesSheet open={catalogSheet === 'sources'} onClose={() => setCatalogSheet(null)} />
-            <MultiPoolsSheet initialId={editingPool} open={catalogSheet === 'pools'} onClose={() => setCatalogSheet(null)} />
+            <SourcesSheet open={catalogSheet === 'sources'} onClose={closeCatalog} />
+            <MultiPoolsSheet initialId={editingPool} open={catalogSheet === 'pools'} onClose={closeCatalog} />
             <AddSiteSheet
                 open={addingSite}
                 onClose={() => setAddingSite(false)}

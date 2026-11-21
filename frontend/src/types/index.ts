@@ -206,6 +206,8 @@ export type SubscriptionUpdateResponse = {
 export type AuthStatus = {
     setup_required: boolean
     passkey_enabled?: boolean
+    // The panel's HTTPS address, once the router serves it and it works.
+    https_url?: string
 }
 
 export type SetupResponse = {
