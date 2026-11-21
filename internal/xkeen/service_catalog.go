@@ -112,25 +112,47 @@ func ServiceForHost(host string) string {
 	if slices.Contains(analyticsHosts, host) {
 		return "analytics"
 	}
-	for host != "" {
-		if id := serviceDomainNames[host]; id != "" {
+	for name := host; name != ""; {
+		if id := serviceDomainNames[name]; id != "" {
 			return id
 		}
-		_, rest, _ := strings.Cut(host, ".")
-		host = rest
+		_, rest, _ := strings.Cut(name, ".")
+		name = rest
 	}
-	return ""
+	return customForHost(host)
 }
 
-// ServiceSuffixes returns the built-in domains of a service card. Each one
-// stands for the domain itself and everything below it.
+// ServiceSuffixes returns the domains of a service card. Each one stands for
+// the domain itself and everything below it.
 func ServiceSuffixes(id string) []string {
 	for _, service := range serviceCatalog {
 		if service.id == id {
 			return strings.Fields(service.suffixes)
 		}
 	}
-	return nil
+	var result []string
+	if custom, found := customService(id); found {
+		for _, domain := range custom.Domains {
+			if suffix, ok := strings.CutPrefix(domain, "domain:"); ok {
+				result = append(result, suffix)
+			}
+		}
+	}
+	return result
+}
+
+// ServiceHosts returns the exact host names of a custom card: names that
+// belong to it without the names below them.
+func ServiceHosts(id string) []string {
+	var result []string
+	if custom, found := customService(id); found {
+		for _, domain := range custom.Domains {
+			if host, ok := strings.CutPrefix(domain, "full:"); ok {
+				result = append(result, host)
+			}
+		}
+	}
+	return result
 }
 
 func knownService(id string) bool {
@@ -142,11 +164,17 @@ func knownService(id string) bool {
 	return false
 }
 
-// ServiceNames lists the cards in display order without resolving routes or loading geodata.
+// ServiceNames lists the cards in display order without resolving routes or
+// loading geodata: the built-in ones, then the owner's.
 func ServiceNames() []ServiceName {
 	result := make([]ServiceName, 0, len(serviceCatalog))
 	for _, service := range serviceCatalog {
 		result = append(result, ServiceName{ID: service.id, Name: service.name})
+	}
+	if current := customServices.Load(); current != nil {
+		for _, service := range *current {
+			result = append(result, ServiceName{ID: service.ID, Name: service.Name})
+		}
 	}
 	return result
 }

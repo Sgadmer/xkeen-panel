@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { IconChevronDown, IconSearch, IconShield } from '@tabler/icons-react'
+import { IconChevronDown, IconPlus, IconSearch, IconShield } from '@tabler/icons-react'
 import { AiRouteWarning } from '@/components/aiRouteWarning'
+import { CustomServiceSheet, DeleteCustomService, customDraft, type CustomDraft } from '@/components/customServices'
 import { aiServiceIds, isAiService } from '@/lib/aiServiceGroup'
 import { ServiceLogo } from '@/components/serviceLogo'
 import { ServiceOrderControl, useServiceOrder } from '@/components/serviceOrder'
@@ -27,6 +28,9 @@ interface Service {
     id: string
     name: string
     domains: string[]
+    // A card the owner created, with the networks that belong to it.
+    custom?: boolean
+    networks?: string[]
     target: string
     blocked: boolean
     inherited_route?: InheritedRoute
@@ -134,18 +138,20 @@ function useClaudeApiFirewall(enabled: boolean) {
     return { state, install }
 }
 
-function ServiceDetails({ service, selected, fresh, mihomo, firewall, protectionEnabled }: {
+function ServiceDetails({ service, selected, fresh, mihomo, firewall, protectionEnabled, onEdit, onDelete }: {
     service: Service; selected?: ServiceTarget; fresh: boolean; mihomo: boolean; firewall: ReturnType<typeof useClaudeApiFirewall>; protectionEnabled?: boolean
+    onEdit?: () => void; onDelete?: () => void
 }) {
     const claude = service.id === 'claude'
     const analytics = service.id === 'analytics'
     const { state, install } = firewall
     const error = install.error ?? state.error
-    const proxy = mihomo && !!service.target && service.target !== 'direct'
+    // The private proxy of a card is offered for the built-in cards only.
+    const proxy = mihomo && !service.custom && !!service.target && service.target !== 'direct'
     const inherited = service.target ? undefined : service.inherited_route
     const providers = selected?.sources?.join(', ')
     const live = fresh && service.target !== 'direct' ? service.current_route : undefined
-    const domains = service.domains ?? []
+    const domains = [...(service.domains ?? []), ...(service.networks ?? [])]
     if (!claude && !analytics && !proxy && !inherited && !domains.length) return null
     const needsAttention = claude && (!!error || (!!state.data && !state.data.ready && protectionEnabled !== false))
     return <>
@@ -179,10 +185,14 @@ function ServiceDetails({ service, selected, fresh, mihomo, firewall, protection
                 {inherited && <InheritedRouteInfo route={inherited} fresh={fresh} />}
                 {proxy && <ClientProxy service={service} />}
                 {domains.length > 0 && <div>
-                    <h3 className='font-medium'>Домены сервиса</h3>
+                    <h3 className='font-medium'>{service.custom ? 'Адреса сервиса' : 'Домены сервиса'}</h3>
                     <ul aria-label='Домены сервиса' className='mt-1 max-h-36 overflow-y-auto break-words text-muted-foreground'>
-                        {domains.map(d => <li key={d}>{d.replace(/^(domain|full):/, '').replace(/^ext:geosite_v2fly\.dat:/, 'GeoSite · ')}</li>)}
+                        {domains.map(d => <li key={d}>{d.replace(/^domain:/, '').replace(/^full:/, service.custom ? 'только ' : '').replace(/^ext:geosite_v2fly\.dat:/, 'GeoSite · ')}</li>)}
                     </ul>
+                </div>}
+                {service.custom && <div className='flex flex-wrap gap-x-5'>
+                    <button type='button' className='min-h-11 cursor-pointer text-tint' onClick={onEdit}>Изменить название и адреса</button>
+                    <button type='button' className='min-h-11 cursor-pointer text-destructive' onClick={onDelete}>Удалить сервис</button>
                 </div>}
             </div>
         </details>
@@ -222,6 +232,8 @@ export function ServiceRoutesPage() {
     const avoidCountries = usePanelSettings().data?.avoid_countries
     const [notice, setNotice] = useState('')
     const [search, setSearch] = useState('')
+    const [custom, setCustom] = useState<CustomDraft | null>(null)
+    const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null)
     const [warning, setWarning] = useState<{serviceId: string; serviceName: string; targetId: string; targetLabel: string; targetKind?: ServiceTarget['kind']} | null>(null)
     const key = ['service-routes']
     const query = useQuery({
@@ -309,7 +321,8 @@ export function ServiceRoutesPage() {
                 </p>
                 {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} direct={service.target === 'direct'} />}
                 <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
-                    protectionEnabled={claudeProtection} />
+                    protectionEnabled={claudeProtection}
+                    onEdit={() => { setNotice(''); setCustom(customDraft(service)) }} onDelete={() => { setNotice(''); setRemoving({ id: service.id, name: service.name }) }} />
             </section>
         )
     }
@@ -379,12 +392,18 @@ export function ServiceRoutesPage() {
                             {aiServiceIds.flatMap(id => { const service = view.services.find(item => item.id === id); return service ? [renderService(service)] : [] })}
                         </div>
                     </section>
-                    {others.length > 6 && <label className='flex min-h-11 items-center gap-2 rounded-xl bg-fill px-3 sm:max-w-sm'>
-                        <IconSearch aria-hidden className='size-4 shrink-0 text-muted-foreground' stroke={2.2} />
-                        <span className='sr-only'>Найти сервис</span>
-                        <input type='search' value={search} onChange={event => setSearch(event.target.value)} placeholder='Найти сервис'
-                            className='min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted-foreground' />
-                    </label>}
+                    <div className='flex flex-wrap items-center gap-3'>
+                        {others.length > 6 && <label className='flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-xl bg-fill px-3 sm:max-w-sm'>
+                            <IconSearch aria-hidden className='size-4 shrink-0 text-muted-foreground' stroke={2.2} />
+                            <span className='sr-only'>Найти сервис</span>
+                            <input type='search' value={search} onChange={event => setSearch(event.target.value)} placeholder='Найти сервис'
+                                className='min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted-foreground' />
+                        </label>}
+                        {mihomo && <button type='button' onClick={() => { setNotice(''); setCustom({ name: '', addresses: '' }) }}
+                            className='flex min-h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-xl bg-fill px-3 text-[15px] text-tint'>
+                            <IconPlus aria-hidden className='size-4' stroke={2.4} />Свой сервис
+                        </button>}
+                    </div>
                     <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
                         {found.map(renderService)}
                     </div>
@@ -392,6 +411,8 @@ export function ServiceRoutesPage() {
                     <p role='status' className='text-sm text-muted-foreground'>{notice}</p>
                 </>
             )}
+            <CustomServiceSheet draft={custom} onClose={() => setCustom(null)} onSaved={message => { setCustom(null); setNotice(message) }} />
+            <DeleteCustomService service={removing} onClose={() => setRemoving(null)} onDeleted={message => { setRemoving(null); setNotice(message) }} />
         </>
     )
 }

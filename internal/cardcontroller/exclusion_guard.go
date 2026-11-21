@@ -47,6 +47,9 @@ func (c *Controller) newExclusionGuard(p profile) exclusionGuard {
 		for _, suffix := range xkeen.ServiceSuffixes(id) {
 			card.hosts[suffix] = true
 		}
+		for _, host := range xkeen.ServiceHosts(id) {
+			card.hosts[host] = card.hosts[host]
+		}
 		if id == "analytics" {
 			for _, host := range xkeen.AnalyticsHosts() {
 				card.hosts[host] = card.hosts[host]

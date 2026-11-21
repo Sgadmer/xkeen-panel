@@ -463,7 +463,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 			add("IN-NAME," + serviceInbound(id) + "," + dedicatedGroup(id))
 			destination = baseDestination
 		}
-		if id == "claude" || autoDefaults {
+		if id == "claude" || autoDefaults || service.Custom {
 			for _, cidr := range xkeen.ServiceNetworks(id) {
 				add("IP-CIDR," + cidr + "," + name + ",no-resolve")
 			}
@@ -473,7 +473,9 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 				// A specific app such as Gemini can share its parent domain
 				// with a card that comes earlier (Google). Promote only that
 				// suffix, leaving broad GeoSite categories in their original order.
-				if autoDefaults {
+				// The owner's cards are never promoted: they stay below every
+				// built-in card whatever their addresses are.
+				if autoDefaults && !service.Custom {
 					for _, parent, found := strings.Cut(suffix, "."); found; _, parent, found = strings.Cut(parent, ".") {
 						if earlierDomains[parent] {
 							destination = &specific
@@ -742,9 +744,11 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 				exactDomains[host] = id
 			}
 		}
-		if id == "claude" || p.doc[serviceAutoKey] == true {
+		if id == "claude" || p.doc[serviceAutoKey] == true || service.Custom {
 			for _, cidr := range xkeen.ServiceNetworks(id) {
-				networks = append(networks, network{id, netip.MustParsePrefix(cidr)})
+				if prefix, err := netip.ParsePrefix(cidr); err == nil {
+					networks = append(networks, network{id, prefix})
+				}
 			}
 		}
 	}
@@ -763,7 +767,7 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 		} else {
 			ownerHead = false
 		}
-		id := diagnosticServiceTags[f[end]]
+		id := serviceOfTag(f[end])
 		if end == 2 && id != "" && (f[0] == "IP-CIDR" || f[0] == "IP-CIDR6") {
 			if prefix, err := netip.ParsePrefix(f[1]); err == nil {
 				networks = append(networks, network{id, prefix})
@@ -801,7 +805,7 @@ func (c *Controller) drainChanged(ctx context.Context, p profile, changes map[st
 			}
 			if id == "" {
 				for _, tag := range flow.Chains {
-					if id = diagnosticServiceTags[tag]; id != "" {
+					if id = serviceOfTag(tag); id != "" {
 						break
 					}
 				}
@@ -878,7 +882,7 @@ func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, exp
 		// service classifier from the predicate reported by the tracker.
 		key := strings.ToLower(strings.ReplaceAll(f[0], "-", "")) + "," + f[1]
 		if _, earlier := ownerService[key]; !earlier {
-			ownerService[key] = diagnosticServiceTags[f[end]]
+			ownerService[key] = serviceOfTag(f[end])
 		}
 	}
 	for _, flow := range snapshot.Connections {
@@ -895,7 +899,7 @@ func (c *Controller) drainObsoleteFallback(ctx context.Context, api coreAPI, exp
 			switch {
 			case strings.HasPrefix(adapter, failoverPrefix):
 				if id == "" {
-					id = diagnosticServiceTags[expected[adapter]]
+					id = serviceOfTag(expected[adapter])
 				}
 				stale = id != "" && policy.Protects(id)
 			case adapter == cardPrefix+"direct":

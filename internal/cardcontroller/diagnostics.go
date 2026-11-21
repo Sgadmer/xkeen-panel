@@ -76,7 +76,7 @@ func (f connectionTracker) project(names map[string]string) Connection {
 	for i := len(f.Chains) - 1; i >= 0; i-- {
 		tag := f.Chains[i]
 		if row.ServiceID == "" {
-			row.ServiceID = diagnosticServiceTags[tag]
+			row.ServiceID = serviceOfTag(tag)
 		}
 		if pretty := names[tag]; pretty != "" {
 			tag = pretty
@@ -129,6 +129,10 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 		names[cardPrefix+id+"-inherited"] = display + " (по правилам)"
 		names[dedicatedGroup(id)] = display + " (прокси устройства)"
 		names[cardPrefix+"guard-"+id] = "Kill switch"
+	}
+	for _, custom := range xkeen.CustomServices() {
+		names[cardPrefix+custom.ID] = custom.Name
+		names[cardPrefix+"guard-"+custom.ID] = "Kill switch"
 	}
 	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()

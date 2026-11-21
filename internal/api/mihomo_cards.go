@@ -21,6 +21,7 @@ func (h *Handlers) MountMihomoCards(r chi.Router, host string) {
 			})
 		})
 		h.Cards.MountExclusions(r, h.config.DataDir)
+		h.Cards.MountCustomServices(r, h.config.DataDir)
 		h.mountMultiPools(r)
 		h.mountRefilter(r)
 		h.mountServiceLists(r)

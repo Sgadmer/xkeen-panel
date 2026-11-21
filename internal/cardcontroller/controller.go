@@ -235,7 +235,10 @@ func (c *Controller) read() (profile, error) {
 			if ok && val == "" && groupNames[id] != "" {
 				continue // Old profiles may store an empty selection explicitly.
 			}
-			if !ok || !validAssignment(id, val) || groupNames[id] == "" && !(id == defaultID && validHash(val)) {
+			if xkeen.CustomServiceID(id) && !xkeen.IsCustomService(id) {
+				continue // The owner's card was removed; its choice goes with the next save.
+			}
+			if !ok || !validAssignment(id, val) || !knownCard(id) && !(id == defaultID && validHash(val)) {
 				return p, errors.New("повреждено назначение карточки")
 			}
 			p.assigned[id] = val
@@ -430,7 +433,7 @@ func (c *Controller) Set(ctx context.Context, id, target string) (View, error) {
 	if target == "" {
 		target = defaultServiceTarget(id)
 	}
-	if groupNames[id] == "" || !validAssignment(id, target) {
+	if !knownCard(id) || !validAssignment(id, target) {
 		return View{}, errors.New("недопустимый сервис или сервер")
 	}
 	return c.apply(ctx, id, target, func(p *profile) error {

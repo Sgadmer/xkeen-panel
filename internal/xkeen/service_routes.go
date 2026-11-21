@@ -60,7 +60,12 @@ var serviceNetworks = map[string][]string{
 }
 
 // ServiceNetworks returns the address ranges managed by the service card.
-func ServiceNetworks(id string) []string { return slices.Clone(serviceNetworks[id]) }
+func ServiceNetworks(id string) []string {
+	if custom, found := customService(id); found {
+		return slices.Clone(custom.Networks)
+	}
+	return slices.Clone(serviceNetworks[id])
+}
 
 func servicePolicyReady(rt Runtime, state serviceRoutesState) bool {
 	// A verified native exclusive route need not use synthetic prefixes.
@@ -168,6 +173,9 @@ type ServiceRouteView struct {
 	RouteName      string               `json:"route_name,omitempty"`
 	InheritedRoute *InheritedRoute      `json:"inherited_route,omitempty"`
 	CurrentRoute   *CurrentServiceRoute `json:"current_route,omitempty"`
+	// A card the owner created, with the networks that belong to it.
+	Custom   bool     `json:"custom,omitempty"`
+	Networks []string `json:"networks,omitempty"`
 }
 
 // CurrentServiceRoute describes the next selection reported by the live core.
@@ -229,6 +237,13 @@ func ReadServiceRoutes(rt Runtime, servers []models.Server) (ServiceRoutesView, 
 		_, present := positions[id]
 		blocked := view.Active && (s.id == "claude" || id != "") && (!present || state.Outbounds[id] == nil)
 		view.Services = append(view.Services, ServiceRouteView{RoutingService: RoutingService{s.id, s.name, serviceDomains(i, geo)}, Target: id, Blocked: blocked})
+	}
+	// The owner's cards exist for the Mihomo card controller only; it fills in
+	// their route. They follow the built-in cards, so their rules do too.
+	if rt.Core == CoreMihomo {
+		for _, custom := range CustomServices() {
+			view.Services = append(view.Services, ServiceRouteView{RoutingService: RoutingService{custom.ID, custom.Name, custom.Domains}, Custom: true, Networks: custom.Networks})
+		}
 	}
 	return view, nil
 }

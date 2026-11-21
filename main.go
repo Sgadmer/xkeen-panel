@@ -123,6 +123,14 @@ func main() {
 		if rt.Core != xkeen.CoreMihomo {
 			log.Fatal("Для запуска с -cards-listen требуется действующее ядро Mihomo")
 		}
+		// The owner's cards are part of the catalogue the controller renders
+		// from, so they are loaded before its first reload. A damaged list
+		// leaves the panel running with the built-in cards only.
+		if custom, loadErr := xkeen.LoadCustomServices(cfg.DataDir); loadErr != nil {
+			log.Printf("Свои сервисы не загружены: %v", loadErr)
+		} else {
+			xkeen.SetCustomServices(custom)
+		}
 		cards, err = newCardsController(cfg.DataDir, rt.MihomoConf, subManager)
 		if err != nil {
 			log.Fatal(err)

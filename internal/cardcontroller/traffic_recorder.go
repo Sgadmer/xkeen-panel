@@ -45,6 +45,10 @@ func (r *trafficRecorder) project(c *Controller, p profile) {
 		r.names[cardPrefix+id], r.names[cardPrefix+id+"-inherited"], r.names[dedicatedGroup(id)] = name, name, name
 		r.names[serviceGuardName(id)] = "Kill switch"
 	}
+	for _, custom := range xkeen.CustomServices() {
+		r.names[cardPrefix+custom.ID] = custom.Name
+		r.names[serviceGuardName(custom.ID)] = "Kill switch"
+	}
 	r.names[serviceGuardName(defaultID)] = "Kill switch"
 	catalog := map[string]ConnectionExit{}
 	if c.catalog != nil {
@@ -130,7 +134,7 @@ func (r *trafficRecorder) parse(level, payload string, guard *GuardEvent) (traff
 		group, leaf = used[:start], used[start+1:len(used)-1]
 	}
 	if entry.ServiceID == "" {
-		entry.ServiceID = diagnosticServiceTags[group]
+		entry.ServiceID = serviceOfTag(group)
 	}
 	if entry.ServiceID == "" {
 		entry.ServiceID = xkeen.ServiceForHost(entry.Host)

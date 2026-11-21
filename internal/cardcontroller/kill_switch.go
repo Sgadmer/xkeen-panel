@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"xkeen-panel/installer"
+	"xkeen-panel/internal/xkeen"
 )
 
 const killSwitchKey = "x-xkeen-panel-kill-switch"
@@ -39,7 +40,10 @@ func readKillSwitch(doc map[string]interface{}) (KillSwitch, error) {
 	policy.Enabled = enabled
 	for id, value := range services {
 		mode := str(value)
-		if groupNames[id] == "" || (mode != "on" && mode != "off" && mode != "inherit") {
+		if xkeen.CustomServiceID(id) && !xkeen.IsCustomService(id) {
+			continue // The owner's card was removed; its setting goes with the next save.
+		}
+		if !knownCard(id) || (mode != "on" && mode != "off" && mode != "inherit") {
 			return policy, errors.New("повреждена настройка Kill switch сервиса")
 		}
 		policy.Services[id] = mode
@@ -49,7 +53,7 @@ func readKillSwitch(doc map[string]interface{}) (KillSwitch, error) {
 
 // A service follows the router setting only when the user chooses inherit.
 func (p KillSwitch) Protects(id string) bool {
-	if groupNames[id] == "" || p.Services[id] == "inherit" {
+	if !knownCard(id) || p.Services[id] == "inherit" {
 		return p.Enabled
 	}
 	return p.Services[id] != "off"
@@ -62,7 +66,8 @@ func (p KillSwitch) hasProtectedRoute(config profile) bool {
 		return true
 	}
 	inherited := false
-	for id := range groupNames {
+	for _, card := range xkeen.ServiceNames() {
+		id := card.ID
 		if !p.Protects(id) || config.assigned[id] == directTarget {
 			continue
 		}
@@ -113,7 +118,7 @@ func (c *Controller) KillSwitch() (KillSwitch, error) {
 func (c *Controller) SetKillSwitch(ctx context.Context, enabled *bool, id, mode string) (KillSwitch, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if enabled != nil && (id != "" || mode != "") || enabled == nil && (groupNames[id] == "" || mode != "on" && mode != "off" && mode != "inherit") {
+	if enabled != nil && (id != "" || mode != "") || enabled == nil && (!knownCard(id) || mode != "on" && mode != "off" && mode != "inherit") {
 		return KillSwitch{}, errors.New("неверная настройка Kill switch")
 	}
 	p, err := c.read()

@@ -40,7 +40,13 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 				card("spotify", "Spotify", "pool-all", server, "domain:spotify.com"),
 				card("netflix", "Netflix", "pool-all", server, "domain:netflix.com"),
 				card("steam", "Steam", "direct", object{"kind": "direct"}, "domain:steampowered.com"),
+				// A card the owner described.
+				object{"id": "custom-0a1b2c3d", "name": "Рабочий портал", "custom": true, "domains": []string{"domain:portal.example.com", "full:files.example.net"},
+					"networks": []string{"203.0.113.0/24"}, "target": "srv-de", "blocked": false,
+					"current_route": object{"kind": "server", "name": "Германия · резервный", "country": "DE", "source": "Пример подписки"}},
 			}}, true
+	case "/api/custom-services":
+		return object{"limit": 30, "services": []object{{"id": "custom-0a1b2c3d", "name": "Рабочий портал", "addresses": []string{"portal.example.com", "full:files.example.net", "203.0.113.0/24"}}}}, true
 	case "/api/kill-switch":
 		return object{"enabled": true, "services": object{"steam": "inherit"}}, true
 	case "/api/service-routes/claude-api-firewall":

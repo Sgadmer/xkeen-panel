@@ -236,7 +236,7 @@ var guardDialLog = regexp.MustCompile(`^\[(TCP|UDP)\] dial (XKP-card-[a-z-]+) \(
 var guardFlowLog = regexp.MustCompile(`^\[(TCP|UDP)\] ([^ ]+) --> ([^ ]+) (?:match .* )?using (.+)$`)
 
 func guardService(p profile, tag, id string) bool {
-	if _, owned := p.doc[stateKey]; !owned || id != defaultID && id != "quic" && groupNames[id] == "" || p.assigned[id] == directTarget {
+	if _, owned := p.doc[stateKey]; !owned || id != defaultID && id != "quic" && !knownCard(id) || p.assigned[id] == directTarget {
 		return false
 	}
 	policy, err := readKillSwitch(p.doc)
@@ -265,7 +265,7 @@ func guardService(p profile, tag, id string) bool {
 // A missing selected worker makes its owned card selector itself REJECT. This
 // is a generated fail-closed state, distinct from a user's native REJECT group.
 func guardMissingWorker(p profile, id string) bool {
-	if _, owned := p.doc[stateKey]; !owned || id != defaultID && groupNames[id] == "" || p.assigned[id] == directTarget || p.assigned[id] == "" && id != "claude" {
+	if _, owned := p.doc[stateKey]; !owned || id != defaultID && !knownCard(id) || p.assigned[id] == directTarget || p.assigned[id] == "" && id != "claude" {
 		return false
 	}
 	policy, err := readKillSwitch(p.doc)
@@ -342,7 +342,7 @@ func parseGuardLog(level, payload string, p profile) (GuardEvent, bool) {
 			return event, false
 		}
 		tag := parts[2]
-		id := diagnosticServiceTags[tag]
+		id := serviceOfTag(tag)
 		if tag == cardPrefix+defaultID {
 			id = defaultID
 		}
