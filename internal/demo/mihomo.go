@@ -58,6 +58,12 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 		return object{"enabled": true, "ready": true, "updating": false, "source": "v2fly/domain-list-community", "sources": 14, "domains": 4821, "voice_prefixes": 36,
 			"updated_at": now.Add(-5 * time.Hour).Format(time.RFC3339), "checked_at": now.Add(-5 * time.Hour).Format(time.RFC3339),
 			"next_check_at": now.Add(19 * time.Hour).Format(time.RFC3339), "shared_dependencies": ""}, true
+	case "/api/dns":
+		return object{"mode": "router", "foreign": false, "presets": []object{
+			{"id": "cloudflare", "name": "Cloudflare", "servers": []string{"https://1.1.1.1/dns-query", "https://1.0.0.1/dns-query"}},
+			{"id": "google", "name": "Google", "servers": []string{"https://8.8.8.8/dns-query", "https://8.8.4.4/dns-query"}},
+			{"id": "quad9", "name": "Quad9", "servers": []string{"https://9.9.9.9/dns-query", "https://149.112.112.112/dns-query"}},
+			{"id": "adguard", "name": "AdGuard", "servers": []string{"https://94.140.14.14/dns-query", "https://94.140.15.15/dns-query"}}}}, true
 	case "/api/components/refilter":
 		return object{"supported": true, "auto": true, "busy": false, "checked_at": now.Add(-3 * time.Hour).Format(time.RFC3339), "updated_at": now.Add(-27 * time.Hour).Format(time.RFC3339),
 			"version": "21.11.2026", "files_changed_at": now.Add(-27 * time.Hour).Format(time.RFC3339)}, true

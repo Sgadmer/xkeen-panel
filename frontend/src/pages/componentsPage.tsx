@@ -5,6 +5,7 @@ import { IconLoader2 } from '@tabler/icons-react'
 import { RefilterBase } from '@/components/blocklistRouting'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
 import { MihomoCore } from '@/components/mihomoCore'
+import { MihomoDns } from '@/components/mihomoDns'
 import { ServiceListsProtection } from '@/components/serviceListsProtection'
 import { SettingChangeDialog, type SettingChange } from '@/components/settingChangeDialog'
 import { api } from '@/lib/api'
@@ -155,7 +156,10 @@ export function ComponentsPage() {
                     <div id='service-lists' className='scroll-mt-4'><ServiceListsProtection /></div>
                     <MihomoCore />
                 </div>
-                <RefilterBase />
+                <div className='flex min-w-0 flex-col gap-5'>
+                    <RefilterBase />
+                    <MihomoDns />
+                </div>
             </div>}
             {state.supported && <div className='grid grid-cols-1 gap-5 xl:grid-cols-2'>
                 <VersionChoice component='xkeen' title='Версия XKeen' disabled={disabled} onPreview={inspect} />
