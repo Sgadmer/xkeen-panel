@@ -25,6 +25,10 @@ type Config struct {
 	MaxEvents       int    `json:"max_events"`
 	MaxDeviceEvents int    `json:"max_device_events"`
 	MaxBytes        int64  `json:"max_bytes"`
+	// The short journal in memory is on unless switched off. Zero records
+	// means the default size for this router.
+	RecentOff    bool `json:"recent_off,omitempty"`
+	RecentEvents int  `json:"recent_events,omitempty"`
 }
 
 type Patch struct {
@@ -34,6 +38,13 @@ type Patch struct {
 	MaxEvents       *int    `json:"max_events,omitempty"`
 	MaxDeviceEvents *int    `json:"max_device_events,omitempty"`
 	MaxBytes        *int64  `json:"max_bytes,omitempty"`
+	RecentOff       *bool   `json:"recent_off,omitempty"`
+	RecentEvents    *int    `json:"recent_events,omitempty"`
+}
+
+// Empty reports a patch that names nothing to change.
+func (p Patch) Empty() bool {
+	return p.Enabled == nil && p.Path == nil && p.StorageID == nil && p.MaxBytes == nil && p.MaxEvents == nil && p.MaxDeviceEvents == nil && p.RecentOff == nil && p.RecentEvents == nil
 }
 
 type Settings struct {
@@ -45,6 +56,13 @@ type Settings struct {
 	StorageLabel         string   `json:"storage_label"`
 	Storages             []Volume `json:"storages"`
 	MemoryAvailableBytes int64    `json:"memory_available_bytes"`
+
+	// The short journal kept in memory.
+	RecentEnabled  bool       `json:"recent_enabled"`
+	RecentEvents   int        `json:"recent_events"`
+	RecentCount    int        `json:"recent_count"`
+	RecentOldestAt *time.Time `json:"recent_oldest_at,omitempty"`
+	RecentMinutes  int        `json:"recent_minutes"`
 }
 
 type DeviceIdentity struct{ IP, MAC, Name string }
@@ -59,6 +77,7 @@ type Manager struct {
 	lastError      string
 	ctx            context.Context
 	store          atomic.Pointer[trafficlog.Store]
+	recent         atomic.Pointer[recentLog]
 	volumes        func() []Volume
 	memory         func() (int64, int64)
 	identities     atomic.Value // immutable map[string]DeviceIdentity
@@ -87,10 +106,14 @@ func New(ctx context.Context, dataDir string) *Manager {
 			m.lastError = "Настройки истории повреждены; запись на диск выключена."
 		} else {
 			m.config = stored
+			if !validRecent(m.config) {
+				m.config.RecentEvents = 0
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		m.lastError = "Не удалось прочитать настройки истории; запись на диск выключена."
 	}
+	m.applyRecent(m.config)
 	return m
 }
 
@@ -98,7 +121,43 @@ func (c Config) limits() trafficlog.Limits {
 	return trafficlog.Limits{Retention: 24 * time.Hour, MaxEvents: c.MaxEvents, MaxDeviceEvents: c.MaxDeviceEvents, MaxBytes: c.MaxBytes}
 }
 
-func (m *Manager) Active() bool { return m != nil && m.store.Load() != nil }
+// recentCapacity is how many records the short journal keeps. A router with
+// little memory gets a smaller default.
+func (m *Manager) recentCapacity(c Config) int {
+	if c.RecentEvents != 0 {
+		return c.RecentEvents
+	}
+	if total, _ := m.memory(); total > 0 && total < 192<<20 {
+		return 1000
+	}
+	return DefaultRecentEvents
+}
+
+func validRecent(c Config) bool {
+	return c.RecentEvents == 0 || c.RecentEvents >= minRecentEvents && c.RecentEvents <= maxRecentEvents
+}
+
+// applyRecent creates, resizes or drops the short journal to match the config.
+// Its records do not survive a change of size.
+func (m *Manager) applyRecent(c Config) {
+	if c.RecentOff || !validRecent(c) {
+		m.recent.Store(nil)
+		return
+	}
+	capacity := m.recentCapacity(c)
+	if current := m.recent.Load(); current != nil && len(current.entries) == capacity {
+		return
+	}
+	m.recent.Store(newRecentLog(capacity, m.session))
+}
+
+// Active tells the log observer whether anyone keeps the records it parses.
+func (m *Manager) Active() bool {
+	return m != nil && (m.store.Load() != nil || m.recent.Load() != nil)
+}
+
+// ArchiveOpen reports whether the day-long journal on the disk is being written.
+func (m *Manager) ArchiveOpen() bool { return m != nil && m.store.Load() != nil }
 
 func (m *Manager) SetDeviceProvider(provider func() []DeviceIdentity) { m.deviceProvider = provider }
 
@@ -126,8 +185,8 @@ func (m *Manager) refreshDevices() {
 // Record is called by the core log observer. It never opens a file, queries
 // SQLite or calls the firmware API. A full writer queue drops metadata only.
 func (m *Manager) Record(entry trafficlog.Entry) {
-	store := m.store.Load()
-	if store == nil {
+	store, recent := m.store.Load(), m.recent.Load()
+	if store == nil && recent == nil {
 		return
 	}
 	if identity, ok := m.identities.Load().(map[string]DeviceIdentity)[entry.Device]; ok {
@@ -160,7 +219,30 @@ func (m *Manager) Record(entry trafficlog.Entry) {
 		entry.ID, entry.At, entry.Count = "repeat-"+m.session+"-"+hash[:24], window.at, window.count
 		m.repeatMu.Unlock()
 	}
-	store.Submit(entry)
+	if recent != nil {
+		recent.add(entry)
+	}
+	if store != nil {
+		store.Submit(entry)
+	}
+}
+
+// QueryRecent reads the short journal kept in memory.
+func (m *Manager) QueryRecent(query trafficlog.Query) (trafficlog.Page, []trafficlog.Device) {
+	recent := m.recent.Load()
+	if recent == nil {
+		return trafficlog.Page{Events: []trafficlog.Entry{}}, []trafficlog.Device{}
+	}
+	return recent.query(query), recent.devices()
+}
+
+// Sites groups the short journal by address.
+func (m *Manager) Sites(query trafficlog.Query) []Site {
+	recent := m.recent.Load()
+	if recent == nil {
+		return []Site{}
+	}
+	return recent.sites(query)
 }
 
 func (m *Manager) Status() Settings {
@@ -179,7 +261,15 @@ func (m *Manager) Status() Settings {
 		base.Error = trafficlog.SupportReason()
 	}
 	volumes := m.volumes()
-	status := Settings{Status: base, Enabled: cfg.Enabled, Supported: trafficlog.Supported(), Path: cfg.Path, StorageID: cfg.StorageID, Storages: volumes, MemoryAvailableBytes: available}
+	status := Settings{Status: base, Enabled: cfg.Enabled, Supported: trafficlog.Supported(), Path: cfg.Path, StorageID: cfg.StorageID, Storages: volumes, MemoryAvailableBytes: available,
+		RecentEvents: m.recentCapacity(cfg), RecentMinutes: int(recentKeep / time.Minute)}
+	if recent := m.recent.Load(); recent != nil {
+		count, capacity, oldest := recent.size()
+		status.RecentEnabled, status.RecentCount, status.RecentEvents = true, count, capacity
+		if !oldest.IsZero() {
+			status.RecentOldestAt = &oldest
+		}
+	}
 	for _, volume := range volumes {
 		if volume.ID == cfg.StorageID {
 			status.StorageLabel = volume.Label
@@ -278,8 +368,17 @@ func (m *Manager) Apply(ctx context.Context, patch Patch) (Settings, error) {
 	if patch.MaxBytes != nil {
 		next.MaxBytes = *patch.MaxBytes
 	}
+	if patch.RecentOff != nil {
+		next.RecentOff = *patch.RecentOff
+	}
+	if patch.RecentEvents != nil {
+		next.RecentEvents = *patch.RecentEvents
+	}
 	if err := next.limits().Validate(); err != nil {
 		return Settings{}, err
+	}
+	if !validRecent(next) {
+		return Settings{}, errRecentSize
 	}
 	if next.Enabled {
 		found := false
@@ -300,7 +399,18 @@ func (m *Manager) Apply(ctx context.Context, patch Patch) (Settings, error) {
 			return Settings{}, err
 		}
 	}
-	if old == next && (!next.Enabled || m.store.Load() != nil) {
+	// A change of the short journal alone leaves the disk journal running.
+	diskOld, diskNext := old, next
+	diskOld.RecentOff, diskOld.RecentEvents = false, 0
+	diskNext.RecentOff, diskNext.RecentEvents = false, 0
+	if diskOld == diskNext && (!next.Enabled || m.store.Load() != nil) {
+		if old != next {
+			if err := m.save(next); err != nil {
+				return Settings{}, err
+			}
+			m.config = next
+			m.applyRecent(next)
+		}
 		return Settings{}, nil
 	}
 	previous := m.store.Swap(nil)
@@ -331,12 +441,15 @@ func (m *Manager) Apply(ctx context.Context, patch Patch) (Settings, error) {
 		return Settings{}, err
 	}
 	m.config, m.lastError = next, ""
+	m.applyRecent(next)
 	if candidate != nil {
 		m.refreshDevices()
 		m.store.Store(candidate)
 	}
 	return Settings{}, nil
 }
+
+var errRecentSize = errors.New("Размер короткого журнала — от 500 до 20 000 записей.")
 
 // ValidatePatch rejects a bad disk or memory limit before the API requests a
 // different core log level. Apply repeats this check before committing.
@@ -362,8 +475,14 @@ func (m *Manager) ValidatePatch(patch Patch) error {
 	if patch.MaxBytes != nil {
 		cfg.MaxBytes = *patch.MaxBytes
 	}
+	if patch.RecentEvents != nil {
+		cfg.RecentEvents = *patch.RecentEvents
+	}
 	if err := cfg.limits().Validate(); err != nil {
 		return err
+	}
+	if !validRecent(cfg) {
+		return errRecentSize
 	}
 	if !cfg.Enabled {
 		return nil

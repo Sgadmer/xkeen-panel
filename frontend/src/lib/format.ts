@@ -61,6 +61,20 @@ export function timeAgo(iso?: string) {
     return `${Math.round(hours / 24)} дн`
 }
 
+// "только что", "5 мин назад": timeAgo with the word that only a duration takes.
+export function agoLabel(iso?: string) {
+    const ago = timeAgo(iso)
+    return ago && ago !== 'только что' ? ago + ' назад' : ago
+}
+
+// Russian plural: plural(4, 'запись', 'записи', 'записей') gives "записи".
+export function plural(n: number, one: string, few: string, many: string) {
+    const tens = Math.abs(n) % 100, units = tens % 10
+    if (tens > 10 && tens < 20) return many
+    if (units === 1) return one
+    return units >= 2 && units <= 4 ? few : many
+}
+
 export type Tone = 'good' | 'warn' | 'bad' | 'idle'
 
 export function statusInfo(s?: Status): { label: string; tone: Tone } {

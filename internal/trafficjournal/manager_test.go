@@ -37,7 +37,7 @@ func managerFixture(t *testing.T) (*Manager, Volume, *atomic.Bool) {
 
 func TestHistoryManagerDisabledAllocatesNoArchive(t *testing.T) {
 	manager, volume, _ := managerFixture(t)
-	if manager.Active() || manager.Status().Enabled {
+	if manager.ArchiveOpen() || manager.Status().Enabled {
 		t.Fatal("advanced history must default off")
 	}
 	manager.Record(trafficlog.Entry{At: time.Now(), Kind: "connection", Device: "192.0.2.10", Host: "example.com"})
@@ -114,14 +114,14 @@ func TestHistoryManagerPersistsSelectionAndStableIdentity(t *testing.T) {
 		t.Fatal("historical routes were rewritten")
 	}
 	wrongID := "missing-device"
-	if _, err := manager.Apply(context.Background(), Patch{StorageID: &wrongID}); err == nil || !manager.Active() {
+	if _, err := manager.Apply(context.Background(), Patch{StorageID: &wrongID}); err == nil || !manager.ArchiveOpen() {
 		t.Fatal("invalid setting interrupted the previous writer")
 	}
 	enabled = false
 	if _, err := manager.Apply(context.Background(), Patch{Enabled: &enabled}); err != nil {
 		t.Fatal(err)
 	}
-	if manager.Active() {
+	if manager.ArchiveOpen() {
 		t.Fatal("disabled journal kept a database open")
 	}
 	reloaded := New(context.Background(), filepath.Dir(manager.configPath))

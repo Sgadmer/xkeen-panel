@@ -276,7 +276,9 @@ export function ServiceRoutesPage() {
                     <span className='grid size-10 shrink-0 place-items-center'>
                         <ServiceLogo id={service.id} className='size-8' />
                     </span>
-                    <h2 id={label} className='font-semibold'>{service.name}</h2>
+                    <h2 id={label} className='min-w-0 flex-1 font-semibold'>{service.name}</h2>
+                    {mihomo && <Link to={'/journal?service=' + encodeURIComponent(service.id)} aria-label={'Журнал сервиса ' + service.name}
+                        className='shrink-0 py-1 text-sm text-tint hover:underline'>Журнал</Link>}
                 </div>
                 <label className='block text-sm text-muted-foreground' htmlFor={'vpn-' + service.id}>Маршрут</label>
                 <ServiceRoutePicker

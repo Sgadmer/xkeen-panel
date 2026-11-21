@@ -82,8 +82,8 @@ export function observeTabGuard(events: GuardNotice[]) {
     if (send) last.guard_notice_at = Date.now()
     localStorage.setItem(baselineKey, JSON.stringify(last))
     if (send) void tabNotice('Запрос остановлен защитой VPN',
-        'Не удалось использовать выбранный VPN. Прямой выход запрещён. Подробности — в диагностике.',
-        '/diagnostics', 'kill_switch').catch(() => {})
+        'Не удалось использовать выбранный VPN. Прямой выход запрещён. Подробности — в журнале.',
+        '/journal?kind=kill_switch', 'kill_switch').catch(() => {})
 }
 
 // Tab-only notifications work on every panel page. This reads a small local

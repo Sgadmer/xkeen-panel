@@ -6,6 +6,8 @@ import {
     IconRouteOff,
     IconDeviceDesktop,
     IconDeviceDesktopFilled,
+    IconDots,
+    IconListSearch,
     IconLayoutGrid,
     IconLayoutGridFilled,
     IconLoader2,
@@ -28,10 +30,14 @@ import { cn } from '@/lib/utils'
 import { useGuardNotifications } from '@/lib/notifications'
 import { refreshSession } from '@/lib/api'
 
-const TABS: { to: string; label: string; icon: Icon; active: Icon }[] = [
+type Tab = { to: string; label: string; icon: Icon; active: Icon }
+
+// Every section, as the sidebar of a wide screen lists them.
+export const SECTIONS: Tab[] = [
     { to: '/', label: 'Главная', icon: IconShield, active: IconShieldFilled },
     { to: '/servers', label: 'Серверы', icon: IconWorld, active: IconWorld },
     { to: '/services', label: 'Сервисы', icon: IconLayoutGrid, active: IconLayoutGridFilled },
+    { to: '/journal', label: 'Журнал', icon: IconListSearch, active: IconListSearch },
     {
         to: '/devices',
         label: 'Устройства',
@@ -58,13 +64,15 @@ const TABS: { to: string; label: string; icon: Icon; active: Icon }[] = [
     },
 ]
 
-function tabIndex(pathname: string) {
-    if (pathname === '/') return 0
-    return TABS.findIndex(t => t.to !== '/' && pathname.startsWith(t.to))
-}
+// A phone has room for five. The rest open from "Ещё".
+const PRIMARY = ['/', '/services', '/servers', '/journal']
+const MORE: Tab = { to: '/more', label: 'Ещё', icon: IconDots, active: IconDots }
+const BAR: Tab[] = [...PRIMARY.map(to => SECTIONS.find(tab => tab.to === to)!), MORE]
+export const MORE_SECTIONS = SECTIONS.filter(tab => !PRIMARY.includes(tab.to))
 
-const shortLabels: Record<string, string> = {
-    '/devices': 'Устр-ва', '/exclusions': 'Искл.', '/diagnostics': 'Диагн.', '/settings': 'Настр.',
+function tabIndex(tabs: Tab[], pathname: string) {
+    if (pathname === '/') return 0
+    return tabs.findIndex(t => t.to !== '/' && pathname.startsWith(t.to))
 }
 
 export function AppShell() {
@@ -80,12 +88,15 @@ export function AppShell() {
     const s = status.data
     const info = statusInfo(s)
     const updated = usePanelUpdated(s?.panel_version)
-    const active = tabIndex(pathname)
+    const active = tabIndex(SECTIONS, pathname)
+    // On a phone a section that lives under "Ещё" lights that button.
+    const direct = tabIndex(BAR, pathname)
+    const barActive = direct >= 0 ? direct : active >= 0 ? BAR.length - 1 : -1
 
     const sidebarRef = useRef<HTMLElement>(null)
     const tabbarRef = useRef<HTMLElement>(null)
     const sidebarPill = useIndicator(sidebarRef, active)
-    const tabbarPill = useIndicator(tabbarRef, active)
+    const tabbarPill = useIndicator(tabbarRef, barActive)
 
     const setup = useSetupState().data
     if (setup && !setup.subscription && !setupPostponed()) {
@@ -154,7 +165,7 @@ export function AppShell() {
                         className='absolute left-0 top-0 rounded-xl bg-white/12'
                         style={sidebarPill}
                     />
-                    {TABS.map((tab, i) => (
+                    {SECTIONS.map((tab, i) => (
                         <SidebarLink
                             key={tab.to}
                             {...tab}
@@ -183,15 +194,15 @@ export function AppShell() {
                     <nav
                         ref={tabbarRef}
                         aria-label='Разделы'
-                        className='relative grid h-16 grid-cols-7 p-1.5'
+                        className='relative grid h-16 grid-cols-5 p-1.5'
                     >
                         <span
                             aria-hidden
                             className='absolute left-0 top-0 rounded-full bg-white/12'
                             style={tabbarPill}
                         />
-                        {TABS.map((tab, i) => {
-                            const current = i === active
+                        {BAR.map((tab, i) => {
+                            const current = i === barActive
                             const TabIcon = current ? tab.active : tab.icon
                             return (
                                 <Link
@@ -201,7 +212,7 @@ export function AppShell() {
                                     aria-label={tab.label}
                                     aria-current={current ? 'page' : undefined}
                                     className={cn(
-                                        'relative flex select-none flex-col items-center justify-center gap-0.5 rounded-full text-[10px] transition-[color,transform] duration-200 active:scale-[0.92] max-[380px]:text-[9px]',
+                                        'relative flex select-none flex-col items-center justify-center gap-0.5 rounded-full text-[11px] transition-[color,transform] duration-200 active:scale-[0.92]',
                                         current
                                             ? 'font-semibold text-tint'
                                             : 'font-medium text-muted-foreground',
@@ -211,8 +222,7 @@ export function AppShell() {
                                         className='size-[22px]'
                                         stroke={current ? 2.2 : 1.8}
                                     />
-                                    <span className='min-[520px]:hidden'>{shortLabels[tab.to] ?? tab.label}</span>
-                                    <span className='max-[519px]:hidden'>{tab.label}</span>
+                                    <span>{tab.label}</span>
                                 </Link>
                             )
                         })}

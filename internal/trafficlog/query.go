@@ -21,7 +21,7 @@ type cursor struct {
 }
 
 func filterHash(q Query) string {
-	raw, _ := json.Marshal([]string{q.Device, q.Service, q.Kind, q.Search})
+	raw, _ := json.Marshal([]string{q.Device, q.Service, q.Kind, q.Search, q.Since.UTC().Format(time.RFC3339Nano), q.Before.UTC().Format(time.RFC3339Nano)})
 	h := sha256.Sum256(raw)
 	return hex.EncodeToString(h[:8])
 }
@@ -81,6 +81,14 @@ func (s *Store) Query(parent context.Context, q Query) (Page, error) {
 	if q.Search != "" {
 		where = append(where, "instr(search,?)>0")
 		args = append(args, q.Search)
+	}
+	if !q.Since.IsZero() {
+		where = append(where, "at>=?")
+		args = append(args, q.Since.UnixNano())
+	}
+	if !q.Before.IsZero() {
+		where = append(where, "at<?")
+		args = append(args, q.Before.UnixNano())
 	}
 	args = append(args, q.Limit+1)
 	rows, err := s.reader.QueryContext(ctx, `SELECT seq,at,payload,count FROM events WHERE `+strings.Join(where, " AND ")+` ORDER BY at DESC,seq DESC LIMIT ?`, args...)

@@ -82,12 +82,36 @@ export function TrafficHistorySettings({ open, onClose }: { open: boolean; onClo
         }
         save.mutate({ enabled: draft.enabled, storage_id: draft.storage_id, path: draft.path.trim(), max_events: maxEvents, max_device_events: perDevice, max_bytes: maxMiB * 1024 ** 2 })
     }
+    const recent = useMutation({
+        mutationFn: (patch: { recent_off?: boolean; recent_events?: number }) => api.put<HistorySettings>(historySettingsPath, patch),
+        onSuccess: next => {
+            client.setQueryData(historySettingsKey, next)
+            void client.invalidateQueries({ queryKey: ['journal'] })
+        },
+    })
+    const recentSizes = [1000, 2000, 5000, 10000, 20000]
     const error = validation || save.error?.message || state.error?.message || (supported ? data?.error : undefined)
-    return <Sheet open={open} onClose={onClose} title='История соединений'>
+    return <Sheet open={open} onClose={onClose} title='Настройки журнала'>
         <form onSubmit={submit} className='flex min-w-0 flex-col gap-5'>
+            <Group title='Недавние соединения' footer={recent.error
+                ? <span role='alert' className='text-destructive'>{recent.error.message}</span>
+                : `Хранятся в памяти роутера, диск не нужен. Закрытое соединение остаётся в журнале до ${data?.recent_minutes ?? 60} минут. После перезапуска панели журнал начинается заново.`}>
+                <Row label='Помнить недавние соединения'
+                    trailing={<Switch label='Помнить недавние соединения' checked={data?.recent_enabled !== false} disabled={!data || recent.isPending}
+                        onChange={on => recent.mutate({ recent_off: !on })} />} />
+                {data?.recent_enabled !== false && <>
+                    <label className='grid gap-1 py-3 text-sm text-muted-foreground'>Сколько записей помнить
+                        <select value={data?.recent_events ?? 5000} disabled={!data || recent.isPending} className={field}
+                            onChange={e => recent.mutate({ recent_events: Number(e.target.value) })}>
+                            {[...new Set([...recentSizes, data?.recent_events ?? 5000])].sort((a, b) => a - b).map(size => <option key={size} value={size}>{counts.format(size)}{size === 5000 ? ' · рекомендуется' : ''}</option>)}
+                        </select>
+                    </label>
+                    <Row label='Сейчас в журнале' detail={counts.format(data?.recent_count ?? 0)} />
+                </>}
+            </Group>
             {!supported && <p role='alert' className='px-3 text-sm text-warning'>{safeNotice(data?.error || '', 'Суточная история недоступна на этой модели роутера. Текущие соединения и события защиты доступны без записи на диск.')}</p>}
-            <Group footer='По умолчанию запись на диск выключена. Активные соединения и события защиты доступны без неё. Изменения применятся после сохранения.'>
-                <Row label='Сохранять историю на диск' hint='Записи сохраняются независимо от открытых вкладок панели.'
+            <Group title='Журнал за сутки' footer='Нужен внешний диск. Изменения применятся после сохранения.'>
+                <Row label='Сохранять журнал на диск' hint='Записи за последние 24 часа, переживают перезапуск.'
                     trailing={<Switch label='Сохранять историю на диск' checked={draft.enabled} disabled={!data || save.isPending || !supported && !draft.enabled} onChange={enabled => change({ enabled })} />} />
             </Group>
             <Group title='Внешний диск' footer='Выберите накопитель и папку до включения записи. При смене папки откроется отдельная история; прежние файлы сохранятся на старом месте.'>

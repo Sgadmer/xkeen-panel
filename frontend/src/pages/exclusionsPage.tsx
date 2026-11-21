@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { IconLoader2, IconPencil, IconPlus, IconRouteOff, IconShieldExclamation, IconTrash } from '@tabler/icons-react'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
@@ -40,7 +41,9 @@ const inputClass =
 export function ExclusionsPage() {
     const mihomo = useStatus().data?.core === 'mihomo'
     const qc = useQueryClient()
-    const [value, setValue] = useState('')
+    // The journal sends an address here with ?add=.
+    const [params] = useSearchParams()
+    const [value, setValue] = useState(() => params.get('add') ?? '')
     const [comment, setComment] = useState('')
     const [notice, setNotice] = useState('')
     const [removed, setRemoved] = useState<ExclusionEntry | null>(null)

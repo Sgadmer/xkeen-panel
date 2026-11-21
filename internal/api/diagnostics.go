@@ -180,11 +180,20 @@ func (d *diagnosticsHandler) serve(w http.ResponseWriter, r *http.Request) {
 		Error    string                           `json:"connections_error,omitempty"`
 		Guard    *cardcontroller.GuardObservation `json:"guard,omitempty"`
 	}{Flows: []cardcontroller.Connection{}, Services: xkeen.ServiceNames()}
+	// Each page asks only for its half: the load charts need no connection
+	// list, and the journal needs no chart history.
+	wantLoad, wantFlows := r.URL.Query().Get("load") != "0", r.URL.Query().Get("connections") != "0"
 	d.mu.Lock()
-	result.History = append([]routerLoad(nil), d.history...)
+	if wantLoad {
+		result.History = append([]routerLoad(nil), d.history...)
+	}
+	if n := len(d.history); n > 0 {
+		result.Load = d.history[n-1]
+	}
 	d.mu.Unlock()
-	if len(result.History) > 0 {
-		result.Load = result.History[len(result.History)-1]
+	if !wantFlows {
+		writeJSON(w, http.StatusOK, result)
+		return
 	}
 	if d.cards == nil {
 		result.Error = "Для просмотра соединений нужен контроллер Mihomo."

@@ -11,7 +11,7 @@ import { RouterActivity } from '@/components/routerActivity'
 import { ProtectionWarning } from '@/components/protectionWarning'
 import { useLogs, usePool, useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
-import { isSet, timeAgo } from '@/lib/format'
+import { agoLabel, isSet } from '@/lib/format'
 import type { PoolSyncResult, SelfTestResult, Status } from '@/types'
 
 type Verdict = 'ok' | 'bad' | 'unknown'
@@ -113,7 +113,7 @@ export function DiagnosticsPage() {
                 title='Диагностика'
                 subtitle={
                     checked
-                        ? `Последняя проверка ${timeAgo(s?.last_check)} назад`
+                        ? `Последняя проверка ${agoLabel(s?.last_check)}`
                         : undefined
                 }
             />

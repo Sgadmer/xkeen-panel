@@ -47,6 +47,8 @@
 }
 
 .dark {
+    /* Scroll bars and other parts the browser draws itself follow the theme. */
+    color-scheme: dark;
     --background: #07061a;
     --foreground: #ffffff;
     --card: #16152b;

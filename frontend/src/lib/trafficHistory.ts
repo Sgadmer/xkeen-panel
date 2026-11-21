@@ -56,6 +56,12 @@ export type HistorySettings = {
     error?: string
     storages?: HistoryStorage[]
     memory_available_bytes?: number
+    // The short journal the router keeps in memory.
+    recent_enabled?: boolean
+    recent_events?: number
+    recent_count?: number
+    recent_minutes?: number
+    recent_oldest_at?: string
 }
 
 export type HistoryPage = {

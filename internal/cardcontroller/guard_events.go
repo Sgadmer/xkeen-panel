@@ -51,6 +51,11 @@ type guardJournal struct {
 	events            []GuardEvent
 	session           string
 	next              uint64
+
+	// The log level of the profile as last read, with the file it was read from.
+	levelSize     int64
+	levelTime     time.Time
+	levelComplete bool
 }
 
 func (g *guardJournal) trim(now time.Time) {
@@ -85,9 +90,33 @@ func (g *guardJournal) add(event GuardEvent) {
 	}
 }
 
-func (c *Controller) GuardEvents() GuardObservation {
+// logsComplete reports whether the core writes a line for every connection.
+// Pages ask this every few seconds; the profile is parsed again only after the
+// file on disk has changed.
+func (c *Controller) logsComplete() bool {
+	info, err := os.Stat(c.path)
+	if err != nil {
+		return false
+	}
+	c.guard.Lock()
+	if c.guard.levelSize == info.Size() && c.guard.levelTime.Equal(info.ModTime()) {
+		complete := c.guard.levelComplete
+		c.guard.Unlock()
+		return complete
+	}
+	c.guard.Unlock()
 	p, err := c.read()
 	complete := err == nil && (str(p.doc["log-level"]) == "info" || str(p.doc["log-level"]) == "debug")
+	if err == nil {
+		c.guard.Lock()
+		c.guard.levelSize, c.guard.levelTime, c.guard.levelComplete = info.Size(), info.ModTime(), complete
+		c.guard.Unlock()
+	}
+	return complete
+}
+
+func (c *Controller) GuardEvents() GuardObservation {
+	complete := c.logsComplete()
 	c.guard.Lock()
 	defer c.guard.Unlock()
 	c.guard.trim(time.Now())

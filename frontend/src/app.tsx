@@ -8,6 +8,8 @@ import { ServersPage } from '@/pages/serversPage'
 import { ServiceRoutesPage } from '@/pages/serviceRoutesPage'
 import { DevicesPage } from '@/pages/devicesPage'
 import { ExclusionsPage } from '@/pages/exclusionsPage'
+import { JournalPage } from '@/pages/journalPage'
+import { MorePage } from '@/pages/morePage'
 import { SettingsPage } from '@/pages/settingsPage'
 import { NotificationsPage } from '@/pages/notificationsPage'
 import { UpdatePage } from '@/pages/updatePage'
@@ -71,6 +73,8 @@ export function App() {
                             <Route path='services' element={<ServiceRoutesPage />} />
                             <Route path='devices' element={<DevicesPage />} />
                             <Route path='exclusions' element={<ExclusionsPage />} />
+                            <Route path='journal' element={<JournalPage />} />
+                            <Route path='more' element={<MorePage />} />
                             <Route path='settings' element={<SettingsPage />} />
                             <Route path='settings/notifications' element={<NotificationsPage />} />
                             <Route path='settings/access' element={<AccessPage />} />

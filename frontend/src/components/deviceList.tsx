@@ -111,8 +111,8 @@ export function DeviceGroups({
                     {route}
                     {showConnections && d.mac && <>{' · '}
                         <Link className='inline-block py-1 text-tint hover:underline'
-                            to={'/diagnostics?device=' + encodeURIComponent('mac:' + d.mac.toLowerCase()) + (d.active ? '' : '&view=history')}
-                            aria-label={(d.active ? 'Соединения устройства ' : 'История устройства ') + d.name}>{d.active ? 'Соединения' : 'История'}</Link>
+                            to={'/journal?device=' + encodeURIComponent('mac:' + d.mac.toLowerCase())}
+                            aria-label={'Журнал устройства ' + d.name}>Журнал</Link>
                     </>}
                 </>}
                 trailing={

@@ -95,6 +95,9 @@ type Query struct {
 	Search  string
 	Cursor  string
 	Limit   int
+	// Optional time bounds: records at or after Since, and before Before.
+	Since  time.Time
+	Before time.Time
 }
 
 type Device struct {

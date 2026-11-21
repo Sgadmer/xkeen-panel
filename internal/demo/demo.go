@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"image/png"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,6 +84,16 @@ func Handler(frontend fs.FS) http.Handler {
 				data = object{"releases": []object{{"tag_name": "v26.3.27", "name": "Пример стабильного релиза", "prerelease": false}}}
 			case "/api/routing-mode":
 				data = object{"policy": object{"mode": "selected", "services": []string{"youtube", "telegram"}, "addresses": []string{}}, "services": []object{{"id": "youtube", "name": "YouTube", "domains": []string{"domain:youtube.com"}}, {"id": "telegram", "name": "Telegram", "domains": []string{"domain:telegram.org"}}, {"id": "discord", "name": "Discord", "domains": []string{"domain:discord.com"}}}, "core": "xray", "profile_active": false}
+			case "/api/diagnostics":
+				data = demoDiagnostics()
+			case "/api/traffic-history/settings":
+				data = demoJournalSettings()
+			case "/api/traffic-history":
+				data = object{"events": demoJournal(r.URL.Query().Get("device"), r.URL.Query().Get("service"), r.URL.Query().Get("kind"), r.URL.Query().Get("q")), "has_more": false, "status": demoJournalSettings(), "devices": []object{}}
+			case "/api/traffic-history/sites":
+				data = object{"sites": demoSites(), "status": demoJournalSettings()}
+			case "/api/journal/presets":
+				data = object{"presets": []object{{"id": "ai-pc", "name": "AI на компьютере", "source": "recent", "view": "sites", "device": "mac:02:00:00:00:00:01", "service": "claude"}, {"id": "blocks", "name": "Блокировки", "source": "recent", "view": "list", "kind": "kill_switch"}}}
 			default:
 				data = object{}
 			}
@@ -108,6 +120,11 @@ func Handler(frontend fs.FS) http.Handler {
 			w.Header().Set("Content-Type", "application/javascript")
 		} else if strings.HasSuffix(path, ".css") {
 			w.Header().Set("Content-Type", "text/css")
+		} else if kind := mime.TypeByExtension(filepath.Ext(path)); kind != "" {
+			// Logos are SVG: sniffing the bytes would call them plain XML.
+			w.Header().Set("Content-Type", kind)
+		} else if strings.HasSuffix(path, ".svg") {
+			w.Header().Set("Content-Type", "image/svg+xml")
 		}
 		w.Write(body)
 	})
