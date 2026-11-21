@@ -119,7 +119,13 @@ func (u *Updater) fetchLatest(ctx context.Context) (Release, error) {
 	if payload.Prerelease || version.isPrerelease() {
 		return u.fetchPublished(ctx, false)
 	}
-	return u.releaseView(payload), nil
+	release := u.releaseView(payload)
+	// The newest stable release may still be waiting for its files or for the
+	// maintainer's signature. Until then the newest complete one is offered.
+	if release.assetURL == "" || release.sumsURL == "" || release.sigURL == "" {
+		return u.fetchPublished(ctx, false)
+	}
+	return release, nil
 }
 
 func (u *Updater) fetchPublished(ctx context.Context, includePreview bool) (Release, error) {

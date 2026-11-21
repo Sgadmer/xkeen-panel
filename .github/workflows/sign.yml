@@ -1,0 +1,52 @@
+# Copies a release signature from the repository into its release.
+#
+# The signature is made on the maintainer's computer and pushed to main as
+# docs/releases/signatures/<tag>.sig. Nothing secret is stored here: the job
+# only checks the signature against the SHA256SUMS of that release with the
+# keys of this commit and, when it holds, attaches it as SHA256SUMS.sig.
+# A signature that does not hold is not attached. See docs/release-signing.md.
+name: Attach release signature
+on:
+  push:
+    branches: [main]
+    paths: ['docs/releases/signatures/*.sig']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  attach:
+    if: github.repository == 'Sgadmer/xkeen-panel'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+      - name: Check and attach signatures
+        run: |
+          set -euo pipefail
+          for file in docs/releases/signatures/*.sig; do
+            [ -e "$file" ] || continue
+            tag=$(basename "$file" .sig)
+            if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::warning::$file is not named after a release tag"
+              continue
+            fi
+            work=$(mktemp -d)
+            if ! gh release download "$tag" --pattern SHA256SUMS --dir "$work"; then
+              echo "::warning::release $tag has no SHA256SUMS yet"
+              continue
+            fi
+            if gh release download "$tag" --pattern SHA256SUMS.sig --dir "$work/attached" 2>/dev/null \
+              && cmp -s "$work/attached/SHA256SUMS.sig" "$file"; then
+              echo "$tag: the signature is already attached"
+              continue
+            fi
+            cp "$file" "$work/SHA256SUMS.sig"
+            go run ./cmd/release-sign verify -tag "$tag" -sums "$work/SHA256SUMS" -sig "$work/SHA256SUMS.sig"
+            gh release upload "$tag" "$work/SHA256SUMS.sig" --clobber
+            echo "$tag: signature attached"
+          done

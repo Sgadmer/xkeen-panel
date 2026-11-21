@@ -55,16 +55,19 @@ func (f fakeRelease) serve(t *testing.T) *httptest.Server {
 
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assets := fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`, testAsset, srv.URL+"/dl/"+testAsset)
+		if f.sums != "-" {
+			assets += fmt.Sprintf(`,{"name":"SHA256SUMS","browser_download_url":%q}`, srv.URL+"/dl/SHA256SUMS")
+		}
+		if f.sig != "-" {
+			assets += fmt.Sprintf(`,{"name":%q,"browser_download_url":%q}`, releasesig.Asset, srv.URL+"/dl/"+releasesig.Asset)
+		}
+		release := fmt.Sprintf(`{"tag_name":%q,"body":"notes","html_url":"https://example/rel","assets":[%s]}`, f.tag, assets)
 		switch r.URL.Path {
 		case "/repos/owner/repo/releases/latest":
-			assets := fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`, testAsset, srv.URL+"/dl/"+testAsset)
-			if f.sums != "-" {
-				assets += fmt.Sprintf(`,{"name":"SHA256SUMS","browser_download_url":%q}`, srv.URL+"/dl/SHA256SUMS")
-			}
-			if f.sig != "-" {
-				assets += fmt.Sprintf(`,{"name":%q,"browser_download_url":%q}`, releasesig.Asset, srv.URL+"/dl/"+releasesig.Asset)
-			}
-			fmt.Fprintf(w, `{"tag_name":%q,"body":"notes","html_url":"https://example/rel","assets":[%s]}`, f.tag, assets)
+			fmt.Fprint(w, release)
+		case "/repos/owner/repo/releases":
+			fmt.Fprint(w, "["+release+"]")
 		case "/dl/" + testAsset:
 			w.Write(f.binary())
 		case "/dl/SHA256SUMS":
@@ -87,7 +90,23 @@ type harness struct {
 	u        *Updater
 	bin      string
 	dataDir  string
+	url      string
 	restarts atomic.Int32
+}
+
+// force puts a release in front of the updater as if a check had accepted it:
+// what the installation itself refuses must not depend on the check.
+func (h *harness) force(rel fakeRelease) {
+	release := Release{Tag: rel.tag, assetURL: h.url + "/dl/" + testAsset}
+	if rel.sums != "-" {
+		release.sumsURL = h.url + "/dl/SHA256SUMS"
+	}
+	if rel.sig != "-" {
+		release.sigURL = h.url + "/dl/" + releasesig.Asset
+	}
+	h.u.mu.Lock()
+	h.u.latest = &release
+	h.u.mu.Unlock()
 }
 
 func newHarness(t *testing.T, current string, rel fakeRelease) *harness {
@@ -100,6 +119,7 @@ func newHarness(t *testing.T, current string, rel fakeRelease) *harness {
 	}
 
 	srv := rel.serve(t)
+	h.url = srv.URL
 	h.u = New(Options{
 		Current:  current,
 		BinPath:  h.bin,
@@ -275,13 +295,36 @@ func TestApplyRejectsBadChecksum(t *testing.T) {
 }
 
 func TestApplyRefusesReleaseWithoutSums(t *testing.T) {
-	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.1", sums: "-"})
+	rel := fakeRelease{tag: "v1.3.1", sums: "-"}
+	h := newHarness(t, "v1.3.0", rel)
 	h.u.Check(context.Background())
+	h.force(rel)
 
 	h.u.Apply()
 	waitFor(t, "failure", func() bool { return h.u.State().ApplyError != "" })
 
 	assertUntouched(t, h)
+}
+
+// A stable release is published by CI first and signed afterwards. Until its
+// checksums and signature are in place it is not offered at all.
+func TestIncompleteStableReleaseIsNotOffered(t *testing.T) {
+	for name, rel := range map[string]fakeRelease{
+		"no signature": {tag: "v1.3.1", sig: "-"},
+		"no checksums": {tag: "v1.3.1", sums: "-"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, "v1.3.0", rel)
+			state, err := h.u.Check(context.Background())
+			if err != nil || state.Available || state.Latest != nil {
+				t.Fatalf("state = %+v, err = %v; want nothing offered", state, err)
+			}
+			if err := h.u.Apply(); err == nil {
+				t.Error("an incomplete release was accepted for installation")
+			}
+			assertUntouched(t, h)
+		})
+	}
 }
 
 // Whoever controls the repository can publish a binary together with matching
@@ -299,6 +342,7 @@ func TestApplyRefusesReleaseNotSignedByAReleaseKey(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, "v1.3.0", rel)
 			h.u.Check(context.Background())
+			h.force(rel)
 
 			h.u.Apply()
 			waitFor(t, "failure", func() bool { return h.u.State().ApplyError != "" })

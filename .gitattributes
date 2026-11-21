@@ -1,4 +1,7 @@
-* text=auto
+# Text is checked out with LF everywhere: files embedded in the binary must be
+# the same bytes on Windows as in CI, or a local build cannot confirm a release.
+* text=auto eol=lf
+*.sig text eol=lf
 *.sh text eol=lf
 installer/S01xkeen-panel-guard text eol=lf
 installer/S98xkeen-service-cards text eol=lf
