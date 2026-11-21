@@ -17,7 +17,7 @@ func demoJournalSettings() object {
 func demoJournal(device, service, kind, search string) []object {
 	now := time.Now().UTC()
 	at := func(seconds int) string { return now.Add(-time.Duration(seconds) * time.Second).Format(time.RFC3339) }
-	vpn := object{"kind": "server", "name": "Нидерланды · основной", "country": "NL", "source": "Пример подписки"}
+	vpn := object{"kind": "server", "name": "Амстердам", "country": "NL", "source": "Северный ветер"}
 	pc, phone := object{"id": "mac:02:00:00:00:00:01", "ip": "192.0.2.10", "name": "Мой компьютер"}, object{"id": "mac:02:00:00:00:00:02", "ip": "192.0.2.11", "name": "iPhone"}
 	row := func(id string, owner object, ago int, host, serviceID, recordKind string, exit object, route ...string) object {
 		return object{"id": id, "at": at(ago), "kind": recordKind, "device_id": owner["id"], "device": owner["ip"], "device_name": owner["name"],
@@ -47,8 +47,8 @@ func demoJournal(device, service, kind, search string) []object {
 func demoSites() []object {
 	now := time.Now().UTC().Format(time.RFC3339)
 	return []object{
-		{"host": "claude.ai", "service_id": "claude", "count": 42, "vpn": 42, "direct": 0, "blocked": 0, "errors": 0, "last_at": now, "exit": "Нидерланды · основной", "devices": 1},
-		{"host": "www.youtube.com", "service_id": "youtube", "count": 17, "vpn": 17, "direct": 0, "blocked": 0, "errors": 0, "last_at": now, "exit": "Нидерланды · основной", "devices": 2},
+		{"host": "claude.ai", "service_id": "claude", "count": 42, "vpn": 42, "direct": 0, "blocked": 0, "errors": 0, "last_at": now, "exit": "Амстердам", "devices": 1},
+		{"host": "www.youtube.com", "service_id": "youtube", "count": 17, "vpn": 17, "direct": 0, "blocked": 0, "errors": 0, "last_at": now, "exit": "Амстердам", "devices": 2},
 		{"host": "bank.example.com", "count": 6, "vpn": 0, "direct": 6, "blocked": 0, "errors": 0, "last_at": now, "devices": 1},
 		{"host": "api.telegram.org", "service_id": "telegram", "count": 3, "vpn": 0, "direct": 0, "blocked": 3, "errors": 0, "last_at": now, "devices": 1},
 	}
@@ -63,7 +63,7 @@ func demoDiagnostics() object {
 	flow := func(id, device, host, service string, exit object, route ...string) object {
 		return object{"id": id, "device": device, "host": host, "port": "443", "network": "TCP", "service_id": service, "route": route, "exit": exit, "start": now.Add(-20 * time.Second).UTC().Format(time.RFC3339)}
 	}
-	vpn := object{"kind": "server", "name": "Нидерланды · основной", "country": "NL", "source": "Пример подписки"}
+	vpn := object{"kind": "server", "name": "Амстердам", "country": "NL", "source": "Северный ветер"}
 	return object{"system": history[len(history)-1], "history": history, "services": demoServices,
 		"connections": []object{flow("c1", "192.0.2.10", "claude.ai", "claude", vpn, "Claude / Anthropic"), flow("c2", "192.0.2.11", "www.youtube.com", "youtube", vpn, "YouTube"), flow("c3", "192.0.2.10", "bank.example.com", "", object{"kind": "direct"}, "Напрямую")},
 		"guard":       object{"running": true, "complete": true, "events": []object{}}}
