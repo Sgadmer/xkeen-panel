@@ -26,10 +26,10 @@ export interface RouteGroup {
 
 const poolGroups = {
     all: { title: 'Автовыбор', order: 0 },
-    country: { title: 'Пулы', order: 1 },
+    country: { title: 'Пулы стран', order: 1 },
     source: { title: 'Пулы подписок', order: 2 },
     custom: { title: 'Мультипулы', order: 3 },
-    pool: { title: 'Другие пулы', order: 4 },
+    pool: { title: 'Пулы', order: 4 },
 }
 
 const collator = new Intl.Collator('ru', { numeric: true })
@@ -62,7 +62,7 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             const sources = [...new Set(target.sources?.filter(s => s.trim()))].sort(collator.compare)
             key = 'providers:' + JSON.stringify(sources)
             title = sources.length > 1 ? 'Общие · ' + sources.join(' + ') : sources[0] || 'Без провайдера'
-            order = sources.length > 1 ? 5 : sources.length ? 4 : 6
+            order = sources.length > 1 ? 6 : sources.length ? 5 : 7
             if (target.kind === 'profile') detail = 'Режим провайдера'
             if (target.kind === 'server' && target.country && avoided.includes(target.country)) detail = 'Только вручную'
         }

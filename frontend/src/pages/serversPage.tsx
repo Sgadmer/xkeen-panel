@@ -475,7 +475,7 @@ export function ServersPage() {
                                     {sourceScopes.length > 0 && <optgroup label='Пулы подписок'>
                                         {sourceScopes.map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)} · {item.member_count || 'нет подходящих серверов'}</option>)}
                                     </optgroup>}
-                                    {availableCountries.length > 0 && <optgroup label='Пулы'>{availableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
+                                    {availableCountries.length > 0 && <optgroup label='Пулы стран'>{availableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
                                     {unavailableCountries.length > 0 && <optgroup label='Недоступные страны'>{unavailableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
                                 </select>
                               </div>

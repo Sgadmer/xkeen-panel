@@ -97,11 +97,15 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                             {allowInherited && <RouteChoice label={inheritedLabel} detail='Роутер проверит адрес и применит к нему обычные правила.' current={value === ''} disabled={disabled} onClick={() => choose('')} />}
                             {allowDirect && <RouteChoice label='Напрямую' detail='Открывать этот сервис без VPN.' current={value === 'direct'} disabled={disabled} onClick={() => choose('direct')} />}
                         </div>}
-                        {groups.filter(group => group.key !== 'all').map((group, index) => {
+                        {/* Pools in one block, the servers of each subscription in another. */}
+                        {[false, true].map(providers => {
+                          const block = groups.filter(group => group.key !== 'all' && group.key.startsWith('providers:') === providers)
+                          return block.length > 0 && <div key={String(providers)} className='divide-y overflow-clip rounded-2xl border bg-card'>
+                          {block.map(group => {
                             const active = expanded === group.key
-                            const contentId = id + '-options-' + index
+                            const contentId = id + '-options-' + groups.indexOf(group)
                             return (
-                                <section key={group.key} className='overflow-clip rounded-2xl border bg-card'>
+                                <section key={group.key}>
                                     <h3 className='sticky top-0 z-10 bg-card'>
                                         <button type='button' aria-expanded={active} aria-controls={active ? contentId : undefined}
                                             className={cn('flex min-h-12 w-full cursor-pointer items-center gap-3 bg-muted/60 px-4 py-2.5 text-start hover:bg-muted', focusRing)}
@@ -109,7 +113,8 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                                             <span className='min-w-0 flex-1'>
                                                 <span className='block whitespace-pre-wrap font-semibold [overflow-wrap:anywhere]'>{group.title}</span>
                                                 {group.key === 'country' && <span className='block text-[13px] text-muted-foreground'>Выберите страну. Роутер сам подберёт в ней VPN-сервер.</span>}
-                                                {group.key === 'custom' && <span className='block text-[13px] text-muted-foreground'>Выберите свой список VPN-серверов для этого сервиса.</span>}
+                                                {group.key === 'source' && <span className='block text-[13px] text-muted-foreground'>Выберите подписку. Роутер сам подберёт самый быстрый из её VPN-серверов.</span>}
+                                                {group.key === 'custom' &&<span className='block text-[13px] text-muted-foreground'>Выберите свой список VPN-серверов для этого сервиса.</span>}
                                                 {selectedGroup === group && <span className='block whitespace-pre-wrap text-[13px] text-primary [overflow-wrap:anywhere] dark:text-tint'>{selected?.label}</span>}
                                             </span>
                                             <span aria-hidden className='text-sm tabular-nums text-muted-foreground'>{group.targets.length}</span>
@@ -122,6 +127,8 @@ export function ServiceRoutePicker({ id, serviceName, groups, value, inheritedLa
                                     </div>}
                                 </section>
                             )
+                          })}
+                          </div>
                         })}
                         {!groups.length && <p className='p-2 text-sm text-muted-foreground'>Доступных VPN-маршрутов нет.</p>}
                       </div>

@@ -104,7 +104,10 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 		return object{"policy_found": true, "policy": object{"name": "xkeen", "description": "Устройства VPN"}, "new_devices_vpn": true, "devices": demoDeviceRows()}, true
 	case "/api/service-routes":
 		return object{"active": true, "guard_ready": true, "controller_ready": true, "scope": "mihomo", "default_service_target": "pool-all", "service_auto_default": true,
-			"targets": []object{{"id": "pool-all", "name": "Все локации", "kind": "pool"}, {"id": "srv-nl", "name": "Амстердам", "kind": "server", "country": "NL", "sources": []string{"Северный ветер"}},
+			"targets": []object{{"id": "pool-all", "name": "Все локации", "kind": "pool"}, {"id": "country-NL", "name": "Нидерланды", "kind": "pool", "country": "NL"},
+				{"id": "country-DE", "name": "Германия", "kind": "pool", "country": "DE"}, {"id": "source-north", "name": "Северный ветер", "kind": "pool"},
+				{"id": "source-south", "name": "Южный мост", "kind": "pool"}, {"id": "pool-video", "name": "Видео", "kind": "pool"},
+				{"id": "srv-pl", "name": "Варшава", "kind": "server", "country": "PL", "sources": []string{"Южный мост"}}, {"id": "srv-nl", "name": "Амстердам", "kind": "server", "country": "NL", "sources": []string{"Северный ветер"}},
 				{"id": "srv-de", "name": "Франкфурт", "kind": "server", "country": "DE", "sources": []string{"Северный ветер"}}, {"id": "srv-us", "name": "Нью-Йорк", "kind": "server", "country": "US", "sources": []string{"Северный ветер"}}},
 			"services": []object{
 				card("claude", "Claude / Anthropic", "srv-nl", server, "domain:claude.ai", "domain:anthropic.com"),
