@@ -26,8 +26,8 @@ func (c *Controller) SetAIGroup(ctx context.Context, target string) (View, error
 	// A required-target metadata transaction also refuses to discard an
 	// unrelated working route if its worker cannot be prepared during reload.
 	return c.apply(ctx, "", target, func(p *profile) error {
-		if countryPoolCodes[target] != "" && len(p.pool(target).members(c.poolNodes(c.catalog()))) == 0 {
-			return errors.New("в выбранном пуле страны нет доступных серверов")
+		if (countryPoolCodes[target] != "" || p.sourcePool(target) != "") && len(p.pool(target).members(c.poolNodes(c.catalog()))) == 0 {
+			return errors.New("в выбранном пуле нет доступных серверов")
 		}
 		if _, managed := p.doc[stateKey]; !managed {
 			p.doc[serviceAutoKey] = true

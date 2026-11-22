@@ -26,10 +26,10 @@ export interface RouteGroup {
 
 const poolGroups = {
     all: { title: 'Автовыбор', order: 0 },
-    country: { title: 'Пулы стран', order: 1 },
-    custom: { title: 'Мультипулы', order: 2 },
+    country: { title: 'Пулы', order: 1 },
     source: { title: 'Пулы подписок', order: 2 },
-    pool: { title: 'Пулы', order: 3 },
+    custom: { title: 'Мультипулы', order: 3 },
+    pool: { title: 'Другие пулы', order: 4 },
 }
 
 const collator = new Intl.Collator('ru', { numeric: true })
@@ -52,8 +52,9 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             order = poolGroups[kind].order
             if (scope) {
                 label = scopeLabel(scope)
-                disabled = kind === 'country' && scope.member_count === 0
-                detail = disabled ? unavailableCountryReason(scope, avoided) : 'Серверов: ' + scope.member_count
+                disabled = (kind === 'country' || kind === 'source') && scope.member_count === 0
+                detail = !disabled ? 'Серверов: ' + scope.member_count
+                    : kind === 'country' ? unavailableCountryReason(scope, avoided) : 'нет подходящих серверов'
             } else if (target.country) {
                 label = countryLabel(target.country)
             }

@@ -168,6 +168,17 @@ func TestSubscriptionPoolsTakeOnlyTheirSubscription(t *testing.T) {
 	if found != 2 {
 		t.Fatalf("wanted a scope per subscription, got %d", found)
 	}
+	// A service on a subscription pool keeps the pool's subscription on record.
+	p.assigned["youtube"], p.assigned["github"] = id, allPoolID
+	p.rememberSourcePools()
+	if kept := object(p.doc[sourcePoolsKey]); len(kept) != 1 || kept[id] != "A" {
+		t.Fatalf("remembered pools: %v", kept)
+	}
+	delete(p.assigned, "youtube")
+	p.rememberSourcePools()
+	if _, present := p.doc[sourcePoolsKey]; present {
+		t.Fatal("record kept for an unused subscription pool")
+	}
 	if route, ok := c.portableRoute(p, id, servers); !ok || route.Kind != "source" || route.Name != "Alpha" {
 		t.Fatalf("portable route: %+v", route)
 	}

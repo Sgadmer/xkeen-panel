@@ -36,9 +36,25 @@ var countryPoolCodes = func() map[string]string {
 	return result
 }()
 
-// The chosen subscription pool remembers its subscription here, so the pool
-// stays known while the catalogue does not list that subscription.
-const autoScopeSourceKey = "x-xkeen-panel-auto-scope-source"
+// Every subscription pool in use remembers its subscription here (pool id to
+// subscription id), so the pool stays known while the catalogue does not list
+// that subscription.
+const sourcePoolsKey = "x-xkeen-panel-source-pools"
+
+// rememberSourcePools records the subscription pools the routes point at now.
+func (p *profile) rememberSourcePools() {
+	kept := map[string]interface{}{}
+	for _, target := range p.assigned {
+		if source := p.sourcePool(target); source != "" {
+			kept[target] = source
+		}
+	}
+	if len(kept) == 0 {
+		delete(p.doc, sourcePoolsKey)
+	} else {
+		p.doc[sourcePoolsKey] = kept
+	}
+}
 
 func sourcePool(source, name string) MultiPool {
 	if name == "" {
@@ -75,12 +91,30 @@ func (c *Controller) CheckSourcePoolUnused(source string) error {
 		return err
 	}
 	id := scopeHash("source:" + source)
-	for _, target := range p.assigned {
-		if target == id {
-			return errors.New("пул этой подписки выбран для автовыбора. Сначала выберите другой пул на вкладке «Автовыбор»")
+	var users []string
+	for service, target := range p.assigned {
+		if target != id {
+			continue
 		}
+		name := groupNames[service]
+		if service == defaultID {
+			name = "основной маршрут"
+		}
+		for _, custom := range xkeen.CustomServices() {
+			if custom.ID == service {
+				name = custom.Name
+			}
+		}
+		if name == "" {
+			name = service
+		}
+		users = append(users, name)
 	}
-	return nil
+	if len(users) == 0 {
+		return nil
+	}
+	sort.Strings(users)
+	return errors.New("пул этой подписки выбран: " + strings.Join(users, ", ") + ". Сначала выберите для них другой маршрут")
 }
 
 // sourcePool returns the subscription behind a built-in subscription pool.
@@ -280,11 +314,6 @@ func (c *Controller) setScope(ctx context.Context, id string) error {
 	}
 	result, err := c.apply(ctx, defaultID, id, func(next *profile) error {
 		next.doc[autoScopeKey] = id
-		if source := next.sourcePool(id); source != "" {
-			next.doc[autoScopeSourceKey] = source
-		} else {
-			delete(next.doc, autoScopeSourceKey)
-		}
 		delete(next.doc, defaultSourceKey)
 		delete(next.doc, replacementKey)
 		return nil

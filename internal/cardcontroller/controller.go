@@ -230,11 +230,11 @@ func (c *Controller) read() (profile, error) {
 	if c.catalog != nil {
 		p.sourcePools = sourcePools(c.catalog())
 	}
-	// Keep the identity of the chosen subscription pool while its subscription
+	// Keep the identity of every subscription pool in use while its subscription
 	// is missing from the catalogue: an empty pool blocks, a lost one would be
 	// mistaken for a vanished server.
-	if source := str(p.doc[autoScopeSourceKey]); source != "" {
-		if id := scopeHash("source:" + source); id == str(p.doc[autoScopeKey]) && p.pool(id) == nil {
+	for id, value := range object(p.doc[sourcePoolsKey]) {
+		if source := str(value); source != "" && scopeHash("source:"+source) == id && p.pool(id) == nil {
 			p.sourcePools = append(p.sourcePools, sourcePool(source, ""))
 		}
 	}
@@ -546,6 +546,7 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 			}
 		}
 	}
+	p.rememberSourcePools()
 	servers := c.catalog()
 	catalog := map[string]models.Server{}
 	requiredSource := str(p.doc[defaultSourceKey])
@@ -559,10 +560,10 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 		}
 	}
 	var nodes []poolNode
-	if id != "" && countryPoolCodes[target] != "" {
+	if id != "" && (countryPoolCodes[target] != "" || p.sourcePool(target) != "") {
 		nodes = c.poolNodes(servers)
 		if len(p.pool(target).members(nodes)) == 0 {
-			return View{}, errors.New("в выбранном пуле страны нет доступных серверов")
+			return View{}, errors.New("в выбранном пуле нет доступных серверов")
 		}
 	}
 	if target != "" && target != directTarget {
