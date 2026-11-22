@@ -62,7 +62,8 @@ func TestLockedUpdateEndpointsRejectChangesWithoutIO(t *testing.T) {
 	}{
 		{"check", http.MethodPost, "/api/update/check", "", h.HandleCheck},
 		{"apply", http.MethodPost, "/api/update/apply", "", h.HandleApply},
-		{"rollback", http.MethodPost, "/api/update/rollback", "", h.HandleRollback},
+		{"apply version", http.MethodPost, "/api/update/apply", `{"tag":"v99.0.0"}`, h.HandleApply},
+		{"channel", http.MethodPut, "/api/update/settings", `{"channel":"preview"}`, h.HandleSettings},
 		{"enable auto", http.MethodPut, "/api/update/settings", `{"auto":true}`, h.HandleSettings},
 		{"disable auto", http.MethodPut, "/api/update/settings", `{"auto":false}`, h.HandleSettings},
 	} {

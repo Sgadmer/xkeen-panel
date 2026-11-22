@@ -11,7 +11,7 @@ import {
     IconTerminal2,
 } from '@tabler/icons-react'
 import { DeviceGroups, NewDevicesGroup } from '@/components/deviceList'
-import { Group, Row } from '@/components/ios'
+import { Group, Row, Switch } from '@/components/ios'
 import { Logo } from '@/components/logo'
 import { ServerSourceForm } from '@/components/serverSourceForm'
 import { RoutingModeForm } from '@/pages/routingModePage'
@@ -36,6 +36,10 @@ export type SetupState = {
     new_devices_vpn: boolean
     watchdog: boolean
     complete: boolean
+    // Defaults the last step offers on a first setup only
+    offer_proxy_ports?: boolean
+    offer_auto_update?: boolean
+    proxy_ports?: string[]
 }
 
 type StepId = 'xkeen' | 'subscription' | 'routing' | 'devices' | 'start'
@@ -244,7 +248,7 @@ function XKeenStep({ onRetry }: { onRetry: () => void }) {
                 footer='Потребуются доступ к роутеру в домашней сети и готовая подписка или ссылка сервера. Не отключайте VPN компьютера, пока агент не проверит альтернативный доступ.'
             >
                 <a
-                    href='https://github.com/Sgadmer/xkeen-panel/blob/v3.0.1/docs/installation.md'
+                    href='https://github.com/Sgadmer/xkeen-panel/blob/v3.0.2/docs/installation.md'
                     target='_blank'
                     rel='noopener noreferrer'
                     className='flex min-h-12 items-center py-3 text-[15px] text-tint'
@@ -366,9 +370,15 @@ function StartStep({
     const [waitingSince, setWaitingSince] = useState<number | null>(null)
     const status = useStatus()
     const s = status.data
+    // Both defaults are on; the owner may switch either off before the start.
+    const [sparePorts, setSparePorts] = useState(true)
+    const [autoUpdate, setAutoUpdate] = useState(true)
 
     const finish = useMutation({
-        mutationFn: () => api.post<SetupState>('/api/setup/finish'),
+        mutationFn: () => api.post<SetupState>('/api/setup/finish', {
+            proxy_ports: state.offer_proxy_ports ? sparePorts : undefined,
+            auto_update: state.offer_auto_update ? autoUpdate : undefined,
+        }),
         onSuccess: data => {
             qc.setQueryData(['setup'], data)
             setWaitingSince(Date.now())
@@ -467,6 +477,25 @@ function StartStep({
                     }
                 />
             </Group>
+
+            {(state.offer_proxy_ports || state.offer_auto_update) && (
+                <Group title='Рекомендуемые настройки' footer='Обе можно изменить позже. При обновлении панели они не меняются.'>
+                    {state.offer_proxy_ports && (
+                        <Row
+                            label='Через VPN только сайты и приложения'
+                            hint={`Порты ${(state.proxy_ports ?? []).join(', ')}: сайты, приложения и звонки Telegram. Всё остальное идёт напрямую, мимо VPN, и меньше нагружает роутер. Обычно это игры и торренты, но напрямую могут пойти и звонки в других мессенджерах. Потом: «Исключения» → «Полный обход VPN».`}
+                            trailing={<Switch label='Через VPN только сайты и приложения' checked={sparePorts} disabled={finish.isPending || waiting} onChange={setSparePorts} />}
+                        />
+                    )}
+                    {state.offer_auto_update && (
+                        <Row
+                            label='Обновлять панель автоматически'
+                            hint='Панель сама ставит проверенные обновления. Потом: «Настройки» → «О панели и обновление».'
+                            trailing={<Switch label='Обновлять панель автоматически' checked={autoUpdate} disabled={finish.isPending || waiting} onChange={setAutoUpdate} />}
+                        />
+                    )}
+                </Group>
+            )}
 
             <Actions
                 primary={{

@@ -156,6 +156,8 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 			"version": "21112026", "files_changed_at": now.Add(-27 * time.Hour).Format(time.RFC3339)}, true
 	case "/api/components/mihomo":
 		return object{"supported": true, "installed": "v1.19.34", "latest": "v1.19.35", "checked_at": now.Add(-2 * time.Hour).Format(time.RFC3339), "staged": false, "busy": false}, true
+	case "/api/components/mihomo/versions":
+		return object{"versions": []string{"v1.19.35", "v1.19.34", "v1.19.33", "v1.19.32", "v1.19.31", "v1.19.30"}}, true
 	case "/api/multipools":
 		return object{"pools": []object{{"id": "pool-video", "name": "Видео", "source_ids": []string{"north"}, "countries": []string{"NL", "SE"}, "member_count": 2}},
 			"scopes": []object{{"id": "pool-all", "name": "Все локации", "kind": "all", "member_count": 8, "limit": 8, "eligible_count": 9},

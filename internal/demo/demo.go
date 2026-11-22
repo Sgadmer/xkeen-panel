@@ -24,7 +24,7 @@ import (
 type object = map[string]interface{}
 
 func Handler(frontend fs.FS) http.Handler {
-	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.1", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
+	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.2", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
 	mihomo := os.Getenv(mihomoCoreEnv) == "mihomo"
 	if mihomo {
 		status = demoMihomoStatus(status)
@@ -87,7 +87,7 @@ func Handler(frontend fs.FS) http.Handler {
 			case "/api/account":
 				data = object{"username": "admin", "recovery_codes_left": 8, "passkeys": 0, "remember": true}
 			case "/api/update":
-				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "channel": "stable", "current": "v3.0.1", "latest": object{"tag": "v3.0.1", "prerelease": false, "url": "https://github.com/Sgadmer/xkeen-panel/releases/tag/v3.0.1"}, "supported": true, "available": false, "auto": false, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
+				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "channel": "stable", "current": "v3.0.2", "latest": object{"tag": "v3.0.2", "prerelease": false, "url": "https://github.com/Sgadmer/xkeen-panel/releases/tag/v3.0.2"}, "versions": []object{{"tag": "v3.0.2", "prerelease": false}, {"tag": "v3.0.1", "prerelease": false}, {"tag": "v3.0.0", "prerelease": false}}, "supported": true, "available": false, "auto": true, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
 			case "/api/setup/state":
 				data = object{"xkeen_installed": true, "xkeen_version": "2.1 Stable", "core": "xray", "core_running": true, "autostart": true, "subscription": true, "servers": 3, "configured": true, "pool_nodes": 2, "router_api": true, "policy_found": true, "devices_in_vpn": 2, "new_devices_vpn": false, "watchdog": true, "complete": true, "routing_mode_configured": true}
 			case "/api/logs":

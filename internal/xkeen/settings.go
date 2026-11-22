@@ -159,6 +159,105 @@ func ValidateList(content string, kind ListKind) error {
 	return nil
 }
 
+// ListEntries returns the working lines of a list file: no comments, no blanks.
+func ListEntries(content string) []string {
+	var entries []string
+	for _, line := range strings.Split(content, "\n") {
+		entry, _, _ := strings.Cut(line, "#")
+		if entry = strings.TrimSpace(entry); entry != "" {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
+}
+
+// PortListCovers reports whether a port list names the port, alone or inside
+// a range.
+func PortListCovers(content string, port int) bool {
+	for _, entry := range ListEntries(content) {
+		low, high, isRange := strings.Cut(entry, ":")
+		from, err := parsePort(low)
+		if err != nil {
+			continue
+		}
+		to := from
+		if isRange {
+			if to, err = parsePort(high); err != nil {
+				continue
+			}
+		}
+		if from <= port && port <= to {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckListPolicy refuses a list the panel must not write. A filled
+// port_proxying list sends every port it does not name past the core. That is
+// a usual way to spare the router, as long as ordinary sites and applications
+// (443 and 80) still reach the core.
+func CheckListPolicy(name, content string) error {
+	if name != "port_proxying" || len(ListEntries(content)) == 0 {
+		return nil
+	}
+	for _, port := range []int{443, 80} {
+		if !PortListCovers(content, port) {
+			return fmt.Errorf("в списке нет порта %d. Без портов 80 и 443 обычные сайты и приложения пойдут мимо VPN. Добавьте их или очистите список", port)
+		}
+	}
+	return nil
+}
+
+// DefaultProxyPorts is what the first-run wizard writes to port_proxying:
+// ordinary sites and applications (80, 443), the relays of Telegram calls
+// (596:599, the range of XKeen's own sample file) and the range usually added
+// next to them when XKeen is set up. Everything else goes to the provider
+// before the core and loads the router less.
+var DefaultProxyPorts = []string{"80", "443", "596:599", "50000:50030"}
+
+// ProxyPortsUnset reports whether the owner has chosen no ports yet: neither
+// "only these ports" nor "these ports past the VPN" has a working line.
+func ProxyPortsUnset(rt Runtime) bool {
+	for _, name := range []string{"port_proxying", "port_exclude"} {
+		path, _, err := ListPath(rt, name)
+		if err != nil {
+			return false
+		}
+		content, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) || len(ListEntries(string(content))) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// ApplyDefaultProxyPorts fills port_proxying while no ports are chosen. The
+// commented examples of the shipped file stay. It reports whether the file
+// was written; XKeen reads it when it starts.
+func ApplyDefaultProxyPorts(rt Runtime) (bool, error) {
+	if !ProxyPortsUnset(rt) {
+		return false, nil
+	}
+	path, _, err := ListPath(rt, "port_proxying")
+	if err != nil {
+		return false, err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	text := string(content)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	text += strings.Join(DefaultProxyPorts, "\n") + "\n"
+	if err := CheckListPolicy("port_proxying", text); err != nil {
+		return false, err
+	}
+	return true, WriteList(path, text)
+}
+
 // validatePortEntry accepts a single port or an XKeen range like 596:599.
 func validatePortEntry(entry string) error {
 	low, high, isRange := strings.Cut(entry, ":")

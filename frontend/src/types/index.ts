@@ -34,6 +34,8 @@ export type Status = {
     proxy_checked: boolean
     xray_running: boolean
     process_unknown?: boolean
+    /** The internet is paused for devices: a restart under a kill switch. */
+    held?: boolean
     selective?: boolean
     restarting: boolean
     current_server: string
@@ -236,14 +238,16 @@ export type UpdateState = {
         url: string
         published_at: string
     }
+    // Signed releases of the chosen channel, newest first
+    versions?: { tag: string; published_at?: string; prerelease: boolean }[]
     available: boolean
     supported: boolean
     reason?: string
     auto: boolean
     auto_hour: number
     skip?: string
-    previous?: string
     updating: boolean
+    installing?: string
     last_check?: string
     check_error?: string
     apply_error?: string

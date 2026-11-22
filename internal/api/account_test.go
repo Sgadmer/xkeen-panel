@@ -26,6 +26,12 @@ type accountFixture struct {
 
 func newAccountFixture(t *testing.T) *accountFixture {
 	t.Helper()
+	// The tests confirm with the code of a neighbouring 30-second step, which
+	// the panel accepts only while the current step lasts. Started right before
+	// the step turns, a test would present a code that is two steps old.
+	if left := 30 - time.Now().Unix()%30; left <= 3 {
+		time.Sleep(time.Duration(left) * time.Second)
+	}
 	secret, _, err := auth.GenerateTOTP("bob")
 	if err != nil {
 		t.Fatal(err)

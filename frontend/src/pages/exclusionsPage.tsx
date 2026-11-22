@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { IconLoader2, IconPencil, IconPlus, IconRouteOff, IconShieldExclamation, IconTrash } from '@tabler/icons-react'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
+import { RouterBypass } from '@/components/routerBypass'
 import { Sheet } from '@/components/sheet'
 import { useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
@@ -288,6 +289,8 @@ export function ExclusionsPage() {
                     ))
                 )}
             </Group>
+
+            <RouterBypass />
 
             <Sheet
                 open={editing !== null}

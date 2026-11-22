@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"xkeen-panel/internal/updater"
@@ -30,16 +31,22 @@ func (h *UpdateHandler) HandleCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // Answers as soon as the install starts: the restart into the new version ends this connection anyway.
+// Without a body the newest release is installed; {"tag": …} names one from the list.
 func (h *UpdateHandler) HandleApply(w http.ResponseWriter, r *http.Request) {
-	if err := h.updater.Apply(); err != nil {
-		writeUpdateError(w, http.StatusConflict, err)
+	var req struct {
+		Tag string `json:"tag"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат запроса"})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, h.updater.State())
-}
-
-func (h *UpdateHandler) HandleRollback(w http.ResponseWriter, r *http.Request) {
-	if err := h.updater.Rollback(); err != nil {
+	var err error
+	if req.Tag == "" {
+		err = h.updater.Apply()
+	} else {
+		err = h.updater.ApplyVersion(req.Tag)
+	}
+	if err != nil {
 		writeUpdateError(w, http.StatusConflict, err)
 		return
 	}
@@ -48,16 +55,28 @@ func (h *UpdateHandler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 
 func (h *UpdateHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Auto *bool `json:"auto"`
+		Auto    *bool   `json:"auto"`
+		Channel *string `json:"channel"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Auto == nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil || req.Auto == nil && req.Channel == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат запроса"})
 		return
 	}
 
-	if err := h.updater.SetAuto(*req.Auto); err != nil {
-		writeUpdateError(w, http.StatusInternalServerError, err)
-		return
+	if req.Auto != nil {
+		if err := h.updater.SetAuto(*req.Auto); err != nil {
+			writeUpdateError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if req.Channel != nil {
+		if err := h.updater.SetChannel(*req.Channel); err != nil {
+			writeUpdateError(w, http.StatusBadRequest, err)
+			return
+		}
+		// The list of versions belongs to the channel. A check that fails is
+		// reported by the state itself, the choice is saved either way.
+		h.updater.Check(r.Context())
 	}
 	writeJSON(w, http.StatusOK, h.updater.State())
 }

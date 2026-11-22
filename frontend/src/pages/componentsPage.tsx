@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useLocation } from 'react-router-dom'
 import { IconLoader2 } from '@tabler/icons-react'
 import { RefilterBase } from '@/components/blocklistRouting'
+import { GithubProxy } from '@/components/githubProxy'
 import { Group, PageTitle, Row, Switch } from '@/components/ios'
 import { MihomoCore } from '@/components/mihomoCore'
 import { MihomoDns } from '@/components/mihomoDns'
@@ -200,9 +201,7 @@ export function ComponentsPage() {
                     return <Row key={setting.id} label={setting.name} hint={hint} trailing={<span className='rounded-full focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-tint'><Switch checked={checked} label={setting.name} onChange={desired => inspectSetting(setting, desired)} disabled={working} /></span>} />
                 })}
             </Group>
-            <Group title='Дополнительно'>
-                <Row label='Порты и IP-исключения XKeen' hint='Выберите, какие порты обрабатывать и какие IP-адреса пропускать напрямую.' to='/settings/xkeen' />
-            </Group>
+            <GithubProxy />
             {state.supported && preview && <Group title='Проверка перед применением'>
                 <div className='space-y-3 py-4'>
                     <p className='font-semibold'>{componentName(preview.component)} · {preview.version}</p>

@@ -192,6 +192,14 @@ func (h *ComponentsHandler) MountMihomo(r chi.Router) {
 		}
 		writeJSON(w, http.StatusOK, info)
 	})
+	r.Get("/components/mihomo/versions", func(w http.ResponseWriter, r *http.Request) {
+		versions, e := h.manager.CoreVersions(r.Context())
+		if e != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": e.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"versions": versions})
+	})
 	r.Post("/components/mihomo/install", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Version string `json:"version"`

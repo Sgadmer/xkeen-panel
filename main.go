@@ -189,6 +189,10 @@ func main() {
 		}
 		return nil
 	}
+	// A restart under a kill switch pauses the internet; a hold that a failed
+	// restart left behind ends when no kill switch needs it.
+	xkeen.HoldReleasable = func() bool { return cards == nil || cards.CheckCoreInterruption() == nil }
+	xkeen.ResumeHold()
 	if rt.Core == xkeen.CoreXray {
 		if err := api.NewHandlers(cfg, subManager, watchdog, detector, poolStore).InitializeServiceRoutes(); err != nil {
 			log.Printf("Восстановление маршрутов сервисов не подтверждено: %v", err)

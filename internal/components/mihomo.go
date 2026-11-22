@@ -29,14 +29,16 @@ import (
 // restarted, and the previous binary stays next to it for a way back.
 
 const (
-	mihomoRepo        = "MetaCubeX/mihomo"
-	refilterRepo      = "1andrevich/Re-filter-lists"
-	refilterInterval  = 24 * time.Hour
-	refilterRetry     = 6 * time.Hour
-	mihomoMaxBinary   = 200 << 20
-	mihomoPrevSuffix  = ".panel-prev"
-	refilterMinSites  = 100
-	refilterMinRanges = 10
+	mihomoRepo       = "MetaCubeX/mihomo"
+	refilterRepo     = "1andrevich/Re-filter-lists"
+	refilterInterval = 24 * time.Hour
+	refilterRetry    = 6 * time.Hour
+	mihomoMaxBinary  = 200 << 20
+	mihomoPrevSuffix = ".panel-prev"
+	// Five releases a page: the picker shows about twenty versions
+	mihomoCatalogPages = 4
+	refilterMinSites   = 100
+	refilterMinRanges  = 10
 )
 
 var mihomoTag = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -429,6 +431,26 @@ func (m *Manager) CoreCheck(ctx context.Context) (CoreInfo, error) {
 	}
 	m.mu.Unlock()
 	return m.CoreInfo(ctx), err
+}
+
+// CoreVersions lists the recent stable Mihomo releases, newest first, for the
+// version picker. A Mihomo release lists well over a hundred files, so the
+// window is kept short.
+func (m *Manager) CoreVersions(ctx context.Context) ([]string, error) {
+	if info := m.CoreInfo(ctx); !info.Supported {
+		return nil, errors.New(info.Reason)
+	}
+	releases, err := m.catalogWindow(ctx, "mihomo", mihomoRepo, "stable", mihomoCatalogPages)
+	if err != nil {
+		return nil, err
+	}
+	versions := []string{}
+	for _, release := range releases {
+		if mihomoTag.MatchString(release.Version) {
+			versions = append(versions, release.Version)
+		}
+	}
+	return versions, nil
 }
 
 func mihomoAsset(goarch, version string) string {

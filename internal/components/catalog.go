@@ -177,6 +177,12 @@ func (m *Manager) Releases(ctx context.Context, component, channel string) ([]Re
 	if channel != "stable" && channel != "prerelease" && channel != "all" {
 		return nil, fmt.Errorf("выберите stable, prerelease или all")
 	}
+	return m.catalogWindow(ctx, component, repo, channel, catalogMaxPages)
+}
+
+// catalogWindow reads the newest releases of a repository, a few per request,
+// and keeps the answer for a quarter of an hour.
+func (m *Manager) catalogWindow(ctx context.Context, component, repo, channel string, pages int) ([]Release, error) {
 	key := component + ":" + channel
 	m.mu.Lock()
 	cached, ok := m.catalog[key]
@@ -187,7 +193,7 @@ func (m *Manager) Releases(ctx context.Context, component, channel string) ([]Re
 	ctx, cancel := context.WithTimeout(ctx, catalogTimeout)
 	defer cancel()
 	var incoming []Release
-	for page := 1; page <= catalogMaxPages; page++ {
+	for page := 1; page <= pages; page++ {
 		address := fmt.Sprintf("%s/repos/%s/releases?per_page=%d&page=%d", m.apiBase, repo, catalogPageSize, page)
 		resp, err := m.openRequest(ctx, address)
 		if err != nil {

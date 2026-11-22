@@ -147,6 +147,92 @@ func TestValidateListIPs(t *testing.T) {
 	}
 }
 
+func TestListEntriesSkipCommentsAndPortListCoversRanges(t *testing.T) {
+	list := "#80\n\n 27015 \n596:599 # игра\n# 443\n"
+	if got := ListEntries(list); len(got) != 2 || got[0] != "27015" || got[1] != "596:599" {
+		t.Fatalf("entries = %q", got)
+	}
+	for port, want := range map[int]bool{27015: true, 596: true, 598: true, 599: true, 600: false, 80: false, 443: false} {
+		if got := PortListCovers(list, port); got != want {
+			t.Errorf("PortListCovers(%d) = %v, want %v", port, got, want)
+		}
+	}
+	if !PortListCovers("1:65535\n", 443) {
+		t.Error("a range over every port does not cover 443")
+	}
+}
+
+func TestPortAllowListMustKeepTheWebPorts(t *testing.T) {
+	// A filled port_proxying list sends every other port past the core.
+	for _, list := range []string{"27015\n", "443\n", "80\n50000:50030\n", "#443\n80\n", "81:442\n"} {
+		if err := CheckListPolicy("port_proxying", list); err == nil {
+			t.Errorf("a list that sends sites past the core was accepted: %q", list)
+		}
+	}
+	for _, list := range []string{"80\n443\n", "80\n443\n50000:50030\n", "1:65535\n", "",
+		"#80\n#443\n\n# (Раскомментируйте) единичные порты и диапазоны\n"} {
+		if err := CheckListPolicy("port_proxying", list); err != nil {
+			t.Errorf("%q refused: %v", list, err)
+		}
+	}
+	for _, name := range []string{"port_exclude", "ip_exclude"} {
+		if err := CheckListPolicy(name, "27015\n"); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestDefaultProxyPortsFillOnlyAnUntouchedRouter(t *testing.T) {
+	shipped := "#80\n#443\n#596:599\n\n# (Раскомментируйте) единичные порты и диапазоны"
+	fresh := func(t *testing.T, proxying, exclude string) (Runtime, string) {
+		dir := t.TempDir()
+		for name, content := range map[string]string{"port_proxying.lst": proxying, "port_exclude.lst": exclude} {
+			if content != "-" {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		return Runtime{XkeenJSON: filepath.Join(dir, "xkeen.json")}, filepath.Join(dir, "port_proxying.lst")
+	}
+
+	// The shipped file, and no file at all: the defaults are written.
+	for _, start := range []string{shipped, "-"} {
+		rt, path := fresh(t, start, "-")
+		if written, err := ApplyDefaultProxyPorts(rt); err != nil || !written {
+			t.Fatalf("%q: written = %v, err = %v", start, written, err)
+		}
+		data, _ := os.ReadFile(path)
+		if got := ListEntries(string(data)); strings.Join(got, ",") != "80,443,596:599,50000:50030" {
+			t.Fatalf("%q: entries = %q", start, got)
+		}
+		if start != "-" && !strings.HasPrefix(string(data), shipped+"\n") {
+			t.Errorf("the shipped examples were lost: %q", data)
+		}
+		if err := ValidateList(string(data), ListPorts); err != nil {
+			t.Errorf("the written list does not validate: %v", err)
+		}
+		// A second run changes nothing.
+		if written, err := ApplyDefaultProxyPorts(rt); err != nil || written {
+			t.Errorf("the defaults were written twice: %v %v", written, err)
+		}
+	}
+
+	// The owner already chose ports, either way: nothing is touched.
+	for _, lists := range [][2]string{{"443\n80\n8443\n", "-"}, {shipped, "27015\n"}} {
+		rt, path := fresh(t, lists[0], lists[1])
+		if ProxyPortsUnset(rt) {
+			t.Fatalf("%q: chosen ports were not seen", lists)
+		}
+		if written, err := ApplyDefaultProxyPorts(rt); err != nil || written {
+			t.Fatalf("%q: written = %v, err = %v", lists, written, err)
+		}
+		if data, _ := os.ReadFile(path); string(data) != lists[0] {
+			t.Errorf("%q: the owner's list was rewritten: %q", lists, data)
+		}
+	}
+}
+
 func TestValidateListReportsLineNumber(t *testing.T) {
 	err := ValidateList("80\n443\nnope\n", ListPorts)
 	if err == nil || !strings.Contains(err.Error(), "строка 3") {

@@ -271,15 +271,31 @@ function setupPostponed() {
     }
 }
 
-// The open page keeps running the old bundle after the panel updates itself
+// The open page keeps running the old bundle after the panel is replaced,
+// whether it updated itself or a build was put on the router by hand. It
+// reloads on its own; only someone in the middle of typing gets the button.
 function usePanelUpdated(version?: string) {
     const qc = useQueryClient()
     const loaded = useRef<string | undefined>(undefined)
     if (version && !loaded.current) loaded.current = version
+    const updated = !!version && version !== loaded.current
 
     useEffect(() => {
         if (version) qc.invalidateQueries({ queryKey: ['update'] })
     }, [version, qc])
+    useEffect(() => {
+        if (updated && !typing()) window.location.reload()
+    }, [updated])
 
-    return !!version && version !== loaded.current
+    return updated
+}
+
+function typing() {
+    const focused = document.activeElement
+    return (
+        focused instanceof HTMLInputElement ||
+        focused instanceof HTMLTextAreaElement ||
+        focused instanceof HTMLSelectElement ||
+        !!document.querySelector('[role="dialog"], [role="alertdialog"]')
+    )
 }

@@ -21,18 +21,16 @@ func TestPublishedReleaseChannels(t *testing.T) {
 		{name: "numeric beta upgrade", current: "v3.0.0-beta.1", want: "v3.0.0-beta.10", channel: "preview", available: true, releases: []githubRelease{{TagName: "v3.0.0-beta.2", Prerelease: true}, {TagName: "v3.0.0-beta.10", Prerelease: true}}},
 		{name: "beta graduates to stable", current: "v3.0.0-beta.2", want: "v3.0.0", channel: "preview", available: true, releases: []githubRelease{{TagName: "v3.0.0-beta.9", Prerelease: true}, {TagName: "v3.0.0"}}},
 		{name: "stable excludes prerelease", current: "v2.0.0", channel: "stable", releases: []githubRelease{{TagName: "v3.0.0-beta.2", Prerelease: true}, {TagName: "v3.0.0-rc.1"}}},
+		// A beta build installed by hand does not opt into further betas.
+		{name: "beta build stays on stable by default", current: "v3.0.0-beta.1", channel: "stable", releases: []githubRelease{{TagName: "v3.0.0-beta.2", Prerelease: true}}},
+		{name: "beta build on stable graduates", current: "v3.0.0-beta.1", want: "v3.0.0", channel: "stable", available: true, releases: []githubRelease{{TagName: "v3.0.0-beta.2", Prerelease: true}, {TagName: "v3.0.0"}}},
+		{name: "stable build may ask for betas", current: "v2.0.0", want: "v3.0.0-beta.2", channel: "preview", available: true, releases: []githubRelease{{TagName: "v3.0.0-beta.2", Prerelease: true}, {TagName: "v2.0.1"}}},
 		{name: "stable fallback filters draft and invalid", current: "v2.0.0", want: "v2.0.1", channel: "stable", available: true, releases: []githubRelease{{TagName: "not-a-version"}, {TagName: "v9.0.0", Draft: true}, {TagName: "v2.0.1"}, {TagName: "v3.0.0-beta.1", Prerelease: true}}},
 		{name: "no releases", current: "v2.0.0", channel: "stable", releases: []githubRelease{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var server *httptest.Server
-			latestCalls := 0
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "/latest") {
-					latestCalls++
-					http.NotFound(w, r)
-					return
-				}
 				if r.URL.Path != "/repos/owner/repo/releases" || r.URL.RawQuery != "per_page=100" {
 					t.Errorf("unexpected request: %s", r.URL)
 					http.NotFound(w, r)
@@ -56,6 +54,9 @@ func TestPublishedReleaseChannels(t *testing.T) {
 			defer server.Close()
 			u := New(Options{Current: tc.current, DataDir: t.TempDir(), Repo: "owner/repo", APIBase: server.URL, Client: server.Client()})
 			u.asset = testAsset
+			if err := u.SetChannel(tc.channel); err != nil {
+				t.Fatal(err)
+			}
 			state, err := u.Check(context.Background())
 			if err != nil {
 				t.Fatal(err)
@@ -69,9 +70,6 @@ func TestPublishedReleaseChannels(t *testing.T) {
 				}
 			} else if state.Latest == nil || state.Latest.Tag != tc.want {
 				t.Fatalf("wrong release: %+v", state.Latest)
-			}
-			if tc.channel == "preview" && latestCalls != 0 {
-				t.Fatal("beta channel used stable-only latest endpoint")
 			}
 		})
 	}
@@ -97,7 +95,7 @@ func TestReleaseCatalogErrorsAreNotHidden(t *testing.T) {
 			u := New(Options{Current: tc.current, DataDir: t.TempDir(), Repo: "owner/repo", APIBase: server.URL, Client: server.Client()})
 			u.asset = testAsset
 			state, err := u.Check(context.Background())
-			if err == nil || state.CheckError == "" {
+			if err == nil || state.CheckError == "" || state.Latest != nil || len(state.Versions) != 0 {
 				t.Fatal("real catalog failure was hidden")
 			}
 		})
@@ -117,8 +115,11 @@ func TestIncompletePublishedReleaseIsNotOffered(t *testing.T) {
 			defer server.Close()
 			u := New(Options{Current: "v3.0.0-beta.1", DataDir: t.TempDir(), Repo: "owner/repo", APIBase: server.URL, Client: server.Client()})
 			u.asset = testAsset
+			if err := u.SetChannel("preview"); err != nil {
+				t.Fatal(err)
+			}
 			state, err := u.Check(context.Background())
-			if err != nil || state.Latest != nil || state.Available {
+			if err != nil || state.Latest != nil || state.Available || len(state.Versions) != 0 {
 				t.Fatalf("incomplete release advertised: %+v, %v", state, err)
 			}
 		})

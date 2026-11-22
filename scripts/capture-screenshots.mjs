@@ -48,7 +48,7 @@ const shots = [
     { file: 'access', core: 'mihomo', path: '/settings/access', size: wide },
     { file: 'mobile', core: 'mihomo', path: '/', size: phone, mobile: true },
     { file: 'xray-routing', core: 'xray', path: '/settings/protection', size: wide },
-    { file: 'ports', core: 'xray', path: '/settings/xkeen', size: wide },
+    { file: 'ports', core: 'xray', path: '/exclusions', size: wide, steps: [{ click: 'Полный обход VPN' }] },
     // notifications.jpg and wizard.jpg need a browser with push support and an
     // unfinished setup; the demo has neither, so those two are kept as they are.
     { file: 'geobases', core: 'xray', path: '/settings/components', size: wide, steps: [{ scroll: 'Источники геобаз' }] },

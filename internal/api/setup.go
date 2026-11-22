@@ -1,15 +1,20 @@
 package api
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 
 	"xkeen-panel/internal/keenetic"
 	"xkeen-panel/internal/monitor"
+	"xkeen-panel/internal/updater"
 	"xkeen-panel/internal/xkeen"
 )
 
 type SetupHandler struct {
+	// Set by the server; nil in a build or a test without the updater.
+	Updater      *updater.Updater
 	detector     *xkeen.Detector
 	subscription *xkeen.SubscriptionManager
 	watchdog     *monitor.Watchdog
@@ -38,6 +43,11 @@ type SetupState struct {
 	NewDevicesVPN         bool   `json:"new_devices_vpn"`
 	Watchdog              bool   `json:"watchdog"`
 	Complete              bool   `json:"complete"`
+	// Defaults the last step still offers. Each is offered on a first setup
+	// only: a router that already has its own choice is left as it is.
+	OfferProxyPorts bool     `json:"offer_proxy_ports"`
+	OfferAutoUpdate bool     `json:"offer_auto_update"`
+	ProxyPorts      []string `json:"proxy_ports"`
 }
 
 func (h *SetupHandler) state() SetupState {
@@ -61,7 +71,12 @@ func (h *SetupHandler) state() SetupState {
 		RoutingModeConfigured: rt.Core != xkeen.CoreXray || routingStateErr == nil && routingPolicyErr == nil,
 		PoolNodes:             len(top.PoolTags),
 		Watchdog:              h.watchdog.IsActive(),
+		ProxyPorts:            xkeen.DefaultProxyPorts,
 	}
+	// XKeen reads its port lists when it starts: the ports are offered only
+	// while it has never been started with the owner's own choice.
+	s.OfferProxyPorts = s.XKeenInstalled && !s.CoreRunning && xkeen.ProxyPortsUnset(rt)
+	s.OfferAutoUpdate = h.Updater != nil && h.Updater.AutoOffered()
 
 	c := h.devices.client()
 	if policies, err := c.Policies(); err == nil {
@@ -108,6 +123,22 @@ func (h *SetupHandler) HandleFinish(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "XKeen не установлен"})
 		return
 	}
+	// The defaults of a first setup, as the owner left them in the wizard.
+	// A missing field changes nothing.
+	var req struct {
+		ProxyPorts *bool `json:"proxy_ports"`
+		AutoUpdate *bool `json:"auto_update"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат запроса"})
+		return
+	}
+	if req.ProxyPorts != nil && *req.ProxyPorts && !xkeen.IsRunning(rt.Core) {
+		if _, err := xkeen.ApplyDefaultProxyPorts(rt); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось записать список портов: " + err.Error()})
+			return
+		}
+	}
 
 	if !rt.Autostart {
 		if _, err := xkeen.SetAutostart(rt.Dispatcher, true); err != nil {
@@ -125,6 +156,12 @@ func (h *SetupHandler) HandleFinish(w http.ResponseWriter, r *http.Request) {
 		h.watchdog.SetActive(true)
 	}
 	h.watchdog.CheckNow()
+	if req.AutoUpdate != nil && h.Updater != nil && h.Updater.AutoOffered() {
+		if err := h.Updater.SetAutoDefault(*req.AutoUpdate); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "не удалось сохранить настройку обновлений: " + err.Error()})
+			return
+		}
+	}
 
 	writeJSON(w, http.StatusOK, h.state())
 }

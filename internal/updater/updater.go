@@ -21,6 +21,12 @@ var ErrLocked = errors.New("обновление и откат кода забл
 const (
 	DefaultRepo = "Sgadmer/xkeen-panel"
 
+	channelStable  = "stable"
+	channelPreview = "preview"
+
+	// The page offers this many of the newest versions to pick from
+	versionsShown = 30
+
 	checkEvery = 12 * time.Hour
 	tickEvery  = 10 * time.Minute
 
@@ -31,29 +37,43 @@ const (
 
 // Kept in data/ so the UI can change them without rewriting config.yaml and losing its comments.
 type Settings struct {
-	Auto       bool   `json:"auto"`
+	Auto bool `json:"auto"`
+	// The choice was made: by the owner with the switch, or in the first-run
+	// wizard. The wizard offers automatic updates only while this is unset, so
+	// an update of the panel never changes what a router already has.
+	AutoSet bool `json:"auto_set,omitempty"`
+	// "preview" when the owner asked for beta versions too; empty means stable only
+	Channel    string `json:"channel,omitempty"`
 	Repository string `json:"repository,omitempty"`
 
-	// Rolled back from or failed to start: automatic updates leave it alone, the button still installs it
+	// Failed to start, or newer than the version the owner picked by hand:
+	// automatic updates leave it alone, the button still installs it
 	Skip string `json:"skip,omitempty"`
+}
 
-	Previous string `json:"previous,omitempty"`
+// Version is one release the owner can pick from the list.
+type Version struct {
+	Tag         string    `json:"tag"`
+	PublishedAt time.Time `json:"published_at"`
+	Prerelease  bool      `json:"prerelease"`
 }
 
 type State struct {
-	Repository  string    `json:"repository"`
-	Channel     string    `json:"channel"`
-	Locked      bool      `json:"locked"`
-	Current     string    `json:"current"`
-	Latest      *Release  `json:"latest,omitempty"`
+	Repository string   `json:"repository"`
+	Channel    string   `json:"channel"`
+	Locked     bool     `json:"locked"`
+	Current    string   `json:"current"`
+	Latest     *Release `json:"latest,omitempty"`
+	// Signed releases of the chosen channel, newest first
+	Versions    []Version `json:"versions,omitempty"`
 	Available   bool      `json:"available"`
 	Supported   bool      `json:"supported"`
 	Reason      string    `json:"reason,omitempty"` // why updates are unavailable on this build
 	Auto        bool      `json:"auto"`
 	AutoHour    int       `json:"auto_hour"`
 	Skip        string    `json:"skip,omitempty"`
-	Previous    string    `json:"previous,omitempty"`
 	Updating    bool      `json:"updating"`
+	Installing  string    `json:"installing,omitempty"` // the release being installed right now
 	LastCheck   time.Time `json:"last_check,omitempty"`
 	CheckError  string    `json:"check_error,omitempty"`
 	ApplyError  string    `json:"apply_error,omitempty"`
@@ -101,10 +121,12 @@ type Updater struct {
 	mu          sync.Mutex
 	settings    Settings
 	latest      *Release
+	releases    []Release // what the last check found, newest first
 	lastCheck   time.Time
 	checkErr    string
 	applyErr    string
 	updating    bool
+	installing  string
 	failedStart string
 	attempted   map[string]time.Time
 }
@@ -126,7 +148,6 @@ func New(opts Options) *Updater {
 		publish:      opts.Publish,
 		restart:      opts.Restart,
 		busy:         opts.Busy,
-		settings:     Settings{Auto: false},
 		attempted:    map[string]time.Time{},
 
 		guardDelay:   guardDelay,
@@ -151,18 +172,26 @@ func New(opts Options) *Updater {
 		u.log("[UPDATE] Ключи проверки выпусков не прочитаны: %v", err)
 	}
 	u.keys = keys
-	loaded := u.settings
-	if err := readJSON(u.settingsPath(), &loaded); err == nil {
+	var loaded Settings
+	if err := readJSON(u.settingsPath(), &loaded); err != nil {
+		if !os.IsNotExist(err) {
+			u.log("[UPDATE] Настройки обновлений не прочитаны (%v) — действуют настройки по умолчанию", err)
+		}
+	} else if loaded.Repository == u.repo {
+		// Choices made for another source of updates are not carried over.
+		if loaded.Channel != channelPreview {
+			loaded.Channel = ""
+		}
 		u.settings = loaded
-	} else if !os.IsNotExist(err) {
-		u.log("[UPDATE] Настройки обновлений не прочитаны (%v) — требуется ручное включение автообновления", err)
-	}
-	// An upstream/previous locked build may have left auto=true on disk.
-	// Enabling updates for this fork requires a fresh choice for this source.
-	if u.settings.Repository != u.repo {
-		u.settings.Auto = false
 	}
 	u.settings.Repository = u.repo
+	// A release that is not ahead of the running version has nothing left to
+	// skip, for example after a build was put on the router past the updater.
+	if skip, ok := parseSemver(u.settings.Skip); ok {
+		if cur, ok := parseSemver(u.current); ok && !newer(cur, skip) {
+			u.settings.Skip = ""
+		}
+	}
 
 	return u
 }
@@ -216,16 +245,18 @@ func (u *Updater) stateLocked() State {
 		AutoHour:    u.autoHour,
 		Skip:        u.settings.Skip,
 		Updating:    u.updating,
+		Installing:  u.installing,
 		LastCheck:   u.lastCheck,
 		CheckError:  u.checkErr,
 		ApplyError:  u.applyErr,
 		FailedStart: u.failedStart,
 	}
 
-	if u.settings.Previous != "" {
-		if _, err := os.Stat(u.prevPath()); err == nil {
-			state.Previous = u.settings.Previous
+	for i, release := range u.releases {
+		if i == versionsShown {
+			break
 		}
+		state.Versions = append(state.Versions, Version{Tag: release.Tag, PublishedAt: release.PublishedAt, Prerelease: release.Prerelease})
 	}
 
 	if u.latest != nil {
@@ -250,18 +281,23 @@ func (u *Updater) Check(ctx context.Context) (State, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	release, err := u.fetchLatest(ctx)
+	u.mu.Lock()
+	channel := u.updateChannel()
+	u.mu.Unlock()
+
+	releases, err := u.fetchPublished(ctx, channel == channelPreview)
 
 	u.mu.Lock()
 	u.lastCheck = time.Now()
 	if err != nil {
 		u.checkErr = err.Error()
-	} else {
+	} else if channel == u.updateChannel() {
+		// An answer for a channel the owner has just left is dropped
 		u.checkErr = ""
-		if release.Tag == "" {
-			u.latest = nil
-		} else {
-			u.latest = &release
+		u.releases, u.latest = releases, nil
+		if len(releases) > 0 {
+			latest := releases[0]
+			u.latest = &latest
 		}
 	}
 	state := u.stateLocked()
@@ -275,7 +311,23 @@ func (u *Updater) Check(ctx context.Context) (State, error) {
 	return state, nil
 }
 
-func (u *Updater) Apply() error {
+// Apply installs the newest release of the channel.
+func (u *Updater) Apply() error { return u.start("") }
+
+// ApplyVersion installs the release the owner picked from the list. It may be
+// older than the running one: every listed release is signed, so the way
+// forward stays open from any of them.
+func (u *Updater) ApplyVersion(tag string) error {
+	if u.locked {
+		return ErrLocked
+	}
+	if tag == "" {
+		return fmt.Errorf("выберите версию")
+	}
+	return u.start(tag)
+}
+
+func (u *Updater) start(tag string) error {
 	if u.locked {
 		return ErrLocked
 	}
@@ -288,13 +340,32 @@ func (u *Updater) Apply() error {
 		u.mu.Unlock()
 		return fmt.Errorf("обновление уже выполняется")
 	}
-	state := u.stateLocked()
-	if !state.Available {
-		u.mu.Unlock()
-		return fmt.Errorf("нет более новой версии — сначала проверьте обновления")
+	var release Release
+	if tag == "" {
+		if !u.stateLocked().Available {
+			u.mu.Unlock()
+			return fmt.Errorf("нет более новой версии — сначала проверьте обновления")
+		}
+		release = *u.latest
+	} else {
+		if tag == u.current {
+			u.mu.Unlock()
+			return fmt.Errorf("версия %s уже установлена", tag)
+		}
+		// Only what the last check accepted can be asked for
+		for _, listed := range u.releases {
+			if listed.Tag == tag {
+				release = listed
+				break
+			}
+		}
+		if release.Tag == "" {
+			u.mu.Unlock()
+			return fmt.Errorf("этой версии нет в списке — сначала проверьте обновления")
+		}
 	}
-	release := *u.latest
 	u.updating = true
+	u.installing = release.Tag
 	u.applyErr = ""
 	u.attempted[release.Tag] = time.Now()
 	u.mu.Unlock()
@@ -320,12 +391,19 @@ func (u *Updater) runApply(release Release) {
 	}
 
 	u.mu.Lock()
-	u.settings.Previous = u.current
-	err := writeJSON(u.settingsPath(), u.settings)
-	u.mu.Unlock()
-	if err != nil {
-		u.log("[UPDATE] Не удалось сохранить настройки: %v", err)
+	// The owner picked a version while a newer one exists. Automatic updates
+	// must not put that newer one back the next night; the one after it is free.
+	if u.latest != nil {
+		picked, okPicked := parseSemver(release.Tag)
+		latest, okLatest := parseSemver(u.latest.Tag)
+		if okPicked && okLatest && newer(picked, latest) {
+			u.settings.Skip = u.latest.Tag
+			if err := writeJSON(u.settingsPath(), u.settings); err != nil {
+				u.log("[UPDATE] Не удалось сохранить настройки: %v", err)
+			}
+		}
 	}
+	u.mu.Unlock()
 
 	u.log("[UPDATE] %s установлена, перезапускаю панель", release.Tag)
 	if err := u.restart(); err != nil {
@@ -337,66 +415,68 @@ func (u *Updater) fail(err error) {
 	u.log("[UPDATE] %v", err)
 	u.mu.Lock()
 	u.updating = false
+	u.installing = ""
 	u.applyErr = err.Error()
 	u.mu.Unlock()
 	u.notify()
 }
 
-func (u *Updater) Rollback() error {
+// Checks keep running either way, so the UI can still offer an update by hand.
+func (u *Updater) SetAuto(auto bool) error { return u.setAuto(auto, false) }
+
+// AutoOffered reports whether the first-run wizard may still offer automatic
+// updates: they are off and nobody has chosen yet.
+func (u *Updater) AutoOffered() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return !u.locked && !u.settings.Auto && !u.settings.AutoSet
+}
+
+// SetAutoDefault records the wizard's offer. It applies once: a later run of
+// the wizard does not undo what the owner has chosen since.
+func (u *Updater) SetAutoDefault(auto bool) error { return u.setAuto(auto, true) }
+
+func (u *Updater) setAuto(auto, offer bool) error {
 	if u.locked {
 		return ErrLocked
 	}
 	u.mu.Lock()
-	if u.updating {
+	if offer && (u.settings.Auto || u.settings.AutoSet) {
 		u.mu.Unlock()
-		return fmt.Errorf("обновление уже выполняется")
+		return nil
 	}
-	previous := u.stateLocked().Previous
-	if previous == "" {
-		u.mu.Unlock()
-		return fmt.Errorf("предыдущей версии нет на диске")
-	}
-	if u.requiredFlag != "" {
-		if err := u.checkRequiredFlag(context.Background(), u.prevPath()); err != nil {
-			u.mu.Unlock()
-			return err
-		}
-	}
-	if err := u.rollbackBinary(); err != nil {
-		u.mu.Unlock()
-		return err
-	}
-	u.settings.Skip = u.current
-	u.settings.Previous = ""
-	u.updating = true
-	if err := writeJSON(u.settingsPath(), u.settings); err != nil {
-		u.log("[UPDATE] Не удалось сохранить настройки: %v", err)
+	old := u.settings
+	u.settings.Auto, u.settings.AutoSet = auto, true
+	err := writeJSON(u.settingsPath(), u.settings)
+	if err != nil {
+		u.settings = old
 	}
 	u.mu.Unlock()
 
-	u.log("[UPDATE] Откат на %s, %s больше не ставится автоматически", previous, u.current)
 	u.notify()
-
-	go func() {
-		if err := u.restart(); err != nil {
-			u.fail(fmt.Errorf("предыдущая версия возвращена на диск, но панель не перезапустилась: %w", err))
-		}
-	}()
-
-	return nil
+	return err
 }
 
-// Checks keep running either way, so the UI can still offer an update by hand.
-func (u *Updater) SetAuto(auto bool) error {
+// SetChannel chooses between stable releases only and stable plus beta ones.
+// What the last check found belonged to the other channel and is forgotten.
+func (u *Updater) SetChannel(channel string) error {
 	if u.locked {
 		return ErrLocked
 	}
+	if channel != channelStable && channel != channelPreview {
+		return fmt.Errorf("неизвестный канал обновлений")
+	}
+	if channel == channelStable {
+		channel = ""
+	}
 	u.mu.Lock()
-	old := u.settings.Auto
-	u.settings.Auto = auto
+	old := u.settings.Channel
+	u.settings.Channel = channel
 	err := writeJSON(u.settingsPath(), u.settings)
 	if err != nil {
-		u.settings.Auto = old
+		u.settings.Channel = old
+	} else if old != channel {
+		u.latest, u.releases, u.lastCheck, u.checkErr = nil, nil, time.Time{}, ""
 	}
 	u.mu.Unlock()
 
@@ -416,7 +496,6 @@ func (u *Updater) Startup(ctx context.Context, healthy func() bool) {
 		u.mu.Lock()
 		u.failedStart = failed.To
 		u.settings.Skip = failed.To
-		u.settings.Previous = ""
 		if err := writeJSON(u.settingsPath(), u.settings); err != nil {
 			u.log("[UPDATE] Не удалось сохранить настройки: %v", err)
 		}

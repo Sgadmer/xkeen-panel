@@ -11,6 +11,7 @@ import { Group, PageTitle, Row } from '@/components/ios'
 import { RouterActivity } from '@/components/routerActivity'
 import { ProtectionWarning } from '@/components/protectionWarning'
 import { useLogs, usePool, useStatus } from '@/hooks/usePanelData'
+import { useXkeenRestart } from '@/hooks/useXkeenRestart'
 import { api } from '@/lib/api'
 import { agoLabel, isSet } from '@/lib/format'
 import type { PoolSyncResult, SelfTestResult, Status } from '@/types'
@@ -62,11 +63,7 @@ export function DiagnosticsPage() {
         qc.invalidateQueries({ queryKey: ['pool'] })
     }
 
-    const restart = useMutation({
-        mutationFn: () => api.post('/api/xkeen/restart'),
-        onMutate: markRestarting,
-        onSettled: settle,
-    })
+    const restart = useXkeenRestart()
     const start = useMutation({
         mutationFn: () => api.post('/api/xkeen/start'),
         onSettled: settle,
@@ -104,7 +101,7 @@ export function DiagnosticsPage() {
     const proxyVerdict: Verdict =
         !checked || !s?.proxy_checked ? 'unknown' : s.connected ? 'ok' : 'bad'
     const busy =
-        s?.restarting || restart.isPending || start.isPending || stop.isPending
+        s?.restarting || restart.pending || start.isPending || stop.isPending
     const isPool = pool?.mode === 'pool'
     const sync = poolAction.data
 
@@ -187,7 +184,13 @@ export function DiagnosticsPage() {
 
                     <Group
                         footer={
-                            selftest.data ? (
+                            restart.result ?? (start.error ? (
+                                <span role='alert' className='text-destructive'>{start.error.message}</span>
+                            ) : s?.held && !busy ? (
+                                <span role='alert' className='text-destructive'>
+                                    Интернет на устройствах приостановлен: XKeen не запустился, а kill switch включён. Перезапустите XKeen.
+                                </span>
+                            ) : selftest.data ? (
                                 <span
                                     className={
                                         selftest.data.success
@@ -200,19 +203,13 @@ export function DiagnosticsPage() {
                                         : selftest.data.output ||
                                           selftest.data.error}
                                 </span>
-                            ) : undefined
+                            ) : undefined)
                         }
                     >
                         <Row
-                            label={
-                                confirming === 'restart'
-                                    ? 'Нажмите ещё раз для перезапуска'
-                                    : 'Перезапустить XKeen'
-                            }
+                            label={restart.label}
                             tone='tint'
-                            onClick={() =>
-                                confirm('restart', () => restart.mutate())
-                            }
+                            onClick={restart.click}
                             disabled={busy}
                         />
                         <Row

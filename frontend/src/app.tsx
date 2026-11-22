@@ -13,7 +13,6 @@ import { MorePage } from '@/pages/morePage'
 import { SettingsPage } from '@/pages/settingsPage'
 import { NotificationsPage } from '@/pages/notificationsPage'
 import { UpdatePage } from '@/pages/updatePage'
-import { XkeenSettingsPage } from '@/pages/xkeenSettingsPage'
 import { DiagnosticsPage } from '@/pages/diagnosticsPage'
 import { AccessPage } from '@/pages/accessPage'
 import { ProtectionPage } from '@/pages/protectionPage'
@@ -98,10 +97,7 @@ export function App() {
                                 path='settings/update'
                                 element={<UpdatePage />}
                             />
-                            <Route
-                                path='settings/xkeen'
-                                element={<XkeenSettingsPage />}
-                            />
+                            <Route path='settings/xkeen' element={<Navigate to='/exclusions' replace />} />
                             <Route
                                 path='diagnostics'
                                 element={<DiagnosticsPage />}

@@ -919,6 +919,7 @@ func (w *Watchdog) GetStatus() models.Status {
 		XrayRunning:    coreRunning,
 		ProcessUnknown: !processKnown,
 		Restarting:     restarting,
+		Held:           xkeen.TrafficHeld(),
 		Latency:        w.lastLatency,
 		LastCheck:      w.lastCheck,
 		WatchdogActive: w.active,

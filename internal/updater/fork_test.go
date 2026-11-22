@@ -8,33 +8,38 @@ import (
 	"testing"
 )
 
-func TestForkAutoOptInDoesNotInheritUpstreamOrCorruptPreferences(t *testing.T) {
-	for _, raw := range []string{`{"auto":true}`, `{"auto":true,"repository":"Dearonski/xkeen-panel"}`, `{"auto":true,"repository":"Sgadmer/xkeen-panel",BROKEN}`} {
+// Choices made for another source of updates, or a file that cannot be read,
+// leave this panel on its own defaults: stable releases, installed automatically.
+func TestForeignOrCorruptPreferencesFallBackToDefaults(t *testing.T) {
+	for _, raw := range []string{
+		`{"auto":true,"auto_set":true,"channel":"preview","skip":"v9.0.0"}`,
+		`{"auto":true,"auto_set":true,"channel":"preview","skip":"v9.0.0","repository":"Dearonski/xkeen-panel"}`,
+		`{"auto":true,"auto_set":true,"channel":"preview","repository":"Sgadmer/xkeen-panel",BROKEN}`,
+	} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "update.json"), []byte(raw), 0600); err != nil {
 			t.Fatal(err)
 		}
 		opts := Options{Current: "v3.0.0-beta.1", DataDir: dir}
 		u := New(opts)
-		if u.State().Auto {
-			t.Fatal("auto update inherited without valid opt-in for this source")
+		if state := u.State(); state.Auto || state.Channel != "stable" || state.Skip != "" {
+			t.Fatalf("%s: foreign preferences were inherited: %+v", raw, state)
 		}
 		if err := u.SetAuto(true); err != nil {
 			t.Fatal(err)
 		}
 		if !New(opts).State().Auto {
-			t.Fatal("explicit fork opt-in was not retained")
+			t.Fatal("the owner's choice for this source was not retained")
 		}
 	}
 }
 
-func TestForkUpdatesAreOptInAndStayInOwnRepository(t *testing.T) {
+func TestForkUpdatesStayInOwnRepository(t *testing.T) {
 	u := New(Options{Current: "v2.2.0", BinPath: "/opt/sbin/xkeen-panel", DataDir: t.TempDir()})
-	if u.State().Auto || u.State().Repository != "Sgadmer/xkeen-panel" {
+	if u.State().Auto || u.State().Channel != "stable" || u.State().Repository != "Sgadmer/xkeen-panel" {
 		t.Fatal("fresh fork update policy is incorrect")
 	}
 	for _, raw := range []string{
-		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases/latest",
 		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases?per_page=100",
 		"https://github.com/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
 	} {
@@ -48,6 +53,7 @@ func TestForkUpdatesAreOptInAndStayInOwnRepository(t *testing.T) {
 		"https://github.com.attacker.invalid/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
 		"https://user@github.com/Sgadmer/xkeen-panel/releases/download/v2.2.0/xkeen-panel-aarch64",
 		"https://api.github.com/repos/Dearonski/xkeen-panel/releases?per_page=100",
+		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases/latest",
 		"https://api.github.com/repos/Sgadmer/xkeen-panel/releases?per_page=100&redirect=elsewhere",
 	} {
 		if trustedUpdateURL(raw, DefaultRepo) {

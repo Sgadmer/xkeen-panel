@@ -93,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	updateHandler := api.NewUpdateHandler(s.updater)
 	devicesHandler := api.NewDevicesHandler(s.detector, keenetic.DefaultAddr)
 	setupHandler := api.NewSetupHandler(s.detector, s.subscription, s.watchdog, devicesHandler)
+	setupHandler.Updater = s.updater
 	sitesHandler := api.NewSitesHandler(s.sites)
 	handlers := api.NewHandlers(s.config, s.subscription, s.watchdog, s.detector, s.pool)
 	handlers.Cards = s.Cards
@@ -266,7 +267,6 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/update", updateHandler.HandleStatus)
 			r.Post("/update/check", updateHandler.HandleCheck)
 			r.Post("/update/apply", updateHandler.HandleApply)
-			r.Post("/update/rollback", updateHandler.HandleRollback)
 			r.Put("/update/settings", updateHandler.HandleSettings)
 
 			r.Get("/logs", handlers.HandleLogs)

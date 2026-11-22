@@ -45,12 +45,31 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 	if dispatcher == "" {
 		return "", fmt.Errorf("путь к xkeen не задан")
 	}
-	controlled := len(args) > 0 && (args[0] == "-restart" || args[0] == "-stop" || args[0] == "-start")
+	controlled := controlVerb(args)
 	if controlled && BeforeServiceControl != nil {
 		if err := BeforeServiceControl(args[0]); err != nil {
 			return "", err
 		}
 	}
+	text, err := dispatch(dispatcher, timeout, args...)
+	if err == nil && controlled && BeforeServiceControl != nil {
+		err = BeforeServiceControl(args[0])
+	}
+	return text, err
+}
+
+func controlVerb(args []string) bool {
+	return len(args) > 0 && (args[0] == "-restart" || args[0] == "-stop" || args[0] == "-start")
+}
+
+// dispatch runs the dispatcher without the policy checks; tests replace it.
+var dispatch = runDispatcher
+
+func runDispatcher(dispatcher string, timeout time.Duration, args ...string) (string, error) {
+	if dispatcher == "" {
+		return "", fmt.Errorf("путь к xkeen не задан")
+	}
+	controlled := controlVerb(args)
 
 	out, err := os.CreateTemp("", "xkeen-out-*")
 	if err != nil {
@@ -80,10 +99,6 @@ func runXkeen(dispatcher string, timeout time.Duration, args ...string) (string,
 
 	if ctx.Err() == context.DeadlineExceeded {
 		return text, fmt.Errorf("команда xkeen %s не завершилась за %s", strings.Join(args, " "), timeout)
-	}
-
-	if runErr == nil && controlled && BeforeServiceControl != nil {
-		runErr = BeforeServiceControl(args[0])
 	}
 	return text, runErr
 }
@@ -150,10 +165,64 @@ func RestartAndWait(dispatcher string) (string, error) {
 	return runXkeen(dispatcher, restartTimeout, "-restart")
 }
 
+// RestartHeld restarts the core on a router whose kill switch forbids an
+// interruption. Forwarded traffic is paused first, so nothing leaves directly
+// while interception is down. A failed start leaves it paused.
+func RestartHeld(dispatcher, core string) (string, error) {
+	restartMu.Lock()
+	if restarting {
+		restartMu.Unlock()
+		return "", fmt.Errorf("перезапуск ядра уже выполняется")
+	}
+	restarting = true
+	restartMu.Unlock()
+	if OnRestartStateChange != nil {
+		OnRestartStateChange(true)
+	}
+	defer func() {
+		restartMu.Lock()
+		restarting = false
+		restartMu.Unlock()
+		if OnRestartStateChange != nil {
+			OnRestartStateChange(false)
+		}
+	}()
+
+	if err := raiseHold(); err != nil {
+		return "", fmt.Errorf("XKeen не перезапущен: не удалось приостановить интернет на время перезапуска (%v)", err)
+	}
+	Log("[RESTART] Kill switch включён: интернет приостановлен на время перезапуска")
+	output, err := dispatch(dispatcher, restartTimeout, "-restart")
+	if err == nil {
+		if running, known := coreStatus(core); known && !running {
+			err = fmt.Errorf("ядро не запустилось")
+		}
+	}
+	if err != nil {
+		Log("[RESTART] Ошибка: %v. Интернет остаётся приостановленным", err)
+		return output, fmt.Errorf("XKeen не запустился (%v). Интернет на устройствах приостановлен, чтобы ничего не ушло мимо VPN. Перезапустите XKeen ещё раз", err)
+	}
+	if err := lowerHold(); err != nil {
+		return output, fmt.Errorf("XKeen перезапущен, но интернет не возобновлён (%v). Перезагрузите роутер", err)
+	}
+	Log("[RESTART] Завершён успешно, интернет возобновлён")
+	return output, nil
+}
+
+// coreStatus is replaced by tests.
+var coreStatus = CoreProcessStatus
+
 // Start starts the proxy core. The `on` argument mirrors what `xkeen -start`
 // passes to the init script, so autostart state is not consulted.
 func Start(dispatcher string) (string, error) {
-	return runXkeen(dispatcher, restartTimeout, "-start")
+	output, err := runXkeen(dispatcher, restartTimeout, "-start")
+	// A hold left by a failed restart ends once interception is back.
+	if err == nil && TrafficHeld() {
+		if err = lowerHold(); err != nil {
+			err = fmt.Errorf("XKeen запущен, но интернет не возобновлён (%v). Перезагрузите роутер", err)
+		}
+	}
+	return output, err
 }
 
 // SetAutostart makes XKeen start the proxy on boot, or stop doing so.

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,74 +79,37 @@ func (u *Updater) releaseView(payload githubRelease) Release {
 	return r
 }
 
-// A beta installation follows published beta and stable versions. A stable
-// installation never opts into prereleases merely because no stable exists.
+// The channel is the owner's choice and stable unless they asked for more: a
+// beta build put on the router by hand does not opt into further betas.
+// The caller holds u.mu.
 func (u *Updater) updateChannel() string {
-	if v, ok := parseSemver(u.current); ok && v.isPrerelease() {
-		return "preview"
+	if u.settings.Channel == channelPreview {
+		return channelPreview
 	}
-	return "stable"
+	return channelStable
 }
 
-func (u *Updater) fetchLatest(ctx context.Context) (Release, error) {
-	if u.updateChannel() == "preview" {
-		return u.fetchPublished(ctx, true)
-	}
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", u.apiBase, u.repo)
-	resp, err := u.get(ctx, url, "application/vnd.github+json")
-	if err != nil {
-		var status *httpStatusError
-		if errors.As(err, &status) && status.code == http.StatusNotFound {
-			return u.fetchPublished(ctx, false)
-		}
-		return Release{}, err
-	}
-	defer resp.Body.Close()
-
-	var payload githubRelease
-	limited := &io.LimitedReader{R: resp.Body, N: (2 << 20) + 1}
-	decoder := json.NewDecoder(limited)
-	if err := decoder.Decode(&payload); err != nil {
-		return Release{}, fmt.Errorf("ответ GitHub не разобран: %w", err)
-	}
-	if err := decoder.Decode(new(interface{})); err != io.EOF || limited.N == 0 {
-		return Release{}, fmt.Errorf("ответ GitHub слишком большой или повреждён")
-	}
-
-	version, valid := parseSemver(payload.TagName)
-	if !valid || payload.Draft {
-		return Release{}, fmt.Errorf("GitHub вернул некорректный релиз")
-	}
-	if payload.Prerelease || version.isPrerelease() {
-		return u.fetchPublished(ctx, false)
-	}
-	release := u.releaseView(payload)
-	// The newest stable release may still be waiting for its files or for the
-	// maintainer's signature. Until then the newest complete one is offered.
-	if release.assetURL == "" || release.sumsURL == "" || release.sigURL == "" {
-		return u.fetchPublished(ctx, false)
-	}
-	return release, nil
-}
-
-func (u *Updater) fetchPublished(ctx context.Context, includePreview bool) (Release, error) {
+// fetchPublished lists what this panel may install, newest first: published
+// releases of the channel that carry the binary, its checksums and the
+// signature. The signature itself is verified when a release is installed.
+func (u *Updater) fetchPublished(ctx context.Context, includePreview bool) ([]Release, error) {
 	address := fmt.Sprintf("%s/repos/%s/releases?per_page=100", u.apiBase, u.repo)
 	resp, err := u.get(ctx, address, "application/vnd.github+json")
 	if err != nil {
-		return Release{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	var releases []githubRelease
 	limited := &io.LimitedReader{R: resp.Body, N: (8 << 20) + 1}
 	decoder := json.NewDecoder(limited)
 	if err = decoder.Decode(&releases); err != nil {
-		return Release{}, fmt.Errorf("список опубликованных релизов не разобран")
+		return nil, fmt.Errorf("список опубликованных релизов не разобран")
 	}
 	if err = decoder.Decode(new(interface{})); err != io.EOF || releases == nil || limited.N == 0 {
-		return Release{}, fmt.Errorf("список опубликованных релизов повреждён")
+		return nil, fmt.Errorf("список опубликованных релизов повреждён")
 	}
-	var selected Release
-	var selectedVersion semver
+	var found []Release
+	versions := map[string]semver{}
 	for _, payload := range releases {
 		version, valid := parseSemver(payload.TagName)
 		if !valid || payload.Draft || !includePreview && (payload.Prerelease || version.isPrerelease()) {
@@ -157,11 +121,20 @@ func (u *Updater) fetchPublished(ctx context.Context, includePreview bool) (Rele
 		if release.assetURL == "" || release.sumsURL == "" || release.sigURL == "" {
 			continue
 		}
-		if selected.Tag == "" || newer(selectedVersion, version) {
-			selected, selectedVersion = release, version
+		if _, twice := versions[release.Tag]; twice {
+			continue
 		}
+		versions[release.Tag] = version
+		found = append(found, release)
 	}
-	return selected, nil
+	sort.SliceStable(found, func(i, j int) bool {
+		return newer(versions[found[j].Tag], versions[found[i].Tag])
+	})
+	// Only the newest one shows its notes; the rest are a list to pick from.
+	for i := 1; i < len(found); i++ {
+		found[i].Notes = ""
+	}
+	return found, nil
 }
 
 func (u *Updater) expectedSum(ctx context.Context, release Release) (string, error) {
@@ -264,7 +237,7 @@ func trustedUpdateURL(raw, repo string) bool {
 		return false
 	}
 	if parsed.Host == "api.github.com" {
-		return parsed.Path == "/repos/"+repo+"/releases/latest" && parsed.RawQuery == "" || parsed.Path == "/repos/"+repo+"/releases" && parsed.RawQuery == "per_page=100"
+		return parsed.Path == "/repos/"+repo+"/releases" && parsed.RawQuery == "per_page=100"
 	}
 	return parsed.Host == "github.com" && parsed.RawQuery == "" && strings.HasPrefix(parsed.Path, "/"+repo+"/releases/download/") && !strings.Contains(parsed.Path, "/../")
 }

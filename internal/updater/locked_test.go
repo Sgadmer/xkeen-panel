@@ -84,10 +84,11 @@ func TestLockedUpdaterBlocksAllActionsWithoutIO(t *testing.T) {
 			u := New(opts)
 			opts.Locked = false // Options are copied; mutating the caller cannot unlock.
 			u.asset = testAsset // Prove the lock also holds on an otherwise supported platform.
-			u.settings = Settings{Auto: true, Previous: "v1.0.0"}
+			u.settings = Settings{Auto: true, Channel: channelPreview}
 			u.latest = &Release{Tag: "v100.0.0", assetURL: "https://example.invalid/binary", sumsURL: "https://example.invalid/sums"}
+			u.releases = []Release{*u.latest}
 			state, err := u.Check(context.Background())
-			if !errors.Is(err, ErrLocked) || !state.Locked || state.Supported || state.Auto || state.Available || state.Previous != "" || state.Latest != nil || state.Reason != ErrLocked.Error() {
+			if !errors.Is(err, ErrLocked) || !state.Locked || state.Supported || state.Auto || state.Available || len(state.Versions) != 0 || state.Latest != nil || state.Reason != ErrLocked.Error() {
 				t.Fatal("locked state exposed an updater action or wrong error")
 			}
 			if !state.LastCheck.IsZero() {
@@ -97,7 +98,8 @@ func TestLockedUpdaterBlocksAllActionsWithoutIO(t *testing.T) {
 				name string
 				run  func() error
 			}{
-				{"apply", u.Apply}, {"rollback", u.Rollback},
+				{"apply", u.Apply}, {"apply-version", func() error { return u.ApplyVersion("v100.0.0") }},
+				{"channel", func() error { return u.SetChannel("stable") }},
 				{"enable-auto", func() error { return u.SetAuto(true) }}, {"disable-auto", func() error { return u.SetAuto(false) }},
 				{"install", func() error { return u.install(context.Background(), *u.latest) }},
 				{"download", func() error { return u.download(context.Background(), u.latest.assetURL, u.newPath(), "sum") }},
@@ -150,8 +152,9 @@ func TestLockedUpdaterBackgroundAndRecoveryIgnoreEditableSettings(t *testing.T) 
 	}
 	before := captureLockedFiles(t, root)
 	u.asset = testAsset
-	u.settings = Settings{Auto: true, Previous: "v1.0.0"}
+	u.settings = Settings{Auto: true}
 	u.latest = &Release{Tag: "v9.0.0", assetURL: "https://example.invalid/binary", sumsURL: "https://example.invalid/sums"}
+	u.releases = []Release{*u.latest}
 	u.confirmAfter = 0
 	u.Startup(context.Background(), func() bool { healthy.Add(1); return true })
 	u.tick(context.Background(), time.Date(2026, 10, 27, 4, 0, 0, 0, time.Local))

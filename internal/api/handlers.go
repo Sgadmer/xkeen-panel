@@ -639,7 +639,16 @@ func (h *Handlers) HandleRestart(w http.ResponseWriter, r *http.Request) {
 	rt := h.detector.Runtime()
 	log.Printf("[RESTART-API] Кнопка рестарта нажата, xkeen=%s", rt.Dispatcher)
 
-	output, err := xkeen.RestartAndWait(rt.Dispatcher)
+	// A kill switch forbids leaving its routes without interception: the
+	// restart then runs with the internet paused for every device.
+	held := h.Cards != nil && h.Cards.CheckCoreInterruption() != nil
+	var output string
+	var err error
+	if held {
+		output, err = xkeen.RestartHeld(rt.Dispatcher, rt.Core)
+	} else {
+		output, err = xkeen.RestartAndWait(rt.Dispatcher)
+	}
 	if err != nil {
 		log.Printf("[RESTART-API] Ошибка: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
@@ -653,6 +662,7 @@ func (h *Handlers) HandleRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"message": "restarted",
+		"held":    held,
 		"output":  output,
 	})
 }
@@ -1039,6 +1049,9 @@ func (h *Handlers) HandleUpdateList(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Content string `json:"content"`
+		// Only run the checks: the page asks before it shows its own warning,
+		// so a refusal does not come after the wait.
+		Check bool `json:"check"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный формат запроса"})
@@ -1047,6 +1060,23 @@ func (h *Handlers) HandleUpdateList(w http.ResponseWriter, r *http.Request) {
 
 	if err := xkeen.ValidateList(req.Content, kind); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// These lists act before the core: what they let through no card and no
+	// kill switch sees.
+	name := chi.URLParam(r, "name")
+	if err := xkeen.CheckListPolicy(name, req.Content); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if h.Cards != nil {
+		if err := h.Cards.CheckBypassList(name, req.Content); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if req.Check {
+		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 		return
 	}
 

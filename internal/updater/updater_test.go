@@ -29,6 +29,7 @@ type fakeRelease struct {
 	reported string // what the binary prints for -version
 	sums     string // SHA256SUMS body; "" = computed, "-" = no file in the release
 	sig      string // SHA256SUMS.sig body; "" = made with the test key, "-" = no file in the release
+	beta     bool   // published as a prerelease
 }
 
 // The release key of the tests. Its public half replaces the embedded keys.
@@ -50,37 +51,47 @@ func (f fakeRelease) binary() []byte {
 	return []byte("#!/bin/sh\necho " + reported + "\n")
 }
 
-func (f fakeRelease) serve(t *testing.T) *httptest.Server {
+// serveReleases answers like GitHub for a repository holding these releases,
+// in the order given: the updater must not rely on the order of the list.
+func serveReleases(t *testing.T, rels ...fakeRelease) *httptest.Server {
 	t.Helper()
 
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assets := fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`, testAsset, srv.URL+"/dl/"+testAsset)
-		if f.sums != "-" {
-			assets += fmt.Sprintf(`,{"name":"SHA256SUMS","browser_download_url":%q}`, srv.URL+"/dl/SHA256SUMS")
+		if r.URL.Path == "/repos/owner/repo/releases" {
+			var list []string
+			for _, f := range rels {
+				base := srv.URL + "/dl/" + f.tag + "/"
+				assets := fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`, testAsset, base+testAsset)
+				if f.sums != "-" {
+					assets += fmt.Sprintf(`,{"name":"SHA256SUMS","browser_download_url":%q}`, base+"SHA256SUMS")
+				}
+				if f.sig != "-" {
+					assets += fmt.Sprintf(`,{"name":%q,"browser_download_url":%q}`, releasesig.Asset, base+releasesig.Asset)
+				}
+				list = append(list, fmt.Sprintf(`{"tag_name":%q,"body":"notes","html_url":"https://example/rel","prerelease":%t,"assets":[%s]}`, f.tag, f.beta, assets))
+			}
+			fmt.Fprint(w, "["+strings.Join(list, ",")+"]")
+			return
 		}
-		if f.sig != "-" {
-			assets += fmt.Sprintf(`,{"name":%q,"browser_download_url":%q}`, releasesig.Asset, srv.URL+"/dl/"+releasesig.Asset)
-		}
-		release := fmt.Sprintf(`{"tag_name":%q,"body":"notes","html_url":"https://example/rel","assets":[%s]}`, f.tag, assets)
-		switch r.URL.Path {
-		case "/repos/owner/repo/releases/latest":
-			fmt.Fprint(w, release)
-		case "/repos/owner/repo/releases":
-			fmt.Fprint(w, "["+release+"]")
-		case "/dl/" + testAsset:
-			w.Write(f.binary())
-		case "/dl/SHA256SUMS":
-			fmt.Fprint(w, f.sumsBody())
-		case "/dl/" + releasesig.Asset:
-			if f.sig != "" {
-				fmt.Fprint(w, f.sig)
+		for _, f := range rels {
+			switch strings.TrimPrefix(r.URL.Path, "/dl/"+f.tag+"/") {
+			case testAsset:
+				w.Write(f.binary())
+				return
+			case "SHA256SUMS":
+				fmt.Fprint(w, f.sumsBody())
+				return
+			case releasesig.Asset:
+				if f.sig != "" {
+					fmt.Fprint(w, f.sig)
+					return
+				}
+				fmt.Fprintln(w, releasesig.Sign(testReleaseKey, f.tag, []byte(f.sumsBody())))
 				return
 			}
-			fmt.Fprintln(w, releasesig.Sign(testReleaseKey, f.tag, []byte(f.sumsBody())))
-		default:
-			http.NotFound(w, r)
 		}
+		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -97,19 +108,20 @@ type harness struct {
 // force puts a release in front of the updater as if a check had accepted it:
 // what the installation itself refuses must not depend on the check.
 func (h *harness) force(rel fakeRelease) {
-	release := Release{Tag: rel.tag, assetURL: h.url + "/dl/" + testAsset}
+	base := h.url + "/dl/" + rel.tag + "/"
+	release := Release{Tag: rel.tag, assetURL: base + testAsset}
 	if rel.sums != "-" {
-		release.sumsURL = h.url + "/dl/SHA256SUMS"
+		release.sumsURL = base + "SHA256SUMS"
 	}
 	if rel.sig != "-" {
-		release.sigURL = h.url + "/dl/" + releasesig.Asset
+		release.sigURL = base + releasesig.Asset
 	}
 	h.u.mu.Lock()
 	h.u.latest = &release
 	h.u.mu.Unlock()
 }
 
-func newHarness(t *testing.T, current string, rel fakeRelease) *harness {
+func newHarness(t *testing.T, current string, rels ...fakeRelease) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	h := &harness{bin: filepath.Join(dir, "xkeen-panel"), dataDir: filepath.Join(dir, "data")}
@@ -118,7 +130,7 @@ func newHarness(t *testing.T, current string, rel fakeRelease) *harness {
 		t.Fatal(err)
 	}
 
-	srv := rel.serve(t)
+	srv := serveReleases(t, rels...)
 	h.url = srv.URL
 	h.u = New(Options{
 		Current:  current,
@@ -227,8 +239,112 @@ func TestCheckFindsNewerRelease(t *testing.T) {
 	if !state.Available || state.Latest == nil || state.Latest.Tag != "v1.3.1" || state.Latest.Notes != "notes" {
 		t.Errorf("state = %+v, want v1.3.1 available with notes", state)
 	}
-	if state.Auto {
-		t.Error("automatic updates require explicit opt-in")
+	// Automatic updates are switched on by the first-run wizard, not by a default.
+	if state.Auto || state.Channel != "stable" {
+		t.Errorf("auto = %v, channel = %q; want the stable channel and no automatic updates until chosen", state.Auto, state.Channel)
+	}
+}
+
+// The list to pick from holds signed releases of the channel only, newest
+// first, whatever order GitHub returns them in.
+func TestVersionsListSignedReleasesOfTheChannel(t *testing.T) {
+	rels := []fakeRelease{
+		{tag: "v1.3.0"},
+		{tag: "v1.4.0-beta.1", beta: true},
+		{tag: "v1.3.2", sig: "-"}, // published, not signed yet
+		{tag: "v1.3.1"},
+		{tag: "v1.2.0"},
+	}
+	tags := func(state State) string {
+		var list []string
+		for _, version := range state.Versions {
+			list = append(list, version.Tag)
+		}
+		return strings.Join(list, " ")
+	}
+	h := newHarness(t, "v1.3.0", rels...)
+
+	state, err := h.u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tags(state); got != "v1.3.1 v1.3.0 v1.2.0" || state.Latest == nil || state.Latest.Tag != "v1.3.1" || !state.Available {
+		t.Fatalf("stable: versions = %q, state = %+v", got, state)
+	}
+
+	if err := h.u.SetChannel("preview"); err != nil {
+		t.Fatal(err)
+	}
+	if state := h.u.State(); state.Channel != "preview" || state.Latest != nil || len(state.Versions) != 0 || !state.LastCheck.IsZero() {
+		t.Fatalf("the stable list outlived the channel change: %+v", state)
+	}
+	state, err = h.u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tags(state); got != "v1.4.0-beta.1 v1.3.1 v1.3.0 v1.2.0" || state.Latest.Tag != "v1.4.0-beta.1" || !state.Versions[0].Prerelease {
+		t.Fatalf("preview: versions = %q, state = %+v", got, state)
+	}
+
+	reloaded := New(Options{Current: "v1.3.0", BinPath: h.bin, DataDir: h.dataDir, Repo: "owner/repo"})
+	if reloaded.State().Channel != "preview" {
+		t.Error("the chosen channel did not survive a restart")
+	}
+	if err := h.u.SetChannel("nightly"); err == nil {
+		t.Error("an unknown channel was accepted")
+	}
+}
+
+func TestApplyVersionRefusesWhatIsNotListed(t *testing.T) {
+	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.0"}, fakeRelease{tag: "v1.3.2", sig: "-"}, fakeRelease{tag: "v1.4.0-beta.1", beta: true})
+	if _, err := h.u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for name, tag := range map[string]string{"empty": "", "running": "v1.3.0", "unsigned": "v1.3.2", "other channel": "v1.4.0-beta.1", "unknown": "v9.9.9"} {
+		if err := h.u.ApplyVersion(tag); err == nil {
+			t.Errorf("%s: version %q was accepted for installation", name, tag)
+		}
+	}
+	assertUntouched(t, h)
+}
+
+// Going back to an older version is the owner's decision: the automatic update
+// must not undo it the next night.
+func TestApplyVersionInstallsOlderReleaseAndKeepsIt(t *testing.T) {
+	requirePOSIXSmokeTest(t)
+	h := newHarness(t, "v1.3.1", fakeRelease{tag: "v1.3.1"}, fakeRelease{tag: "v1.3.0"})
+	if _, err := h.u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.u.ApplyVersion("v1.3.0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.u.State().Installing; got != "v1.3.0" {
+		t.Errorf("installing = %q, want the picked version", got)
+	}
+	waitFor(t, "restart", func() bool { return h.restarts.Load() == 1 })
+
+	if got := h.binContent(t); !strings.Contains(got, "echo v1.3.0") {
+		t.Errorf("binary = %q, want the picked release", got)
+	}
+	older := New(Options{Current: "v1.3.0", BinPath: h.bin, DataDir: h.dataDir, AutoHour: 4, Repo: "owner/repo"})
+	if got := older.State().Skip; got != "v1.3.1" {
+		t.Errorf("skip = %q; the automatic update would put v1.3.1 back", got)
+	}
+}
+
+// A build put on the router past the updater leaves nothing to skip once it
+// is not behind the skipped release.
+func TestStaleSkipIsDroppedAtStart(t *testing.T) {
+	for current, want := range map[string]string{"v1.3.0": "v1.3.1", "v1.3.1": "", "v1.4.0": ""} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "update.json"), []byte(`{"auto":true,"auto_set":true,"repository":"owner/repo","skip":"v1.3.1"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if got := New(Options{Current: current, DataDir: dir, Repo: "owner/repo"}).State().Skip; got != want {
+			t.Errorf("running %s: skip = %q, want %q", current, got, want)
+		}
 	}
 }
 
@@ -273,9 +389,6 @@ func TestApplyInstallsAndRestarts(t *testing.T) {
 	}
 	if _, err := os.Stat(h.u.pendingPath()); err != nil {
 		t.Error("no pending marker — the guard could not tell a failed start")
-	}
-	if got := h.u.State().Previous; got != "v1.3.0" {
-		t.Errorf("previous = %q, want v1.3.0 offered for rollback", got)
 	}
 }
 
@@ -476,47 +589,83 @@ func TestStartupDoesNotConfirmUnhealthyPanel(t *testing.T) {
 	}
 }
 
-func TestRollbackRestoresPreviousAndSkipsCurrent(t *testing.T) {
-	h := newHarness(t, "v1.3.1", fakeRelease{tag: "v1.3.1"})
-	if err := os.WriteFile(h.bin+".prev", []byte("v1.3.0 binary"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	h.u.settings.Previous = "v1.3.0"
-
-	if got := h.u.State().Previous; got != "v1.3.0" {
-		t.Fatalf("previous = %q, want v1.3.0", got)
-	}
-	if err := h.u.Rollback(); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "restart", func() bool { return h.restarts.Load() == 1 })
-
-	if got := h.binContent(t); got != "v1.3.0 binary" {
-		t.Errorf("binary = %q, want the previous version", got)
-	}
-	if h.u.State().Skip != "v1.3.1" {
-		t.Error("automatic updates would reinstall the version rolled back from")
-	}
-}
-
-func TestRollbackWithoutPrevious(t *testing.T) {
-	h := newHarness(t, "v1.3.1", fakeRelease{tag: "v1.3.1"})
-	h.u.settings.Previous = "v1.3.0" // recorded, but the file is gone
-
-	if err := h.u.Rollback(); err == nil {
-		t.Error("rollback succeeded with no previous binary on disk")
-	}
-}
-
 func TestSetAutoPersists(t *testing.T) {
 	h := newHarness(t, "v1.3.0", fakeRelease{tag: "v1.3.0"})
 	if err := h.u.SetAuto(false); err != nil {
 		t.Fatal(err)
 	}
 
-	reloaded := New(Options{Current: "v1.3.0", BinPath: h.bin, DataDir: h.dataDir})
+	reloaded := New(Options{Current: "v1.3.0", BinPath: h.bin, DataDir: h.dataDir, Repo: "owner/repo"})
 	if reloaded.State().Auto {
 		t.Error("automatic updates came back on after a restart")
+	}
+}
+
+// update.json written before automatic updates became the default holds
+// "auto": false for everyone who never touched the switch.
+// An update of the panel never changes automatic updates: what the file says
+// stays, and a router without the file keeps them off.
+func TestPanelUpdateKeepsTheAutoSetting(t *testing.T) {
+	for raw, want := range map[string]bool{
+		``: false,
+		`{"auto":false,"repository":"owner/repo","previous":"v1.2.0"}`: false,
+		`{"auto":true,"repository":"owner/repo"}`:                      true,
+		`{"auto":false,"auto_set":true,"repository":"owner/repo"}`:     false,
+		`{"auto":true,"auto_set":true,"repository":"owner/repo"}`:      true,
+	} {
+		dir := t.TempDir()
+		if raw != "" {
+			if err := os.WriteFile(filepath.Join(dir, "update.json"), []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got := New(Options{Current: "v1.3.0", DataDir: dir, Repo: "owner/repo"}).State().Auto; got != want {
+			t.Errorf("%q: auto = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// The first-run wizard turns automatic updates on, once.
+func TestWizardOffersAutoUpdatesOnce(t *testing.T) {
+	opts := Options{Current: "v1.3.0", DataDir: t.TempDir(), Repo: "owner/repo"}
+	u := New(opts)
+	if !u.AutoOffered() {
+		t.Fatal("a fresh install does not offer automatic updates")
+	}
+	if err := u.SetAutoDefault(true); err != nil {
+		t.Fatal(err)
+	}
+	if u = New(opts); !u.State().Auto || u.AutoOffered() {
+		t.Fatal("the wizard's choice was not kept")
+	}
+
+	// The owner switches them off; the wizard, run again, leaves that alone.
+	if err := u.SetAuto(false); err != nil {
+		t.Fatal(err)
+	}
+	if u.AutoOffered() {
+		t.Fatal("the offer came back after the owner's choice")
+	}
+	if err := u.SetAutoDefault(true); err != nil {
+		t.Fatal(err)
+	}
+	if New(opts).State().Auto {
+		t.Fatal("the wizard undid the owner's choice")
+	}
+
+	// Declined in the wizard: off, and not offered again.
+	declined := Options{Current: "v1.3.0", DataDir: t.TempDir(), Repo: "owner/repo"}
+	u = New(declined)
+	if err := u.SetAutoDefault(false); err != nil {
+		t.Fatal(err)
+	}
+	if u = New(declined); u.State().Auto || u.AutoOffered() {
+		t.Fatal("a declined offer was not remembered")
+	}
+
+	locked := New(Options{Current: "v1.3.0", DataDir: t.TempDir(), Locked: true})
+	if locked.AutoOffered() || locked.SetAutoDefault(true) != ErrLocked {
+		t.Fatal("a build without updates offered them")
 	}
 }
 

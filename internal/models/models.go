@@ -181,6 +181,7 @@ type Status struct {
 	ProcessUnknown bool      `json:"process_unknown,omitempty"`
 	Selective      bool      `json:"selective,omitempty"` // probe targets the VPN route for the blocklist
 	Restarting     bool      `json:"restarting"`
+	Held           bool      `json:"held,omitempty"` // the internet is paused for devices: a restart under a kill switch
 	CurrentServer  string    `json:"current_server"`
 	Protocol       string    `json:"protocol"`
 	Latency        int       `json:"latency_ms"`
