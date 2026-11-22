@@ -19,5 +19,13 @@ jobs:
           node-version: '24'
       - run: python3 scripts/check-public-source.py --tracked-only
       - run: cd frontend && npm ci && npm run build
-      - run: go test ./...
+      # A failed test is repeated as an annotation, so the reason is on the run
+      # page itself and does not need the log.
+      - name: go test ./...
+        run: |
+          set -o pipefail
+          go test ./... 2>&1 | tee go-test.log || {
+            grep -E '^\s*--- FAIL|^FAIL|^panic:|_test\.go:[0-9]+:' go-test.log | head -n 10 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          }
       - run: python3 -m unittest discover -s installer/tests -v
