@@ -175,6 +175,11 @@ func (p profile) pool(id string) *MultiPool {
 			return &p.pools[i]
 		}
 	}
+	for i := range p.sourcePools {
+		if p.sourcePools[i].ID == id {
+			return &p.sourcePools[i]
+		}
+	}
 	pool := builtinPool(id)
 	if id == allPoolID {
 		pool.limit = normalizeAutoLimit(p.autoLimit)
@@ -238,7 +243,7 @@ func (c *Controller) EditMultiPool(ctx context.Context, id string, spec *PoolSpe
 	if err != nil {
 		return MultiPool{}, err
 	}
-	if builtinPool(id) != nil {
+	if builtinPool(id) != nil || p.sourcePool(id) != "" {
 		return MultiPool{}, errors.New("встроенный пул нельзя изменить")
 	}
 	pool := p.pool(id)

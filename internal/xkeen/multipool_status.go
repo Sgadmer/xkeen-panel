@@ -84,14 +84,42 @@ func measuredPoolMember(entries map[string]memberObservation) string {
 }
 
 func CardPoolMember(ctx context.Context, rt Runtime, id string, port int) string {
+	member, _ := CardPoolState(ctx, rt, id, port)
+	return member
+}
+
+// CardPoolState returns the member the pool worker uses now and the delay the
+// worker itself measured for every member, in milliseconds; -1 marks a member
+// the worker considers dead. These are the numbers the choice is made from.
+func CardPoolState(ctx context.Context, rt Runtime, id string, port int) (string, map[string]int) {
 	socket := poolStatusSocket(filepath.Join(filepath.Dir(rt.XrayConfDir), "xkeen-panel-cards"), id, port)
 	if socket == "" {
-		return ""
+		return "", nil
 	}
-	return readPoolMetrics(ctx, socket)
+	entries := readPoolObservations(ctx, socket)
+	delays := make(map[string]int, len(entries))
+	for tag, v := range entries {
+		if !IsProfileInternalTag(tag) {
+			continue
+		}
+		member, ok := strings.CutPrefix(tag[69:], "ob-member-")
+		if !ok || !profileHashPattern.MatchString(member) {
+			continue
+		}
+		if !v.Alive || v.Delay <= 0 || v.Delay > 600000 {
+			delays[member] = -1
+		} else {
+			delays[member] = int(v.Delay)
+		}
+	}
+	return measuredPoolMember(entries), delays
 }
 
 func readPoolMetrics(ctx context.Context, socket string) string {
+	return measuredPoolMember(readPoolObservations(ctx, socket))
+}
+
+func readPoolObservations(ctx context.Context, socket string) map[string]memberObservation {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	transport := &http.Transport{DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -100,12 +128,12 @@ func readPoolMetrics(ctx context.Context, socket string) string {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/debug/vars", nil)
 	res, err := transport.RoundTrip(req)
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer res.Body.Close()
 	var state struct{ Observatory map[string]memberObservation }
 	if res.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&state) != nil {
-		return ""
+		return nil
 	}
-	return measuredPoolMember(state.Observatory)
+	return state.Observatory
 }

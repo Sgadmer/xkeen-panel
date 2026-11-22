@@ -193,9 +193,18 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
         const key = memberKey({ source_id: server.source_id || 'legacy', target_id: server.target_id })
         if (!choices.has(key)) choices.set(key, server)
     }
+    // The list follows the subscriptions picked in the conditions until the owner picks another view.
+    const [listSource, setListSource] = useState<string | null>(null)
+    const ruleSources = filterEnabled && !allSources ? sourceIds : []
+    const shownSources = listSource === null ? ruleSources : listSource ? [listSource] : []
+    const listValue = listSource ?? (ruleSources.length === 1 ? ruleSources[0] : ruleSources.length ? RULE_SOURCES : '')
+    const byRules = (server: Server) => filterEnabled && !excluded.includes(serverCountry(server))
+        && (allSources || sourceIds.includes(server.source_id || 'legacy'))
+        && (allCountries || countries.includes(serverCountry(server)))
     const normalized = search.trim().toLocaleLowerCase('ru')
     const matches = [...choices.entries()].filter(([key, server]) =>
         (!selectedOnly || selectedKeys.has(key)) &&
+        (selectedOnly || !shownSources.length || shownSources.includes(server.source_id || 'legacy')) &&
         [server.name, server.source_name, countryLabel(serverCountry(server))].join(' ').toLocaleLowerCase('ru').includes(normalized))
     const missing = members.filter(member => !choices.has(memberKey(member)))
     const rulesValid = !filterEnabled || (allSources || !!sourceIds.length) && (allCountries || !!countries.length)
@@ -266,14 +275,25 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
             <div className='space-y-1 py-2'>
                 <input type='search' aria-label='Найти конфиг' placeholder='Название, страна или подписка' className={field}
                     value={search} onChange={e => setSearch(e.target.value)} />
+                {sourceOptions.length > 1 && <label className='flex min-h-12 flex-wrap items-center justify-between gap-2 text-sm'>
+                    Показывать подписку
+                    <select className='min-h-10 max-w-full rounded-xl border border-white/10 bg-fill px-2' value={listValue}
+                        onChange={e => setListSource(e.target.value === RULE_SOURCES ? null : e.target.value)}>
+                        <option value=''>Все подписки</option>
+                        {ruleSources.length > 1 && <option value={RULE_SOURCES}>Выбранные в условиях</option>}
+                        {sourceOptions.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}
+                    </select>
+                </label>}
                 <Choice checked={selectedOnly} disabled={false} label='Показать только выбранные' onChange={() => setSelectedOnly(!selectedOnly)} />
             </div>
             <div className='max-h-72 overflow-auto overscroll-contain divide-y divide-white/10'>
                 {matches.map(([key, server]) => {
                     const code = serverCountry(server)
                     const selected = selectedKeys.has(key)
-                    return <Choice key={key} checked={selected} disabled={action.isPending || excluded.includes(code) && !selected}
-                        label={server.name} hint={[server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна'].filter(Boolean).join(' · ')}
+                    // Already in the pool through the conditions: nothing to tick by hand.
+                    const matched = !selected && byRules(server)
+                    return <Choice key={key} checked={selected || matched} disabled={action.isPending || matched || excluded.includes(code) && !selected}
+                        label={server.name} hint={[server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна', matched && 'Уже в пуле по условиям'].filter(Boolean).join(' · ')}
                         onChange={() => setMembers(prev => selected ? prev.filter(item => memberKey(item) !== key) :
                             [...prev, { source_id: server.source_id || 'legacy', target_id: server.target_id! }])} />
                 })}
@@ -302,6 +322,8 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
         </Group>}
     </>
 }
+
+const RULE_SOURCES = '__rules'
 
 function memberKey(member: PoolMember) {
     return member.source_id + ':' + member.target_id

@@ -77,6 +77,8 @@ export type PoolNode = {
     port: number
     country?: string
     latency_ms: number
+    /** Measured by the router's own pool worker; the choice is made from it. -1: no answer. */
+    router_latency_ms?: number
     excluded_until?: string
 }
 
@@ -168,7 +170,7 @@ export type PoolMember = { source_id: string; target_id: string }
 export type AutoScope = {
     id: string
     name: string
-    kind: 'all' | 'country' | 'custom'
+    kind: 'all' | 'country' | 'source' | 'custom'
     country?: string
     member_count: number
     limit?: number

@@ -111,7 +111,8 @@ function savedTab(): Tab {
 
 export function ServersPage() {
     const servers = useServers().data ?? []
-    const pool = usePool().data
+    const poolQuery = usePool()
+    const pool = poolQuery.data
     const sources = useServerSources().data
     const status = useStatus().data
     const mihomo = status?.core === 'mihomo' || pool?.core === 'mihomo'
@@ -132,6 +133,11 @@ export function ServersPage() {
         unavailableCountries.push(selectedScope)
     }
     const customScopes = scopes.filter(scope => scope.kind === 'custom')
+    const sourceScopes = scopes.filter(scope => scope.kind === 'source')
+    const shownScope = isAuto ? selectedScope ?? allLocations : undefined
+    // Only «Все локации» has a limit of its own; other pools take every server they hold.
+    const wholePool = shownScope && (shownScope.kind === 'source' || shownScope.kind === 'custom') ? shownScope : undefined
+    const routerMeasured = (pool?.nodes ?? []).some(node => node.router_latency_ms !== undefined)
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
     const sites = useSites().data
     const subscription = useSubscription().data
@@ -207,11 +213,13 @@ export function ServersPage() {
                     country: server ? serverCountry(server) : n.country,
                     protocol: server?.protocol,
                     source: server?.source_name,
-                    latency: server
+                    // The router picks by its own measurement, so that is the number to show.
+                    routerMeasured: n.router_latency_ms !== undefined,
+                    latency: n.router_latency_ms ?? (server
                         ? server.probe_kind === 'https'
                             ? server.latency_ms
                             : 0
-                        : n.latency_ms,
+                        : n.latency_ms),
                     current: n.tag === pool?.current_tag,
                     excluded: !!n.excluded_until,
                 }
@@ -412,11 +420,12 @@ export function ServersPage() {
                                 <ProbeButton label='Обновить пинг серверов автопула'
                                     disabled={checking || routeBusy || !(pool?.nodes ?? []).some(node => node.server_id >= 0)}
                                     measuring={(pool?.nodes ?? []).some(node => isPendingServer(node.server_id))}
-                                    onClick={() => check((pool?.nodes ?? []).map(node => node.server_id).filter(id => id >= 0))} />
+                                    onClick={() => { check((pool?.nodes ?? []).map(node => node.server_id).filter(id => id >= 0)); void poolQuery.refetch() }} />
                             </span>}
                             footer={
                                 isAuto
                                     ? 'Пул — это список серверов для выбора. Роутер проверяет, какой из них быстрее отвечает, и переключается сам, если сервер перестал работать.'
+                                        + (routerMeasured ? ' Задержку в этом списке измеряет сам роутер — по ней он и выбирает сервер. Во вкладке «Все серверы» показан отдельный замер панели, он может отличаться.' : '')
                                     : mihomo ? 'Выбор пула включит автоматический режим.' : 'Включите автовыбор, чтобы панель снова выбирала сервер сама.'
                             }
                         >
@@ -455,17 +464,35 @@ export function ServersPage() {
                                     onChange={e => setScope.mutate(e.target.value)}>
                                     {!isAuto && <option value='' disabled>Выберите пул…</option>}
                                     {allLocations && <option value={allLocations.id} disabled={!allLocations.member_count}>{scopeLabel(allLocations)}</option>}
-                                    {availableCountries.length > 0 && <optgroup label='Пулы стран'>{availableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
-                                    {customScopes.length > 0 && <optgroup label='Мультипулы'>
+                                    {customScopes.length > 0 && <optgroup label='Мои пулы'>
                                         {customScopes.map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)} · {item.member_count || 'нет подходящих серверов'}</option>)}
                                     </optgroup>}
+                                    {sourceScopes.length > 0 && <optgroup label='Пулы подписок'>
+                                        {sourceScopes.map(item => <option key={item.id} value={item.id} disabled={!item.member_count}>{scopeLabel(item)} · {item.member_count || 'нет подходящих серверов'}</option>)}
+                                    </optgroup>}
+                                    {availableCountries.length > 0 && <optgroup label='Пулы стран'>{availableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
                                     {unavailableCountries.length > 0 && <optgroup label='Недоступные страны'>{unavailableCountries.map(item => countryPoolOption(item, avoidCountries))}</optgroup>}
                                 </select>
                               </div>
                               <p id='auto-pool-scope-hint' className='mt-1 text-[13px] text-muted-foreground'>
-                                  Роутер выбирает быстрый сервер среди тех, которые в подписках помечены этой страной.
+                                  {shownScope?.kind === 'source' ? 'Роутер выбирает самый быстрый сервер только из этой подписки.'
+                                      : shownScope?.kind === 'custom' ? 'Роутер выбирает самый быстрый сервер из вашего пула.'
+                                      : shownScope?.kind === 'country' ? 'Роутер выбирает самый быстрый сервер среди тех, которые в подписках помечены этой страной.'
+                                      : 'Роутер выбирает самый быстрый сервер из всех подписок. Можно выбрать пул одной подписки, свой пул или страну.'}
                               </p>
                             </div>}
+                            {mihomo && wholePool && (
+                                <div className='flex flex-wrap items-center justify-between gap-2 py-3'>
+                                    <div className='min-w-0 flex-1'>
+                                        <p className='text-[15px] font-medium'>Лимит пула «{scopeLabel(wholePool)}»</p>
+                                        <p className='text-[13px] text-muted-foreground'>
+                                            Берутся все серверы этого пула. Лимит пула «Все локации»{allLocations?.limit ? ` (${allLocations.limit})` : ''} сохранён и вернётся вместе с ним.
+                                        </p>
+                                    </div>
+                                    <input type='number' readOnly disabled aria-label='Серверов в пуле' value={wholePool.member_count}
+                                        className='min-h-10 w-[5rem] rounded-xl border border-white/10 bg-fill px-2 text-center text-[16px] text-foreground tabular-nums opacity-60' />
+                                </div>
+                            )}
                             {mihomo && allLocations?.limit != null && allLocations.eligible_count != null
                                 && (!isAuto || (selectedScope ?? allLocations).kind === 'all') && (
                                 <AllLocationsLimit
@@ -481,14 +508,14 @@ export function ServersPage() {
                                     country={r.country}
                                     protocol={r.protocol}
                                     source={r.source}
-                                    latency={latencyFor(r.node.server_id) ?? r.latency}
+                                    latency={r.routerMeasured ? r.latency : latencyFor(r.node.server_id) ?? r.latency}
                                     measuring={isPendingServer(r.node.server_id)}
                                     current={r.current}
                                     excludedUntil={r.node.excluded_until}
                                     countryExcluded={avoidCountries.includes(r.country ?? '')}
                                     busy={routeBusy}
                                     probeBusy={checking || routeBusy || r.node.server_id < 0}
-                                    onCheck={() => check([r.node.server_id])}
+                                    onCheck={() => { check([r.node.server_id]); void poolQuery.refetch() }}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
                                     }

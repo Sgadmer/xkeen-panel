@@ -36,6 +36,45 @@ var countryPoolCodes = func() map[string]string {
 	return result
 }()
 
+// The chosen subscription pool remembers its subscription here, so the pool
+// stays known while the catalogue does not list that subscription.
+const autoScopeSourceKey = "x-xkeen-panel-auto-scope-source"
+
+func sourcePool(source, name string) MultiPool {
+	if name == "" {
+		name = "Подписка"
+	}
+	return MultiPool{ID: scopeHash("source:" + source), PoolSpec: PoolSpec{Name: name, SourceIDs: []string{source}, Countries: []string{}}}
+}
+
+// sourcePools lists one pool per subscription that has ordinary servers.
+func sourcePools(servers []models.Server) []MultiPool {
+	result := []MultiPool{}
+	seen := map[string]bool{}
+	for _, s := range servers {
+		if len(s.RawProfile) != 0 {
+			continue
+		}
+		source := memberKey(poolNode{server: s}).SourceID
+		if !seen[source] {
+			seen[source] = true
+			result = append(result, sourcePool(source, s.SourceName))
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+// sourcePool returns the subscription behind a built-in subscription pool.
+func (p profile) sourcePool(id string) string {
+	for _, pool := range p.sourcePools {
+		if pool.ID == id {
+			return pool.SourceIDs[0]
+		}
+	}
+	return ""
+}
+
 func builtinPool(id string) *MultiPool {
 	if id == allPoolID {
 		return &MultiPool{ID: id, PoolSpec: PoolSpec{Name: "Все локации"}}
@@ -87,6 +126,10 @@ func scopes(p profile, nodes []poolNode) []AutoScope {
 	result := []AutoScope{{ID: all.ID, Name: all.Name, Kind: "all", MemberCount: all.MemberCount, EligibleCount: all.EligibleCount, Limit: all.limit}}
 	for _, code := range countries {
 		result = append(result, countryScope(code, byCountry[code]))
+	}
+	for _, pool := range p.sourcePools {
+		pool.members(nodes)
+		result = append(result, AutoScope{ID: pool.ID, Name: pool.Name, Kind: "source", MemberCount: pool.MemberCount, EligibleCount: pool.EligibleCount})
 	}
 	for _, pool := range p.pools {
 		pool.members(nodes)
@@ -219,6 +262,11 @@ func (c *Controller) setScope(ctx context.Context, id string) error {
 	}
 	result, err := c.apply(ctx, defaultID, id, func(next *profile) error {
 		next.doc[autoScopeKey] = id
+		if source := next.sourcePool(id); source != "" {
+			next.doc[autoScopeSourceKey] = source
+		} else {
+			delete(next.doc, autoScopeSourceKey)
+		}
 		delete(next.doc, defaultSourceKey)
 		delete(next.doc, replacementKey)
 		return nil

@@ -139,6 +139,43 @@ func TestAutoScopesRankAllSourcesAndKeepExplicitOwnership(t *testing.T) {
 	t.Fatal("missing assigned empty country")
 }
 
+func TestSubscriptionPoolsTakeOnlyTheirSubscription(t *testing.T) {
+	a, b, other := poolServer("A", "DE", "10001"), poolServer("A", "NL", "10002"), poolServer("B", "DE", "10003")
+	a.SourceName, b.SourceName, other.SourceName = "Alpha", "Alpha", "Beta"
+	servers := []models.Server{a, b, other}
+	c := &Controller{}
+	p := profile{doc: map[string]interface{}{}, assigned: map[string]string{}, sourcePools: sourcePools(servers)}
+	id := scopeHash("source:A")
+	pool := p.pool(id)
+	if pool == nil || pool.Name != "Alpha" || p.sourcePool(id) != "A" || p.sourcePool(allPoolID) != "" {
+		t.Fatalf("subscription pool not resolved: %+v", pool)
+	}
+	// No limit of its own: every server of the subscription, none of another.
+	p.autoLimit = 1
+	members := pool.members(c.poolNodes(servers))
+	if len(members) != 2 || members[0].SourceID != "A" || members[1].SourceID != "A" {
+		t.Fatalf("subscription pool members: %+v", members)
+	}
+	found := 0
+	for _, scope := range scopes(p, c.poolNodes(servers)) {
+		if scope.Kind == "source" {
+			found++
+			if scope.ID == id && scope.MemberCount != 2 {
+				t.Fatalf("subscription scope count: %+v", scope)
+			}
+		}
+	}
+	if found != 2 {
+		t.Fatalf("wanted a scope per subscription, got %d", found)
+	}
+	if route, ok := c.portableRoute(p, id, servers); !ok || route.Kind != "source" || route.Name != "Alpha" {
+		t.Fatalf("portable route: %+v", route)
+	}
+	if got, err := resolveRoute(p, PortableRoute{Kind: "source", Name: "alpha"}, servers); err != nil || got != id {
+		t.Fatalf("resolved %q, %v", got, err)
+	}
+}
+
 func TestCountryCatalogueIndependentOfCurrentScopeAndLimit(t *testing.T) {
 	fast := poolServer("A", "DE", "10001")
 	fast.Latency = 5

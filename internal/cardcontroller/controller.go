@@ -169,13 +169,15 @@ func validAssignment(service, target string) bool {
 }
 
 type profile struct {
-	raw       []byte
-	doc       map[string]interface{}
-	assigned  map[string]string
-	pools     []MultiPool
-	autoLimit int
-	probeURL  string
-	api       coreAPI
+	raw      []byte
+	doc      map[string]interface{}
+	assigned map[string]string
+	pools    []MultiPool
+	// One built-in pool per subscription, rebuilt from the catalogue on every read.
+	sourcePools []MultiPool
+	autoLimit   int
+	probeURL    string
+	api         coreAPI
 }
 
 func (c *Controller) read() (profile, error) {
@@ -224,6 +226,17 @@ func (c *Controller) read() (profile, error) {
 	p.pools, err = readPools(p.doc)
 	if err != nil {
 		return p, err
+	}
+	if c.catalog != nil {
+		p.sourcePools = sourcePools(c.catalog())
+	}
+	// Keep the identity of the chosen subscription pool while its subscription
+	// is missing from the catalogue: an empty pool blocks, a lost one would be
+	// mistaken for a vanished server.
+	if source := str(p.doc[autoScopeSourceKey]); source != "" {
+		if id := scopeHash("source:" + source); id == str(p.doc[autoScopeKey]) && p.pool(id) == nil {
+			p.sourcePools = append(p.sourcePools, sourcePool(source, ""))
+		}
 	}
 	if raw, ok := p.doc[stateKey]; ok {
 		m, ok := raw.(map[string]interface{})

@@ -47,7 +47,7 @@ type PortableExclusion struct {
 }
 
 type PortableRoute struct {
-	Kind    string `json:"kind"` // direct | auto | country | server | pool
+	Kind    string `json:"kind"` // direct | auto | country | server | pool | source
 	Country string `json:"country,omitempty"`
 	Source  string `json:"source,omitempty"` // the subscription a server belongs to
 	Name    string `json:"name,omitempty"`   // of the server or of the multipool
@@ -118,6 +118,9 @@ func (c *Controller) portableRoute(p profile, target string, servers []models.Se
 		if pool.ID == target {
 			return PortableRoute{Kind: "pool", Name: pool.Name}, true
 		}
+	}
+	if p.sourcePool(target) != "" {
+		return PortableRoute{Kind: "source", Name: p.pool(target).Name}, true
 	}
 	for _, server := range servers {
 		if xkeen.ServiceTargetID(server) == target {
@@ -201,6 +204,8 @@ func routeText(route PortableRoute) string {
 		return "пул страны " + strings.ToUpper(route.Country)
 	case "pool":
 		return "мультипул «" + route.Name + "»"
+	case "source":
+		return "пул подписки «" + route.Name + "»"
 	}
 	if route.Source != "" {
 		return "сервер «" + route.Name + "» (" + route.Source + ")"
@@ -228,6 +233,13 @@ func resolveRoute(p profile, route PortableRoute, servers []models.Server) (stri
 			}
 		}
 		return "", fmt.Errorf("мультипула «%s» здесь нет", route.Name)
+	case "source":
+		for _, pool := range p.sourcePools {
+			if strings.EqualFold(pool.Name, route.Name) {
+				return pool.ID, nil
+			}
+		}
+		return "", fmt.Errorf("подписки «%s» здесь нет", route.Name)
 	case "server":
 		found := ""
 		for _, server := range servers {

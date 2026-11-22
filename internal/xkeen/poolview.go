@@ -14,13 +14,16 @@ func (t Topology) Selector() string {
 }
 
 type PoolNodeView struct {
-	Tag           string     `json:"tag"`
-	ServerID      int        `json:"server_id"` // -1 when the node is not in the subscription
-	Name          string     `json:"name"`
-	Address       string     `json:"address"`
-	Port          int        `json:"port"`
-	Country       string     `json:"country,omitempty"`
-	Latency       int        `json:"latency_ms"`
+	Tag      string `json:"tag"`
+	ServerID int    `json:"server_id"` // -1 when the node is not in the subscription
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Country  string `json:"country,omitempty"`
+	Latency  int    `json:"latency_ms"`
+	// RouterLatency is the delay the pool worker measured itself: the number
+	// the automatic choice is made from. -1 means the worker got no answer.
+	RouterLatency *int       `json:"router_latency_ms,omitempty"`
 	ExcludedUntil *time.Time `json:"excluded_until,omitempty"`
 }
 

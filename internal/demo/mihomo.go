@@ -36,7 +36,7 @@ func demoServerRows() []object {
 	rows := []object{}
 	for i, server := range demoMihomoServers {
 		row := object{"id": i, "name": server.name, "address": "server.example.com", "port": 443, "protocol": "vless", "active": i == 0, "latency_ms": server.latency,
-			"country": server.country, "probe_kind": "https", "source_name": server.source, "target_id": "srv-" + server.country + "-" + string(rune('a'+i))}
+			"country": server.country, "probe_kind": "https", "source_name": server.source, "source_id": map[string]string{"Северный ветер": "north", "Южный мост": "south"}[server.source], "target_id": "srv-" + server.country + "-" + string(rune('a'+i))}
 		if i < 8 {
 			row["pool_tag"] = "pool-" + string(rune('a'+i))
 		}
@@ -157,7 +157,9 @@ func demoMihomo(path string) (data interface{}, ok bool) {
 		return object{"pools": []object{{"id": "pool-video", "name": "Видео", "source_ids": []string{"north"}, "countries": []string{"NL", "SE"}, "member_count": 2}},
 			"scopes": []object{{"id": "pool-all", "name": "Все локации", "kind": "all", "member_count": 8, "limit": 8, "eligible_count": 9},
 				{"id": "country-SE", "name": "Швеция", "kind": "country", "country": "SE", "member_count": 1}, {"id": "country-NL", "name": "Нидерланды", "kind": "country", "country": "NL", "member_count": 2},
-				{"id": "country-DE", "name": "Германия", "kind": "country", "country": "DE", "member_count": 2}, {"id": "pool-video", "name": "Видео", "kind": "custom", "member_count": 2}}}, true
+				{"id": "country-DE", "name": "Германия", "kind": "country", "country": "DE", "member_count": 2},
+				{"id": "source-north", "name": "Северный ветер", "kind": "source", "member_count": 5}, {"id": "source-south", "name": "Южный мост", "kind": "source", "member_count": 5},
+				{"id": "pool-video", "name": "Видео", "kind": "custom", "member_count": 2}}}, true
 	case "/api/account":
 		return object{"username": "admin", "recovery_codes_left": 8, "passkeys": 0, "remember": true}, true
 	case "/api/kill-switch/events":

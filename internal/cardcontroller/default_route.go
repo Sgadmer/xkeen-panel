@@ -197,7 +197,12 @@ func (c *Controller) currentDefault(ctx context.Context) (profile, DefaultRoute,
 				continue
 			}
 			port, _ := proxy["port"].(int)
-			id := xkeen.CardPoolMember(ctx, c.rt, strings.TrimPrefix(endpoint, nodePrefix+state.ScopeID+"-"), port)
+			id, delays := xkeen.CardPoolState(ctx, c.rt, strings.TrimPrefix(endpoint, nodePrefix+state.ScopeID+"-"), port)
+			for i := range state.Nodes {
+				if delay, measured := delays[state.Nodes[i].Tag]; measured {
+					state.Nodes[i].RouterLatency = &delay
+				}
+			}
 			if id != "" {
 				for _, node := range state.Nodes {
 					if node.Tag == id {

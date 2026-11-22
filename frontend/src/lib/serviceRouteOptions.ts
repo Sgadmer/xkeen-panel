@@ -28,6 +28,7 @@ const poolGroups = {
     all: { title: 'Автовыбор', order: 0 },
     country: { title: 'Пулы стран', order: 1 },
     custom: { title: 'Мультипулы', order: 2 },
+    source: { title: 'Пулы подписок', order: 2 },
     pool: { title: 'Пулы', order: 3 },
 }
 
