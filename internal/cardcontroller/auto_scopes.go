@@ -65,6 +65,24 @@ func sourcePools(servers []models.Server) []MultiPool {
 	return result
 }
 
+// CheckSourcePoolUnused refuses to remove a subscription while its own pool
+// serves a route: the pool would become empty and that traffic would stop.
+func (c *Controller) CheckSourcePoolUnused(source string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return err
+	}
+	id := scopeHash("source:" + source)
+	for _, target := range p.assigned {
+		if target == id {
+			return errors.New("пул этой подписки выбран для автовыбора. Сначала выберите другой пул на вкладке «Автовыбор»")
+		}
+	}
+	return nil
+}
+
 // sourcePool returns the subscription behind a built-in subscription pool.
 func (p profile) sourcePool(id string) string {
 	for _, pool := range p.sourcePools {

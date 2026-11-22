@@ -233,6 +233,10 @@ export function ServersPage() {
             )
     }, [pool, servers, query])
 
+    const routerLatency = useMemo(() => new Map((pool?.nodes ?? [])
+        .filter(node => node.server_id >= 0 && node.router_latency_ms !== undefined)
+        .map(node => [node.server_id, node.router_latency_ms!])), [pool])
+
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
@@ -240,7 +244,8 @@ export function ServersPage() {
         busy: routeBusy,
         probeBusy: checking || routeBusy,
         measuring: isPendingServer(s.id),
-        liveLatency: latencyFor(s.id),
+        // A pool server shows the router's own number in every list.
+        liveLatency: routerLatency.get(s.id) ?? latencyFor(s.id),
         onCheck: () => check([s.id]),
         onSelect: () => select.mutate(s.id),
         onSetCountry: (c: string) =>
@@ -425,7 +430,7 @@ export function ServersPage() {
                             footer={
                                 isAuto
                                     ? 'Пул — это список серверов для выбора. Роутер проверяет, какой из них быстрее отвечает, и переключается сам, если сервер перестал работать.'
-                                        + (routerMeasured ? ' Задержку в этом списке измеряет сам роутер — по ней он и выбирает сервер. Во вкладке «Все серверы» показан отдельный замер панели, он может отличаться.' : '')
+                                        + (routerMeasured ? ' Задержку в этом списке измеряет сам роутер — по ней он и выбирает сервер. У серверов вне пула показан замер панели.' : '')
                                     : mihomo ? 'Выбор пула включит автоматический режим.' : 'Включите автовыбор, чтобы панель снова выбирала сервер сама.'
                             }
                         >

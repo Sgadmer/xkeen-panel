@@ -204,6 +204,11 @@ func (h *Handlers) HandleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
+		if h.Cards != nil {
+			if err := h.Cards.CheckSourcePoolUnused(id); err != nil {
+				return nil, err
+			}
+		}
 		if h.Cards != nil && source.URL != "" {
 			tx.restoreNative, err = h.Cards.DetachSource(r.Context(), source.URL)
 			if err != nil {
