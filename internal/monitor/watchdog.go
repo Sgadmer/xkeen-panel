@@ -66,6 +66,7 @@ type Watchdog struct {
 	lastPoolRecheck time.Time
 	searching       bool
 	routesDown      []string
+	routesFailing   []string // cards whose route failed the last check alone
 
 	// When the route was last reported as working. A line for every check
 	// would push the events worth reading out of the journal.
@@ -157,6 +158,24 @@ func routeSummary(name string, latency int) string {
 		return fmt.Sprintf(" · %s, %d мс", name, latency)
 	}
 	return " · " + name
+}
+
+// confirmedDown keeps the cards whose route failed this check and the one
+// before it. A single miss is not an outage: a route that carried Claude
+// without a hitch was reported down eight times an evening, each time for one
+// check, while the panel reloaded Mihomo or a probe got lost on the way.
+func confirmedDown(before, now []string) []string {
+	failed := make(map[string]bool, len(before))
+	for _, name := range before {
+		failed[name] = true
+	}
+	down := []string{}
+	for _, name := range now {
+		if failed[name] {
+			down = append(down, name)
+		}
+	}
+	return down
 }
 
 // logRouteChanges writes one line when cards lose their VPN route and one
@@ -277,15 +296,23 @@ func (w *Watchdog) check(restoreSelection bool) {
 			routes = serviceProbe(ctx, w.config.CheckURL)
 			cancel()
 		}
-		down, poolDown := []string{}, false
+		failed, onPool := []string{}, map[string]bool{}
 		for _, route := range routes {
 			if !route.OK {
-				down = append(down, route.Services...)
-				poolDown = poolDown || route.Pool
+				failed = append(failed, route.Services...)
+				for _, name := range route.Services {
+					onPool[name] = route.Pool
+				}
 			}
 		}
 		defaultPoolDown := err != nil && result.Checked && internet && result.Pool
 		w.mu.Lock()
+		down := confirmedDown(w.routesFailing, failed)
+		w.routesFailing = failed
+		poolDown := false
+		for _, name := range down {
+			poolDown = poolDown || onPool[name]
+		}
 		w.lastCheck, w.mihomoName, w.mihomoProtocol = time.Now(), result.Name, result.Protocol
 		w.mihomoSelective, w.mihomoPool = result.Selective, result.Pool
 		w.connected, w.lastLatency, w.internet = err == nil, result.Latency, internet

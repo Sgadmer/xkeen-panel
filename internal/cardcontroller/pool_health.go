@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
 )
 
@@ -68,40 +69,18 @@ func (s *silentMembers) forget(ids []string) {
 // previous one until they end. Closing them used to break every download and
 // call through the pool on each replacement.
 func (c *Controller) ReplaceSilentPoolMembers(ctx context.Context) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.soft = true
-	defer func() { c.soft = false }()
-	p, err := c.read()
-	if err != nil {
+	p, delays, err := c.allPoolState(ctx)
+	if err != nil || delays == nil {
 		return 0, err
 	}
-	used := false
-	for _, id := range p.assigned {
-		used = used || id == allPoolID
-	}
-	if !used || p.pool(allPoolID) == nil {
-		return 0, nil
-	}
-	prefix := nodePrefix + allPoolID + "-"
 	var silent []string
 	alive := 0
-	for _, raw := range list(p.doc["proxies"]) {
-		proxy := object(raw)
-		name := str(proxy["name"])
-		if !strings.HasPrefix(name, prefix) {
-			continue
+	for tag, ms := range delays {
+		if ms > 0 {
+			alive++
+		} else {
+			silent = append(silent, tag)
 		}
-		port, _ := proxy["port"].(int)
-		_, delays := xkeen.CardPoolState(ctx, c.rt, strings.TrimPrefix(name, prefix), port)
-		for tag, ms := range delays {
-			if ms > 0 {
-				alive++
-			} else {
-				silent = append(silent, tag)
-			}
-		}
-		break
 	}
 	if alive == 0 || len(silent) == 0 {
 		return 0, nil
@@ -110,6 +89,13 @@ func (c *Controller) ReplaceSilentPoolMembers(ctx context.Context) (int, error) 
 	if len(fresh) == 0 {
 		return 0, nil
 	}
+	// The check of the newcomers takes seconds; the rest of the panel must not
+	// wait for it.
+	c.vetNewcomers(ctx, *p.pool(allPoolID), delays)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.soft = true
+	defer func() { c.soft = false }()
 	_, err = c.apply(ctx, "", allPoolID, func(next *profile) error {
 		if !bytes.Equal(next.raw, p.raw) {
 			return errors.New("конфигурация изменилась параллельно")
@@ -121,4 +107,73 @@ func (c *Controller) ReplaceSilentPoolMembers(ctx context.Context) (int, error) 
 		return 0, err
 	}
 	return len(fresh), nil
+}
+
+// allPoolState reads what the «Все локации» worker measured for each member.
+// No delays means no pool in use, or a worker that cannot tell yet.
+func (c *Controller) allPoolState(ctx context.Context) (profile, map[string]int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return p, nil, err
+	}
+	used := false
+	for _, id := range p.assigned {
+		used = used || id == allPoolID
+	}
+	if !used || p.pool(allPoolID) == nil {
+		return p, nil, nil
+	}
+	prefix := nodePrefix + allPoolID + "-"
+	for _, raw := range list(p.doc["proxies"]) {
+		proxy := object(raw)
+		name := str(proxy["name"])
+		if strings.HasPrefix(name, prefix) {
+			port, _ := proxy["port"].(int)
+			_, delays := xkeen.CardPoolState(ctx, c.rt, strings.TrimPrefix(name, prefix), port)
+			return p, delays, nil
+		}
+	}
+	return p, nil, nil
+}
+
+// The servers that would come into the pool were measured by the panel up to
+// six hours ago, and many are dead by the time they are needed: every one of
+// them used to cost another rebuild of the pool, eight in two minutes on our
+// router. So the newcomers are checked first, the way the panel checks every
+// server, and those that fail go to the back of the pool as well. A few rounds
+// at most; whatever is left unchecked the router will judge itself.
+const vetRounds = 3
+
+func (c *Controller) vetNewcomers(ctx context.Context, pool MultiPool, current map[string]int) {
+	passed := map[string]bool{}
+	for round := 0; round < vetRounds && ctx.Err() == nil; round++ {
+		var newcomers []models.Server
+		for _, s := range pool.members(c.poolNodes(c.catalog())) {
+			id := xkeen.ServiceTargetID(s)
+			if _, inPool := current[id]; !inPool && !passed[id] && !c.silent.has(id) {
+				newcomers = append(newcomers, s)
+			}
+		}
+		if len(newcomers) == 0 {
+			return
+		}
+		checked, err := c.CheckServers(newcomers, xkeen.ProbeOptions{Context: ctx, Timeout: 5 * time.Second, Concurrency: 4, StateDir: c.stateDir})
+		if err != nil {
+			return
+		}
+		var failed []string
+		for _, s := range checked {
+			if id := xkeen.ServiceTargetID(s); s.ProbeKind == "https" && s.Latency >= 0 {
+				passed[id] = true
+			} else {
+				failed = append(failed, id)
+			}
+		}
+		if len(failed) == 0 {
+			return
+		}
+		c.silent.mark(failed)
+	}
 }

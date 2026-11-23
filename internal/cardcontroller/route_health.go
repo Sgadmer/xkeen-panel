@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
@@ -62,6 +63,16 @@ func (c *Controller) ProbeServiceRoutes(ctx context.Context, checkURL string) []
 			sort.Strings(route.Services)
 			path := "/proxies/" + url.PathEscape(endpoint) + "/delay?timeout=8000&url=" + url.QueryEscape(checkURL)
 			for attempt := 0; attempt < 2 && !route.OK; attempt++ {
+				// A miss during a reload of Mihomo fails at once; the second
+				// try waits for the reload to finish instead of failing too.
+				if attempt > 0 {
+					select {
+					case <-ctx.Done():
+						results[i] = route
+						return
+					case <-time.After(3 * time.Second):
+					}
+				}
 				var result struct{ Delay int }
 				if p.api.request(ctx, "GET", path, nil, &result) == nil && result.Delay > 0 {
 					route.OK, route.Latency = true, result.Delay

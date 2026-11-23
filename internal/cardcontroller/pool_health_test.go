@@ -1,9 +1,11 @@
 package cardcontroller
 
 import (
+	"context"
 	"testing"
 
 	"xkeen-panel/internal/models"
+	"xkeen-panel/internal/xkeen"
 )
 
 func TestSilentServerLeavesAllLocations(t *testing.T) {
@@ -36,5 +38,42 @@ func TestSilentServerLeavesAllLocations(t *testing.T) {
 	silent.forget([]string{"b"})
 	if silent.has("b") {
 		t.Fatal("a failed rebuild must not keep the server out")
+	}
+}
+
+// Servers measured hours ago are checked before they enter the pool, so one
+// rebuild replaces a silent member instead of a chain of them.
+func TestNewcomersAreCheckedBeforeTheyEnterThePool(t *testing.T) {
+	servers := []models.Server{}
+	for i, port := range []string{"10001", "10002", "10003", "10004", "10005"} {
+		s := poolServer("A", "DE", port)
+		s.ID, s.Latency, s.ProbeKind = i+1, 100+i, "https"
+		servers = append(servers, s)
+	}
+	id := func(i int) string { return xkeen.ServiceTargetID(servers[i]) }
+	dead := map[string]bool{id(2): true, id(3): true}
+	checked := 0
+	c := &Controller{catalog: func() []models.Server { return servers }}
+	c.probe = func(_ xkeen.Runtime, batch []models.Server, _ xkeen.ProbeOptions) ([]models.Server, error) {
+		out := []models.Server{}
+		for _, s := range batch {
+			checked++
+			if dead[xkeen.ServiceTargetID(s)] {
+				s.Latency = -1
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	}
+	// Two members in the pool; the second went silent.
+	c.silent.mark([]string{id(1)})
+	pool := MultiPool{ID: allPoolID, limit: 2}
+	c.vetNewcomers(context.Background(), pool, map[string]int{id(0): 120, id(1): -1})
+	got := pool.members(c.poolNodes(servers))
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 5 {
+		t.Fatalf("the first newcomer that passes the check must take the place: %+v", got)
+	}
+	if checked != 3 || !c.silent.has(id(2)) || !c.silent.has(id(3)) {
+		t.Fatalf("checked %d servers; the dead newcomers must go to the back", checked)
 	}
 }

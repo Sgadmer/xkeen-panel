@@ -48,6 +48,7 @@ type Controller struct {
 	http                 *http.Client
 	validate             func(context.Context, string) error
 	prepare              func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
+	probe                func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
 	pending              map[string]bool
 	autoFlowsChecked     bool
 	refilterError        string
@@ -77,7 +78,7 @@ func New(configPath, stateDir string, rt xkeen.Runtime, catalog func() []models.
 	// PrepareCardProxy owns its isolated runtime namespace and still has
 	// access to the existing Xray asset directory and sibling executable.
 	rt.MihomoConf = configPath
-	c := &Controller{path: configPath, stateDir: stateDir, rt: rt, catalog: catalog, prepare: xkeen.PrepareCardProxy, pending: map[string]bool{}}
+	c := &Controller{path: configPath, stateDir: stateDir, rt: rt, catalog: catalog, prepare: xkeen.PrepareCardProxy, probe: xkeen.CheckCardServersHTTPS, pending: map[string]bool{}}
 	c.http = &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	c.validate = func(ctx context.Context, path string) error {
 		cmd := exec.CommandContext(ctx, "/opt/sbin/mihomo", "-t", "-d", filepath.Dir(configPath), "-f", path)

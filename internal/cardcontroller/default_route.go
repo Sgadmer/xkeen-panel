@@ -392,7 +392,10 @@ func (c *Controller) ProbeDefault(ctx context.Context, checkURL string) (models.
 // A batched probe uses a temporary Xray process, like the workers that serve
 // imported complete profiles. It leaves the active Mihomo configuration alone.
 func (c *Controller) CheckServers(servers []models.Server, options xkeen.ProbeOptions) ([]models.Server, error) {
-	return xkeen.CheckCardServersHTTPS(c.rt, servers, options)
+	if c.probe == nil {
+		return xkeen.CheckCardServersHTTPS(c.rt, servers, options)
+	}
+	return c.probe(c.rt, servers, options)
 }
 
 // Automatic groups already check their members. Complete provider profiles
