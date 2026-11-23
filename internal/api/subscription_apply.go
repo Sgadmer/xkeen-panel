@@ -90,6 +90,7 @@ func (h *Handlers) applyCatalog(ctx context.Context, transaction *subscriptionAp
 		}
 		transaction.rebound = rebound
 		h.watchdog.CheckNow()
+		h.checkUnmeasured()
 		return response, nil
 	}
 	if err := h.applySubscription(servers, response, transaction); err != nil {
@@ -97,6 +98,25 @@ func (h *Handlers) applyCatalog(ctx context.Context, transaction *subscriptionAp
 	}
 	response["servers"] = publicServers(h.subscription.GetServers())
 	return response, nil
+}
+
+// Mihomo mode applies an update without probing it first. New servers and
+// those whose address changed have no number yet; measure them in the
+// background, so the pool is rebuilt from servers known to work and every
+// screen shows a value. A running check leaves them to the next periodic run.
+func (h *Handlers) checkUnmeasured() {
+	if h.Checks == nil {
+		return
+	}
+	var ids []int
+	for _, s := range h.subscription.GetServers() {
+		if len(s.RawProfile) == 0 && s.ProbeKind != "https" {
+			ids = append(ids, s.ID)
+		}
+	}
+	if len(ids) > 0 {
+		h.Checks.StartBackground(ids)
+	}
 }
 
 func (h *Handlers) RefreshManaged(ctx context.Context) error {

@@ -5,6 +5,31 @@ export const setToken = (token: string) =>
     localStorage.setItem(TOKEN_KEY, token)
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY)
 
+const SIGNED_OUT_KEY = 'xkeen_signed_out'
+
+// Why the sign-in ended, told from the token's own "remember" mark.
+function signedOutNotice(token: string) {
+    try {
+        const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+        return payload.rem
+            ? 'Вход закончился: 30 дней без посещения панели. Войдите снова.'
+            : 'Вход закончился: прошли сутки, а «Запомнить устройство» не было включено. Войдите снова.'
+    } catch {
+        return 'Вход закончился. Войдите снова.'
+    }
+}
+
+// The note for the sign-in page, shown once.
+export function takeSignedOutNotice() {
+    try {
+        const notice = sessionStorage.getItem(SIGNED_OUT_KEY) ?? ''
+        sessionStorage.removeItem(SIGNED_OUT_KEY)
+        return notice
+    } catch {
+        return ''
+    }
+}
+
 export class ApiError extends Error {
     status: number
     // What the panel sent along with the error, when it sent anything.
@@ -49,6 +74,15 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     // /login — and their 401 is bad credentials, which the form must show.
     const isLogin = url.startsWith('/api/auth/login')
     if (resp.status === 401 && token && !isLogin) {
+        let expired = false
+        try {
+            expired = (await resp.json())?.reason === 'expired'
+        } catch {
+            // No reason given: the sign-in page opens without a note.
+        }
+        if (expired) {
+            try { sessionStorage.setItem(SIGNED_OUT_KEY, signedOutNotice(token)) } catch { /* the page opens without a note */ }
+        }
         clearToken()
         window.location.href = '/login'
         throw new ApiError('Сессия истекла', 401)

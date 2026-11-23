@@ -111,10 +111,13 @@ type User struct {
 
 // Server is one entry of the subscription.
 type Server struct {
-	ID              int             `json:"id"`
-	SourceID        string          `json:"source_id,omitempty"`
-	SourceName      string          `json:"source_name,omitempty"`
-	Name            string          `json:"name"`
+	ID         int    `json:"id"`
+	SourceID   string `json:"source_id,omitempty"`
+	SourceName string `json:"source_name,omitempty"`
+	Name       string `json:"name"`
+	// Description is the provider's short note under the name (Happ's
+	// serverDescription), shown as a second line when present.
+	Description     string          `json:"description,omitempty"`
 	Address         string          `json:"address"`
 	Port            int             `json:"port"`
 	Protocol        string          `json:"protocol"`
@@ -153,6 +156,18 @@ type SubscriptionSource struct {
 	URL         string       `json:"url,omitempty"`
 	LastUpdated time.Time    `json:"last_updated"`
 	Report      ImportReport `json:"import_report"`
+	// Usage is what the provider reported with its last answer.
+	Usage *SubscriptionUsage `json:"usage,omitempty"`
+}
+
+// SubscriptionUsage is the provider's subscription-userinfo: bytes used and
+// allowed, and when the subscription ends (Unix seconds); zero means unknown
+// or unlimited.
+type SubscriptionUsage struct {
+	Upload   int64 `json:"upload"`
+	Download int64 `json:"download"`
+	Total    int64 `json:"total"`
+	Expire   int64 `json:"expire"`
 }
 
 type ImportReport struct {
@@ -171,6 +186,8 @@ type RouteProbe struct {
 	Latency        int
 	Checked        bool
 	Selective      bool
+	// Pool marks a route through an automatic pool.
+	Pool bool
 }
 
 type Status struct {
@@ -196,6 +213,25 @@ type Status struct {
 	Mode         string `json:"mode"`
 	XKeenVersion string `json:"xkeen_version"`
 	Generation   int    `json:"generation"`
+
+	// Searching: the route through an automatic pool failed and the panel is
+	// re-checking the pool's servers; the router switches to a working one.
+	Searching bool `json:"searching,omitempty"`
+	// RoutesDown names the service cards whose own VPN route failed its last check.
+	RoutesDown []string `json:"routes_down,omitempty"`
+	// Pool marks a default route through an automatic pool.
+	Pool bool `json:"pool,omitempty"`
+}
+
+// ServiceRouteHealth is one check of a VPN route that one or more service
+// cards share.
+type ServiceRouteHealth struct {
+	Services []string `json:"services"`
+	// Pool marks a route through an automatic pool: the router replaces a
+	// dead server there by itself.
+	Pool    bool `json:"pool"`
+	OK      bool `json:"ok"`
+	Latency int  `json:"latency_ms"`
 }
 
 // SetupRequest starts the initial account setup.

@@ -19,6 +19,7 @@ type SubscriptionManager struct {
 	operationMu          sync.Mutex
 	importReport         ImportReport
 	pendingImportReport  ImportReport
+	pendingUsage         *models.SubscriptionUsage
 	rollbackImportReport ImportReport
 	rollbackSnapshotKey  string
 	pendingMoves         []TargetMove

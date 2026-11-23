@@ -20,6 +20,7 @@ import {
     type Icon,
 } from '@tabler/icons-react'
 import { Glass } from '@/components/glass'
+import { useKillSwitch } from '@/components/killSwitch'
 import { Logo } from '@/components/logo'
 import { useEventSource } from '@/hooks/useEventSource'
 import { useIndicator } from '@/hooks/useIndicator'
@@ -86,7 +87,8 @@ export function AppShell() {
     const { pathname } = useLocation()
     const status = useStatus()
     const s = status.data
-    const info = statusInfo(s)
+    const killSwitch = useKillSwitch(s?.core === 'mihomo').data?.enabled
+    const info = statusInfo(s, killSwitch)
     const updated = usePanelUpdated(s?.panel_version)
     const active = tabIndex(SECTIONS, pathname)
     // On a phone a section that lives under "Ещё" lights that button.
@@ -153,6 +155,7 @@ export function AppShell() {
                             />
                             {info.label}
                         </div>
+                        {info.detail && <div className='mt-0.5 max-w-48 text-xs leading-snug text-muted-foreground'>{info.detail}</div>}
                     </div>
                 </div>
                 <nav

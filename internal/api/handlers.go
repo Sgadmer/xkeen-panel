@@ -36,6 +36,9 @@ type Handlers struct {
 	// reissues its servers on every download is reported once, not hourly.
 	// Written only while the watchdog's change lock is held.
 	reissueNotes map[string]string
+	// reissueLogged is when that note was last written: a provider that
+	// rotates keys every hour gets one line in six hours, not six.
+	reissueLogged map[string]time.Time
 	// One store of journal presets for the journal page and for the export.
 	journalPresets *trafficjournal.Presets
 }
@@ -570,6 +573,12 @@ func (h *Handlers) HandleProbeJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, job)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		// A second press of the check button stops the run; what was
+		// measured before the stop is kept.
+		writeJSON(w, http.StatusOK, h.Checks.Cancel())
 		return
 	}
 	writeJSON(w, http.StatusOK, h.Checks.Snapshot())

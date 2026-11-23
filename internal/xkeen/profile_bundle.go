@@ -123,7 +123,9 @@ func (r *profileRenderer) build(template map[string]interface{}) (err error) {
 			err = profilePhaseError(phase, err)
 		}
 	}()
-	if !profileKeys(r.document, "remarks", "name", "ps", "remark", "tag", "log", "inbounds", "outbounds", "routing", "dns", "policy", "observatory", "burstObservatory") {
+	// "meta" is display metadata of client apps (Happ's serverDescription);
+	// nothing of it reaches a core.
+	if !profileKeys(r.document, "remarks", "name", "ps", "remark", "tag", "log", "meta", "inbounds", "outbounds", "routing", "dns", "policy", "observatory", "burstObservatory") {
 		return profileError()
 	}
 	r.ownedTags = []string{r.bundle.InboundTag}

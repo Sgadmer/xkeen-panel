@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"xkeen-panel/internal/models"
@@ -129,18 +130,27 @@ func (h *Handlers) logMoves(source string, tx *subscriptionApplySnapshot) {
 	if len(tx.moves) == 0 {
 		return
 	}
-	note := fmt.Sprintf("%s: провайдер изменил параметры серверов (%d) под прежними названиями", source, len(tx.moves))
+	note := fmt.Sprintf("%s: провайдер обновил ключи серверов (%d), названия прежние", source, len(tx.moves))
 	if len(tx.fields) > 0 {
 		note += "; изменились настройки: " + strings.Join(tx.fields, ", ")
 	}
-	if tx.rebound == 0 && h.reissueNotes[source] == note {
+	// Providers that rotate keys every hour would fill the events with the
+	// same line. The selections follow their servers either way.
+	key := source + "\x00" + strings.Join(tx.fields, ",")
+	if h.reissueNotes[source] == key && time.Since(h.reissueLogged[source]) < 6*time.Hour {
 		return
 	}
 	if h.reissueNotes == nil {
 		h.reissueNotes = map[string]string{}
 	}
-	h.reissueNotes[source] = note
-	h.watchdog.Log("[SUBSCRIPTION] %s; сохранено выборов: %d", note, tx.rebound)
+	if h.reissueLogged == nil {
+		h.reissueLogged = map[string]time.Time{}
+	}
+	h.reissueNotes[source], h.reissueLogged[source] = key, time.Now()
+	if tx.rebound > 0 {
+		note += fmt.Sprintf("; выбранные серверы сохранены (%d)", tx.rebound)
+	}
+	h.watchdog.Log("[SUBSCRIPTION] %s", note)
 }
 
 // HandleReplaceSourceURL — POST /api/sources/{id}/url

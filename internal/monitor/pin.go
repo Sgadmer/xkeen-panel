@@ -232,7 +232,10 @@ func (w *Watchdog) restartAndRepinTargetLocked(rt xkeen.Runtime, top xkeen.Topol
 	}
 
 	deadline := time.Now().Add(20 * time.Second)
-	if wanted != "" && top.Mode == xkeen.TopologyPool {
+	// A balancer pin exists only in Xray. Under Mihomo the saved choice lives in
+	// its own selectors and survives the restart; an old Xray pin left in the
+	// store used to fail here for 20 s and fill the events with [PIN] lines.
+	if wanted != "" && top.Mode == xkeen.TopologyPool && rt.Core != xkeen.CoreMihomo {
 		for time.Now().Before(deadline) {
 			if _, err := xkeen.EnsurePinned(rt, w.config.XrayAPIAddr, top, wanted); err == nil {
 				w.publishPool()

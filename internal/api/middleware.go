@@ -16,6 +16,40 @@ type contextKey string
 
 const usernameKey contextKey = "username"
 
+// SessionLog writes to the panel's events; set once at start.
+var SessionLog func(format string, args ...interface{})
+
+var sessionEnds struct {
+	sync.Mutex
+	seen []string
+}
+
+// logSessionEnd tells the owner once per token why a device was signed out:
+// a browser keeps asking with the dead token until it reloads.
+func logSessionEnd(token string, session auth.Session) {
+	if SessionLog == nil {
+		return
+	}
+	key := token[max(0, len(token)-16):]
+	sessionEnds.Lock()
+	for _, seen := range sessionEnds.seen {
+		if seen == key {
+			sessionEnds.Unlock()
+			return
+		}
+	}
+	sessionEnds.seen = append(sessionEnds.seen, key)
+	if len(sessionEnds.seen) > 32 {
+		sessionEnds.seen = sessionEnds.seen[1:]
+	}
+	sessionEnds.Unlock()
+	if session.Remember {
+		SessionLog("[AUTH] Вход на одном из устройств завершён: 30 дней без посещения панели")
+	} else {
+		SessionLog("[AUTH] Вход на одном из устройств завершён: прошли сутки, «Запомнить устройство» не было включено")
+	}
+}
+
 // AuthMiddleware validates the JWT from the Authorization header.
 func AuthMiddleware(userManager *auth.UserManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -48,6 +82,11 @@ func AuthMiddleware(userManager *auth.UserManager) func(http.Handler) http.Handl
 
 			username, err := auth.ValidateToken(parts[1], user.JWTSecret)
 			if err != nil {
+				if session, expired := auth.ExpiredSession(parts[1], user.JWTSecret); expired {
+					logSessionEnd(parts[1], session)
+					http.Error(w, `{"error":"вход истёк, войдите снова","reason":"expired"}`, http.StatusUnauthorized)
+					return
+				}
 				http.Error(w, `{"error":"невалидный или просроченный токен"}`, http.StatusUnauthorized)
 				return
 			}

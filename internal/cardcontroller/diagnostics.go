@@ -122,7 +122,7 @@ func (c *Controller) Connections(ctx context.Context) ([]Connection, error) {
 // pool is itself one adapter: its current observatory result is a separate
 // sample and may have changed since this connection started.
 func (c *Controller) connectionRows(ctx context.Context, p profile, flows []connectionTracker, readMember func(context.Context, xkeen.Runtime, string, int) string) []Connection {
-	names := map[string]string{"DIRECT": "Напрямую", "REJECT": "Блокировка", "REJECT-DROP": "Блокировка", cardPrefix + defaultID: "Общий маршрут"}
+	names := map[string]string{"DIRECT": "Напрямую", "REJECT": "Блокировка", "REJECT-DROP": "Блокировка", cardPrefix + defaultID: "Остальные сайты"}
 	names[cardPrefix+"guard-"+defaultID], names[cardPrefix+"guard-quic"] = "Kill switch", "Блокировка QUIC"
 	for id, display := range groupNames {
 		names[cardPrefix+id] = display

@@ -123,6 +123,12 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	})
 	if s.Cards != nil {
+		go runBackgroundChecks(lifetime, handlers.Checks, s.Cards.PoolMemberIDs, s.subscription.GetServers)
+		if s.watchdog != nil {
+			s.watchdog.SetPoolRecheck(func() bool { return handlers.Checks.StartBackground(s.Cards.PoolMemberIDs()) })
+		}
+	}
+	if s.Cards != nil {
 		handlers.FaceID = api.NewPanelFaceID(s.config, s.CardsListen, devicesHandler)
 		webAuthnHandler.FaceID = handlers.FaceID
 		if handlers.FaceID != nil {
@@ -134,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	accountHandler.Guard.OnPause = s.loginPaused("в настройках входа")
 	if s.watchdog != nil {
 		accountHandler.Log = s.watchdog.Log
+		api.SessionLog = s.watchdog.Log
 	}
 	componentsHandler := api.NewComponentsHandler(handlers)
 
@@ -216,6 +223,9 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/servers/check", handlers.HandleCheckServers)
 			r.Get("/servers/check/job", handlers.HandleProbeJob)
 			r.Post("/servers/check/job", handlers.HandleProbeJob)
+			r.Delete("/servers/check/job", handlers.HandleProbeJob)
+			r.Get("/ui/servers", handlers.HandleServersView)
+			r.Put("/ui/servers", handlers.HandleServersView)
 			r.Post("/servers/country", handlers.HandleSetCountry)
 
 			accountHandler.Mount(r)

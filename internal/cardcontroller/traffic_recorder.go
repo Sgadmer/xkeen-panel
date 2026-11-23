@@ -39,7 +39,7 @@ func (c *Controller) recordTraffic(level, payload string, p profile, guard *Guar
 
 func (r *trafficRecorder) project(c *Controller, p profile) {
 	r.raw = p.raw
-	r.names = map[string]string{"DIRECT": "Напрямую", "REJECT": "Блокировка", "REJECT-DROP": "Блокировка", cardPrefix + defaultID: "Общий маршрут", serviceGuardName("quic"): "Блокировка QUIC"}
+	r.names = map[string]string{"DIRECT": "Напрямую", "REJECT": "Блокировка", "REJECT-DROP": "Блокировка", cardPrefix + defaultID: "Остальные сайты", serviceGuardName("quic"): "Блокировка QUIC"}
 	r.exits = map[string]ConnectionExit{"DIRECT": {Kind: "direct"}, "REJECT": {Kind: "reject"}, "REJECT-DROP": {Kind: "reject"}}
 	for id, name := range groupNames {
 		r.names[cardPrefix+id], r.names[cardPrefix+id+"-inherited"], r.names[dedicatedGroup(id)] = name, name, name

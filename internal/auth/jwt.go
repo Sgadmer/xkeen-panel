@@ -52,6 +52,32 @@ func ValidateToken(tokenString, secret string) (string, error) {
 	return session.Username, err
 }
 
+// ExpiredSession reports a token that this panel signed and that has run out,
+// so the owner can be told why the sign-in ended. Anything else is false.
+func ExpiredSession(tokenString, secret string) (Session, bool) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithoutClaimsValidation())
+	if err != nil || !token.Valid {
+		return Session{}, false
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return Session{}, false
+	}
+	expires, err := claims.GetExpirationTime()
+	if err != nil || expires == nil || time.Now().Before(expires.Time) {
+		return Session{}, false
+	}
+	session := Session{}
+	session.Username, _ = claims["sub"].(string)
+	session.Remember, _ = claims["rem"].(bool)
+	if issued, ok := claims["iat"].(float64); ok {
+		session.IssuedAt = time.Unix(int64(issued), 0)
+	}
+	return session, true
+}
+
 // ReadToken verifies a JWT and returns what it carries.
 func ReadToken(tokenString, secret string) (Session, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {

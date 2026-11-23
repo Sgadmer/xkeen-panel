@@ -10,9 +10,9 @@ type Mode = 'off' | 'push' | 'tab'
 type DeviceState = { enabled: boolean; preferences: Preferences }
 type PushSetup = { worker: ServiceWorkerRegistration; key: Uint8Array<ArrayBuffer> }
 const events: { key: keyof Preferences; label: string; hint: string }[] = [
-    { key: 'server', label: 'Смена сервера', hint: 'Изменился сервер общего маршрута' },
+    { key: 'server', label: 'Смена сервера', hint: 'Изменился сервер для остальных сайтов' },
     { key: 'update', label: 'Обновление панели', hint: 'Появилась новая версия панели' },
-    { key: 'health', label: 'Связь через VPN', hint: 'Общий маршрут перестал отвечать или восстановился' },
+    { key: 'health', label: 'Связь через VPN', hint: 'VPN не работает больше 2 минут или снова заработал' },
     { key: 'kill_switch', label: 'Срабатывание Kill switch', hint: 'Не удалось использовать выбранный VPN, прямой выход запрещён. Не чаще одного уведомления в минуту' },
 ]
 const browserSubscription = async () => {

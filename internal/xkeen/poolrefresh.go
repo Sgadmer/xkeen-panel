@@ -143,11 +143,13 @@ func updateObservatoryInterval(rt Runtime, selector string, nodes int) (bool, er
 	}
 
 	want := probeIntervalFor(nodes)
-	if current, _ := observatory["probeInterval"].(string); current == want {
+	concurrent, _ := observatory["enableConcurrency"].(bool)
+	if current, _ := observatory["probeInterval"].(string); current == want && concurrent {
 		return false, nil
 	}
 
 	observatory["probeInterval"] = want
+	observatory["enableConcurrency"] = true
 	doc.config["observatory"] = observatory
 
 	if err := WriteOutboundsConfig(doc.path, doc.config); err != nil {

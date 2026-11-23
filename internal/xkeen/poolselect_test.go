@@ -1,6 +1,7 @@
 package xkeen
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"testing"
@@ -151,11 +152,53 @@ func TestSelectPoolServersEmptyWhenAllAvoided(t *testing.T) {
 
 // Probe load scales with pool size, so the interval has to scale with it.
 func TestProbeIntervalScalesWithPoolSize(t *testing.T) {
-	cases := map[int]string{5: "1m", 20: "1m", 21: "3m", 40: "3m", 81: "5m"}
+	cases := map[int]string{5: "2m", 8: "2m", 9: "5m", 20: "5m", 21: "10m", 40: "10m", 81: "15m"}
 
 	for nodes, want := range cases {
 		if got := probeIntervalFor(nodes); got != want {
 			t.Errorf("probeIntervalFor(%d) = %q, want %q", nodes, got, want)
+		}
+	}
+	block := observatoryBlock("sub-", 8)
+	if block["enableConcurrency"] != true {
+		t.Fatalf("observatory probes nodes one by one: %v", block)
+	}
+}
+
+// A fresh pool worker must not drop traffic before its first probe round: the
+// balancer falls back to a member, never to the worker's blackhole.
+func TestMultiPoolFallsBackToMember(t *testing.T) {
+	servers := []models.Server{vlessAt("A", "DE", "a.example", 443), vlessAt("B", "NL", "b.example", 443)}
+	profile, err := MultiPoolProfile(servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Outbounds   []struct{ Tag string }
+		Routing     struct{ Balancers []map[string]interface{} }
+		Observatory map[string]interface{}
+	}
+	if err := json.Unmarshal(profile.RawProfile, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Routing.Balancers) != 1 || doc.Routing.Balancers[0]["fallbackTag"] != doc.Outbounds[0].Tag {
+		t.Fatalf("fallback is not the first member: %+v", doc.Routing.Balancers)
+	}
+	if doc.Observatory["enableConcurrency"] != true {
+		t.Fatalf("pool worker probes one node at a time: %v", doc.Observatory)
+	}
+	again, _ := MultiPoolProfile([]models.Server{servers[1], servers[0]})
+	if string(again.RawProfile) != string(profile.RawProfile) {
+		t.Fatal("member order changed the worker generation")
+	}
+	config, err := serviceWorkerConfig(profile, nil, serviceWorkerKey{Port: 20000, User: "00000000-0000-4000-8000-000000000000", Cert: "x", Key: "y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range asSlice(mapOf(config["routing"])["balancers"]) {
+		fallback, _ := mapOf(raw)["fallbackTag"].(string)
+		if fallback == "" || fallback == workerBlock {
+			t.Fatalf("worker balancer falls back to %q", fallback)
 		}
 	}
 }

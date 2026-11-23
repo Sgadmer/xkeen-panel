@@ -684,7 +684,7 @@ func render(p *profile, services []xkeen.ServiceRouteView, peers map[string]card
 		}
 	}
 	if defaultKey != "" && !found {
-		return nil, errors.New("в профиле отсутствует правило MATCH для общего маршрута")
+		return nil, errors.New("в профиле нет правила MATCH для остальных сайтов")
 	}
 	p.doc[stateKey] = p.assigned
 	p.doc["proxies"], p.doc["proxy-groups"], p.doc["rules"] = nodes, groups, rules

@@ -54,7 +54,8 @@ export function FlowRoute({ flow, service, compact = false }: { flow: ViewEntry;
     const hops = [...flow.route]
     if (node && flow.exit?.kind === 'server' && (hops.at(-1) === location?.name || hops.at(-1) === node)) hops.pop()
     if (service && (hops.length || node)) {
-        if (hops[0] === 'Общий маршрут' && (hops.length > 1 || node)) hops.shift()
+        // Older journal entries carry the former name.
+        if ((hops[0] === 'Остальные сайты' || hops[0] === 'Общий маршрут') && (hops.length > 1 || node)) hops.shift()
         const head = hops[0]?.replace(/ \((по правилам|прокси устройства)\)$/, '')
         if (!head || service !== head && !service.split(' / ').includes(head)) hops.unshift(service)
     }

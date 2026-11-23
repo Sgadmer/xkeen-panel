@@ -13,17 +13,18 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { IconFingerprint } from '@tabler/icons-react'
 import { useAuth } from '@/hooks/useAuth'
-import { api } from '@/lib/api'
+import { api, takeSignedOutNotice } from '@/lib/api'
 import { isIOSDevice, passkeySupported } from '@/lib/webauthn'
 import type { AuthStatus } from '@/types'
 
 const REMEMBER_KEY = 'xkeen_remember_device'
 
+// On unless the owner turned it off on this device.
 function rememberedChoice() {
     try {
-        return localStorage.getItem(REMEMBER_KEY) === '1'
+        return localStorage.getItem(REMEMBER_KEY) !== '0'
     } catch {
-        return false
+        return true
     }
 }
 
@@ -35,6 +36,8 @@ export function LoginPage() {
     const [spare, setSpare] = useState(false)
     const [remember, setRemember] = useState(rememberedChoice)
     const [error, setError] = useState('')
+    const [notice] = useState(takeSignedOutNotice)
+    const [passkeyFailed, setPasskeyFailed] = useState(false)
 
     const keepChoice = (value: boolean) => {
         setRemember(value)
@@ -57,7 +60,7 @@ export function LoginPage() {
 
     const passkeyMutation = useMutation({
         mutationFn: () => loginWithPasskey(remember),
-        onError: (err: Error) => setError(err.message),
+        onError: (err: Error) => { setError(err.message); setPasskeyFailed(true) },
     })
 
     const showPasskey = passkeySupported() && authStatus.data?.passkey_enabled
@@ -66,6 +69,7 @@ export function LoginPage() {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault()
         setError('')
+        setPasskeyFailed(false)
         loginMutation.mutate()
     }
 
@@ -91,6 +95,7 @@ export function LoginPage() {
                                     className='w-full'
                                     onClick={() => {
                                         setError('')
+                                        setPasskeyFailed(false)
                                         passkeyMutation.mutate()
                                     }}
                                     disabled={passkeyMutation.isPending}
@@ -108,9 +113,15 @@ export function LoginPage() {
                             </>
                         )}
 
+                        {notice && !error && (
+                            <div role='status' className='mb-4 rounded-lg bg-fill p-3 text-sm text-muted-foreground'>
+                                {notice}
+                            </div>
+                        )}
                         {error && (
                             <div role='alert' className='mb-4 p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm text-destructive'>
                                 {error}
+                                {passkeyFailed && <span className='mt-1 block text-muted-foreground'>Войдите по паролю ниже. Возможно, у компьютера сейчас нет интернета: вход с телефона по QR-коду идёт через интернет.</span>}
                             </div>
                         )}
 

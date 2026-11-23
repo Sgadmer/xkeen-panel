@@ -98,7 +98,7 @@ func (c *Controller) CheckSourcePoolUnused(source string) error {
 		}
 		name := groupNames[service]
 		if service == defaultID {
-			name = "основной маршрут"
+			name = "остальные сайты"
 		}
 		for _, custom := range xkeen.CustomServices() {
 			if custom.ID == service {

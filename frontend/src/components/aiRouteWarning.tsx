@@ -46,7 +46,7 @@ export function AiRouteWarning({ serviceName, targetLabel, targetKind, canApplyG
                     <p className='text-muted-foreground'>AI-приложения и агенты обращаются к общим адресам аналитики и проверки безопасности. Эти запросы могут не попасть в правила самого AI-сервиса и пойти по карточке аналитики.</p>
                     <p className='text-muted-foreground'>Разные VPN могут показать одному сервису разные IP. Крайне рекомендуем один конфиг для всех четырёх карточек, особенно для Claude / Anthropic: это помогает избежать разных выходов и уменьшить риск проблем с аккаунтом.</p>
                     {targetKind === 'pool' && <p className='rounded-xl bg-warning/10 p-3 text-warning'>Один пул может выбрать разные серверы для разных соединений. Для постоянного общего выхода выберите конкретный сервер.</p>}
-                    {!canApplyGroup && <p className='text-warning'>Общий маршрут доступен для VPN в Mihomo. Прямой выход нельзя применить ко всей группе: Claude требует VPN.</p>}
+                    {!canApplyGroup && <p className='text-warning'>Одним действием всем четырём карточкам можно назначить только VPN. Прямой выход нельзя применить ко всей группе: Claude требует VPN.</p>}
                     <p className='text-muted-foreground'>Если пользуетесь голосовым чатом, проверьте его на выбранном сервере. Настройки kill switch сохраняются.</p>
                     {error && <p role='alert' className='text-destructive'>{error}</p>}
                 </div>

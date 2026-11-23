@@ -1,15 +1,16 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-    IconActivityHeartbeat,
     IconCheck,
     IconChevronLeft,
     IconChevronRight,
+    IconCloudDownload,
+    IconGauge,
     IconLink,
     IconLayersLinked,
     IconPencil,
     IconPlus,
-    IconRefresh,
     IconSearch,
     IconWorldWww,
 } from '@tabler/icons-react'
@@ -38,8 +39,10 @@ import {
 import { useServerActions } from '@/hooks/useServerActions'
 import { useStreamLatency } from '@/hooks/useStreamLatency'
 import {
+    agoLabel,
     countryName,
     countryLabel,
+    isSet,
     latencyTone,
     scopeLabel,
     serverCountry,
@@ -48,6 +51,7 @@ import {
     unavailableCountryReason,
     withCountryFlag,
 } from '@/lib/format'
+import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { importWarnings, safeNotice } from '@/lib/subscription'
 import type { AutoScope, Server } from '@/types'
@@ -62,8 +66,30 @@ type CountryOrder = 'name-asc' | 'name-desc' | 'latency'
 
 type Tab = 'pool' | 'all'
 
-const TAB_KEY = 'servers_tab'
-const COUNTRY_ORDER_KEY = 'servers_country_order'
+// How the owner left the screen. It is kept on the router, so every device
+// and every new sign-in opens the screen the same way.
+type ServersView = { tab: Tab; country_order: CountryOrder; country: string; only_responding: boolean }
+const defaultView: ServersView = { tab: 'pool', country_order: 'name-asc', country: 'all', only_responding: false }
+const viewKey = ['ui-servers']
+
+function useServersView() {
+    const qc = useQueryClient()
+    const query = useQuery({ queryKey: viewKey, queryFn: () => api.get<ServersView>('/api/ui/servers'), staleTime: Infinity })
+    const save = useMutation({
+        mutationFn: (view: ServersView) => api.put<ServersView>('/api/ui/servers', view),
+        onMutate: view => { qc.setQueryData(viewKey, view) },
+    })
+    return {
+        view: query.data ?? defaultView,
+        change: (next: Partial<ServersView>) => save.mutate({ ...(qc.getQueryData<ServersView>(viewKey) ?? defaultView), ...next }),
+    }
+}
+
+// A provider's note under a server name, cut to fit one line.
+function shortNote(text?: string) {
+    if (!text) return ''
+    return text.length > 30 ? text.slice(0, 29).trimEnd() + '…' : text
+}
 // The import notice the owner has already read and closed.
 const NOTICE_KEY = 'xkeen.servers.notice.v1'
 
@@ -91,22 +117,6 @@ function countryPoolOption(scope: AutoScope, avoided: string[]) {
 
 function countryOrder(value: string | null): CountryOrder {
     return value === 'name-desc' || value === 'latency' ? value : 'name-asc'
-}
-
-function savedCountryOrder(): CountryOrder {
-    try {
-        return countryOrder(localStorage.getItem(COUNTRY_ORDER_KEY))
-    } catch {
-        return 'name-asc'
-    }
-}
-
-function savedTab(): Tab {
-    try {
-        return localStorage.getItem(TAB_KEY) === 'all' ? 'all' : 'pool'
-    } catch {
-        return 'pool'
-    }
 }
 
 export function ServersPage() {
@@ -151,10 +161,11 @@ export function ServersPage() {
         setPoolLimit,
     } = useServerActions()
     const routeBusy = select.isPending || pin.isPending || auto.isPending || setScope.isPending || setPoolLimit.isPending
-    const { check, checking, error: checkError, progress, isPendingServer, latencyFor } = useStreamLatency()
+    const { check, stop, stopping, stopped, background, checking, error: checkError, progress, isPendingServer, latencyFor } = useStreamLatency()
     const [query, setQuery] = useState('')
-    const [country, setCountryFilter] = useState('all')
-    const [order, setOrder] = useState<CountryOrder>(savedCountryOrder)
+    const { view: saved, change: changeView } = useServersView()
+    const order = saved.country_order
+    const onlyResponding = saved.only_responding
     const [params, setParams] = useSearchParams()
     // Settings link here with ?sources=1 to open the list of subscriptions.
     const [catalogSheet, setCatalogSheet] = useState<'sources' | 'pools' | null>(() => params.get('sources') === '1' ? 'sources' : null)
@@ -164,7 +175,6 @@ export function ServersPage() {
     }
     const [hiddenNotice, setHiddenNotice] = useState(savedNotice)
     const [editingPool, setEditingPool] = useState<string | null>(null)
-    const [tab, setTabState] = useState<Tab>(savedTab)
     const [addingSite, setAddingSite] = useState(false)
     const [siteId, setSiteId] = useState<number | null>(null)
     const hasSubscription = Boolean(
@@ -189,19 +199,28 @@ export function ServersPage() {
         : ''
 
     const canChoosePool = isPool || (mihomo && scopes.length > 0)
-    const view: Tab = canChoosePool ? tab : 'all'
-    const setTab = (next: Tab) => {
-        setTabState(next)
-        try {
-            localStorage.setItem(TAB_KEY, next)
-        } catch {}
-    }
+    const view: Tab = canChoosePool ? saved.tab : 'all'
+    const setTab = (next: Tab) => changeView({ tab: next })
+
+    const routerLatency = useMemo(() => new Map((pool?.nodes ?? [])
+        .filter(node => node.server_id >= 0 && node.router_latency_ms !== undefined)
+        .map(node => [node.server_id, node.router_latency_ms!])), [pool])
+    // The number a row shows: the router's own for pool servers, a running
+    // check's, or the last completed check.
+    const shownLatency = (s: Server) => routerLatency.get(s.id) ?? latencyFor(s.id)
+        ?? (s.probe_kind === 'https' && !s.check_error ? s.latency_ms : 0)
 
     const catalogGroups = useMemo(() => groupServers(servers, order), [servers, order])
-    const groups = useMemo(() => catalogGroups
+    // «Только ответившие» hides servers without an answer, and countries left empty.
+    const shownGroups = onlyResponding
+        ? catalogGroups.map(g => ({ ...g, list: g.list.filter(s => shownLatency(s) > 0) })).filter(g => g.list.length > 0)
+        : catalogGroups
+    const country = saved.country === 'all' || catalogGroups.some(g => g.code === saved.country) ? saved.country : 'all'
+    const countryEmpty = country !== 'all' && !shownGroups.some(g => g.code === country)
+    const groups = shownGroups
         .filter(g => country === 'all' || g.code === country)
-        .map(g => ({ ...g, list: g.list.filter(s => matches(query, s.name, g.code, s.source_name)) }))
-        .filter(g => g.list.length > 0), [catalogGroups, country, query])
+        .map(g => ({ ...g, list: g.list.filter(s => matches(query, s.name, g.code, s.source_name, s.description)) }))
+        .filter(g => g.list.length > 0)
 
     const poolRows = useMemo(() => {
         const byId = new Map(servers.map(s => [s.id, s]))
@@ -213,6 +232,7 @@ export function ServersPage() {
                     country: server ? serverCountry(server) : n.country,
                     protocol: server?.protocol,
                     source: server?.source_name,
+                    description: server?.description,
                     // The router picks by its own measurement, so that is the number to show.
                     routerMeasured: n.router_latency_ms !== undefined,
                     latency: n.router_latency_ms ?? (server
@@ -224,7 +244,7 @@ export function ServersPage() {
                     excluded: !!n.excluded_until,
                 }
             })
-            .filter(r => matches(query, r.node.name, r.country, r.source))
+            .filter(r => matches(query, r.node.name, r.country, r.source, r.description))
             .sort(
                 (a, b) =>
                     Number(b.current) - Number(a.current) ||
@@ -232,10 +252,6 @@ export function ServersPage() {
                     rank(a.latency) - rank(b.latency),
             )
     }, [pool, servers, query])
-
-    const routerLatency = useMemo(() => new Map((pool?.nodes ?? [])
-        .filter(node => node.server_id >= 0 && node.router_latency_ms !== undefined)
-        .map(node => [node.server_id, node.router_latency_ms!])), [pool])
 
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
@@ -290,22 +306,24 @@ export function ServersPage() {
                     <Row
                         icon={
                             <IconTile color='#30d158'>
-                                <IconActivityHeartbeat
+                                <IconGauge
                                     className='size-[17px]'
                                     stroke={2.2}
                                 />
                             </IconTile>
                         }
-                        label={checking ? 'Проверяю HTTPS…' : 'Проверить HTTPS'}
+                        label={checking && !background ? (stopping ? 'Останавливаю…' : 'Остановить проверку') : 'Проверить пинг'}
                         hint={
-                            checking && progress.total > 0
-                                ? progress.completed > 0
-                                    ? `Проверено ${progress.completed} из ${progress.total} серверов`
-                                    : `Проверка ${progress.total} серверов может занять минуту`
-                                : 'Реальное соединение через каждый сервер'
+                            background
+                                ? 'Панель сейчас проверяет серверы пула. Нажмите, чтобы проверить все.'
+                                : checking && progress.total > 0
+                                ? `Проверено ${progress.completed} из ${progress.total}. Нажмите ещё раз, чтобы остановить.`
+                                : stopped
+                                ? 'Проверка остановлена. Уже измеренные серверы сохранены.'
+                                : 'Загрузка через каждый сервер, по 16 одновременно'
                         }
-                        onClick={() => check()}
-                        disabled={checking}
+                        onClick={() => (checking && !background ? stop() : check())}
+                        disabled={stopping}
                     />
                 </div>
             )}
@@ -314,7 +332,7 @@ export function ServersPage() {
 
     const automationLink = (
         <Group>
-            <Row icon={<IconTile color='#ff9f0a'><IconRefresh className='size-[17px]' stroke={2.2} /></IconTile>}
+            <Row icon={<IconTile color='#ff9f0a'><IconCloudDownload className='size-[17px]' stroke={2.2} /></IconTile>}
                 label='Подписки и автоматика' hint='Как часто обновлять подписки, когда менять сервер, какие страны не брать'
                 to='/settings/automation' />
         </Group>
@@ -365,11 +383,11 @@ export function ServersPage() {
                                 onClick={() => refreshSubscription.mutate()}
                                 disabled={refreshSubscription.isPending}
                             >
-                                <IconRefresh
+                                <IconCloudDownload
                                     className={cn(
                                         'size-5',
                                         refreshSubscription.isPending &&
-                                            'animate-spin',
+                                            'motion-safe:animate-pulse',
                                     )}
                                 />
                             </CircleButton>
@@ -420,17 +438,11 @@ export function ServersPage() {
                 <div className='flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:items-start'>
                     <div className='flex min-w-0 flex-col gap-4'>
                         <Group
-                            title={<span className='flex min-w-0 items-center justify-between gap-2'>
-                                <span>Автовыбор</span>
-                                <ProbeButton label='Обновить пинг серверов автопула'
-                                    disabled={checking || routeBusy || !(pool?.nodes ?? []).some(node => node.server_id >= 0)}
-                                    measuring={(pool?.nodes ?? []).some(node => isPendingServer(node.server_id))}
-                                    onClick={() => { check((pool?.nodes ?? []).map(node => node.server_id).filter(id => id >= 0)); void poolQuery.refetch() }} />
-                            </span>}
+                            title='Автовыбор'
                             footer={
                                 isAuto
-                                    ? 'Пул — это список серверов для выбора. Роутер проверяет, какой из них быстрее отвечает, и переключается сам, если сервер перестал работать.'
-                                        + (routerMeasured ? ' Задержку в этом списке измеряет сам роутер — по ней он и выбирает сервер. У серверов вне пула показан замер панели.' : '')
+                                    ? 'Роутер сам регулярно проверяет серверы пула и ведёт трафик через самый быстрый. Если сервер перестал отвечать, роутер переходит на другой, а панель заменяет его в пуле.'
+                                        + (routerMeasured ? ' Числа в этом списке — замеры самого роутера.' : '')
                                     : mihomo ? 'Выбор пула включит автоматический режим.' : 'Включите автовыбор, чтобы панель снова выбирала сервер сама.'
                             }
                         >
@@ -513,14 +525,13 @@ export function ServersPage() {
                                     country={r.country}
                                     protocol={r.protocol}
                                     source={r.source}
+                                    description={r.description}
                                     latency={r.routerMeasured ? r.latency : latencyFor(r.node.server_id) ?? r.latency}
-                                    measuring={isPendingServer(r.node.server_id)}
+                                    measuring={!r.routerMeasured && isPendingServer(r.node.server_id)}
                                     current={r.current}
                                     excludedUntil={r.node.excluded_until}
                                     countryExcluded={avoidCountries.includes(r.country ?? '')}
                                     busy={routeBusy}
-                                    probeBusy={checking || routeBusy || r.node.server_id < 0}
-                                    onCheck={() => { check([r.node.server_id]); void poolQuery.refetch() }}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
                                     }
@@ -597,22 +608,31 @@ export function ServersPage() {
                                 onChange={setQuery}
                                 className='lg:hidden'
                             />
-                            <label className='flex flex-wrap items-center gap-x-3 gap-y-1 text-[15px]'>
-                                <span>Порядок стран</span>
-                                <select value={order}
-                                    className='min-h-10 max-w-full rounded-xl border border-white/10 bg-fill px-2'
-                                    onChange={event => {
-                                        const next = countryOrder(event.target.value)
-                                        setOrder(next)
-                                        try { localStorage.setItem(COUNTRY_ORDER_KEY, next) } catch {}
-                                    }}>
-                                    <option value='name-asc'>По названию (А–Я)</option>
-                                    <option value='name-desc'>По названию (Я–А)</option>
-                                    <option value='latency'>По наименьшему пингу</option>
-                                </select>
-                            </label>
-                            <CountryFilter groups={catalogGroups} value={country} onChange={setCountryFilter} />
+                            <div className='flex flex-wrap items-center gap-x-5 gap-y-2 text-[15px]'>
+                                <label className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+                                    <span>Порядок стран</span>
+                                    <select value={order}
+                                        className='min-h-10 max-w-full rounded-xl border border-white/10 bg-fill px-2'
+                                        onChange={event => changeView({ country_order: countryOrder(event.target.value) })}>
+                                        <option value='name-asc'>По названию (А–Я)</option>
+                                        <option value='name-desc'>По названию (Я–А)</option>
+                                        <option value='latency'>По наименьшему пингу</option>
+                                    </select>
+                                </label>
+                                <label className='flex min-h-10 cursor-pointer items-center gap-2'>
+                                    <input type='checkbox' className='size-5 shrink-0 accent-[var(--primary)]' checked={onlyResponding}
+                                        onChange={event => changeView({ only_responding: event.target.checked })} />
+                                    Только ответившие
+                                </label>
+                            </div>
+                            <CountryFilter groups={shownGroups} value={country} onChange={code => changeView({ country: code })} />
                         </div>
+                    )}
+
+                    {countryEmpty && (
+                        <p className='px-4 text-[15px] text-muted-foreground'>
+                            В этой стране сейчас нет ответивших серверов
+                        </p>
                     )}
 
                     <CountryCatalog groups={groups} rowProps={rowProps}
@@ -623,12 +643,12 @@ export function ServersPage() {
                     {mihomo && multipools.some(item => matches(query, item.name)) && (
                         <Group title='Мультипулы'>
                             {multipools.filter(item => matches(query, item.name)).map(item => <Row key={item.id} label={item.name}
-                                hint={`${item.member_count} серверов${pool?.auto_scope_id === item.id && isAuto ? ' · Основной маршрут' : ''}`}
+                                hint={`${item.member_count} серверов${pool?.auto_scope_id === item.id && isAuto ? ' · Для остальных сайтов' : ''}`}
                                 onClick={() => { setEditingPool(item.id); setCatalogSheet('pools') }}
                                 trailing={<IconChevronRight className='size-4 text-label-tertiary' />} />)}
                         </Group>
                     )}
-                    {servers.length > 0 && groups.length === 0 && !profiles.length && !multipools.some(item => matches(query, item.name)) && (
+                    {servers.length > 0 && groups.length === 0 && !countryEmpty && !profiles.length && !multipools.some(item => matches(query, item.name)) && (
                         <p className='px-4 text-[15px] text-muted-foreground'>
                             Ничего не нашлось
                         </p>
@@ -704,12 +724,13 @@ function AllLocationsLimit({ limit, count, eligible, disabled, mutation }: {
     )
 }
 
-function matches(query: string, name: string, country?: string, source?: string) {
+function matches(query: string, name: string, country?: string, source?: string, description?: string) {
     const q = query.trim().toLowerCase()
     return (
         !q ||
         name.toLowerCase().includes(q) ||
         !!source?.toLowerCase().includes(q) ||
+        !!description?.toLowerCase().includes(q) ||
         countryName(country).toLowerCase().includes(q)
     )
 }
@@ -729,31 +750,30 @@ function PoolRow({
     country,
     protocol,
     source,
+    description,
     latency,
     measuring,
     current,
     excludedUntil,
     countryExcluded,
     busy,
-    probeBusy,
-    onCheck,
     onSelect,
 }: {
     name: string
     country?: string
     protocol?: string
     source?: string
+    description?: string
     latency: number
     measuring: boolean
     current: boolean
     excludedUntil?: string
     countryExcluded: boolean
     busy: boolean
-    probeBusy: boolean
-    onCheck: () => void
     onSelect: () => void
 }) {
     const notes = [
+        shortNote(description),
         countryName(country),
         source,
         countryExcluded && 'Страна исключена в разделе «Автоматика»',
@@ -796,16 +816,18 @@ function PoolRow({
                     )}
                 </span>
             </button>
-            <ProbeButton label={`Обновить пинг сервера ${name}`} disabled={probeBusy}
-                measuring={measuring} onClick={onCheck} />
         </div>
     )
 }
 
+// The last number stays while a server is checked again, faded; a server
+// without one shows «…».
 function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
-    if (measuring) return <span className='inline-block w-[4.5rem] shrink-0' aria-label='Проверяем задержку' />
-    return <span className={cn('inline-block w-[4.5rem] shrink-0 text-right text-[15px] tabular-nums', toneText[latencyTone(ms)])}>
-        {ms > 0 ? `${ms} мс` : ms < 0 ? <span aria-label='Нет ответа' title='Нет ответа'>—</span> : ''}
+    return <span aria-busy={measuring || undefined}
+        className={cn('inline-block w-[4.5rem] shrink-0 text-right text-[15px] tabular-nums transition-opacity', toneText[latencyTone(ms)], measuring && 'opacity-45')}>
+        {ms > 0 ? `${ms} мс`
+            : ms < 0 ? <span aria-label='Нет ответа' title='Нет ответа'>—</span>
+            : measuring ? <span aria-label='Проверяем задержку'>…</span> : ''}
     </span>
 }
 
@@ -818,7 +840,7 @@ function ProbeButton({ label, disabled, measuring, onClick }: {
     return <button type='button' aria-label={label} title={label} aria-busy={measuring}
         disabled={disabled} onClick={onClick}
         className='flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-tint hover:bg-white/8 focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default disabled:opacity-45'>
-        <IconRefresh aria-hidden className={cn('size-4', measuring && 'motion-safe:animate-spin')} />
+        <IconGauge aria-hidden className={cn('size-[18px]', measuring && 'motion-safe:animate-pulse')} />
     </button>
 }
 
@@ -965,7 +987,7 @@ function statusOf(server: Server, countryExcluded: boolean) {
     if (server.probe_kind !== 'https')
         return { label: 'Не проверен', className: 'text-muted-foreground' }
     if (server.latency_ms === -1)
-        return { label: 'Не отвечает', className: 'text-destructive' }
+        return { label: 'Не ответил на проверку', className: 'text-destructive' }
     if (server.pool_tag && !countryExcluded)
         return { label: 'В автовыборе', className: 'text-muted-foreground' }
     return null
@@ -1038,6 +1060,9 @@ function ServerRow({
     const [value, setValue] = useState(serverCountry(server))
     const status = statusOf(liveLatency === undefined ? server : { ...server, probe_kind: 'https', latency_ms: liveLatency, check_error: undefined }, countryExcluded)
     const measured = liveLatency ?? (server.probe_kind === 'https' ? server.latency_ms : 0)
+    // How old the number is; the router's own numbers for pool servers are live.
+    const checked = liveLatency === undefined && server.probe_kind === 'https' && isSet(server.last_checked)
+        ? 'проверен ' + agoLabel(server.last_checked) : ''
 
     if (editing) {
         return (
@@ -1092,15 +1117,16 @@ function ServerRow({
                         {withCountryFlag(server.name, serverCountry(server))}
                         <ProtocolBadge protocol={server.protocol} />
                     </span>
+                    {server.description && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{shortNote(server.description)}</span>}
                     {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
-                    {!measuring && status && (
+                    {!measuring && (status || checked) && (
                         <span
                             className={cn(
                                 'mt-0.5 block text-[13px]',
-                                status.className,
+                                status?.className ?? 'text-muted-foreground',
                             )}
                         >
-                            {status.label}
+                            {[status?.label, checked].filter(Boolean).join(' · ')}
                         </span>
                     )}
                     {countryExcluded && (

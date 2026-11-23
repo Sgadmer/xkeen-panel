@@ -26,7 +26,11 @@ export function setTabPreferences(p: Preferences | null) {
     if (!p) localStorage.removeItem(baselineKey)
 }
 
-type Baseline = { route?: string; connected?: boolean; version?: string; guard?: string; guard_notice_at?: number }
+type Baseline = { route?: string; connected?: boolean; down_since?: number; version?: string; guard?: string; guard_notice_at?: number }
+
+// An outage is announced once it lasted this long: a short pause, such as the
+// router switching servers, is not worth a notification.
+const outageNotice = 120000
 function baseline(): Baseline {
     try { return JSON.parse(localStorage.getItem(baselineKey) || '{}') || {} } catch { return {} }
 }
@@ -52,14 +56,22 @@ export function observeTabNotification(status?: Status, update?: UpdateState) {
     if (status && !status.restarting) {
         const route = [status.current_server,status.protocol].join('|')
         if (status.current_server) {
-            if (prefs.server && last.route && last.route !== route) send('Смена VPN-сервера', 'Изменился сервер общего маршрута.', '/servers', 'server')
+            if (prefs.server && last.route && last.route !== route) send('Смена VPN-сервера', 'Изменился сервер для остальных сайтов.', '/servers', 'server')
             last.route = route
         }
         if (status.proxy_checked && Date.parse(status.last_check) > 0) {
-            if (prefs.health && last.connected !== status.connected && (last.connected !== undefined || !status.connected)) {
-                send(status.connected ? 'VPN восстановлен' : 'VPN недоступен', status.connected ? 'Общий маршрут снова прошёл проверку.' : 'Проверка общего маршрута завершилась ошибкой.', '/diagnostics', 'health')
+            // last.connected is the state the owner was last told about.
+            if (status.connected) {
+                if (prefs.health && last.connected === false) send('VPN снова работает', 'Связь через VPN восстановилась.', '/', 'health')
+                last.connected = true
+                delete last.down_since
+            } else {
+                last.down_since ??= Date.now()
+                if (last.connected !== false && Date.now() - last.down_since >= outageNotice) {
+                    if (prefs.health) send('VPN не работает', 'VPN не отвечает больше 2 минут.', '/', 'health')
+                    last.connected = false
+                }
             }
-            last.connected = status.connected
         }
     }
     if (prefs.update && update?.available && update.latest?.tag && last.version !== update.latest.tag) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -29,7 +30,7 @@ type ProbeOptions struct {
 	Concurrency int
 	StateDir    string
 	// OnResult receives each finished measurement. Workers may call it concurrently.
-	OnResult    func(models.Server)
+	OnResult func(models.Server)
 }
 
 func (o ProbeOptions) report(s models.Server) {
@@ -40,6 +41,67 @@ func (o ProbeOptions) report(s models.Server) {
 
 var httpsProbeGate = make(chan struct{}, 1)
 var errProbeConfig = errors.New("Xray отклонил конфигурацию проверки")
+
+// ProbeStalledError marks a node that answers and then freezes once a few
+// kilobytes have passed: the way blocking hits a VPN link itself. An empty
+// generate_204 passes through such a node, real pages do not.
+const ProbeStalledError = "Сервер отвечает, но связь замирает"
+
+// MaxProbeConcurrency nodes are measured at once by one temporary core.
+const MaxProbeConcurrency = 16
+
+// probeTargets are unchanging files on two unrelated CDNs. Their first 32 KB
+// pass the 15–20 KB point where a throttled link stalls. Google is avoided:
+// its answers vary in size and it refuses many data-centre addresses.
+var probeTargets = []string{
+	"https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
+	"https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js",
+}
+
+const probeBytes = 32 << 10
+const probeAttempt = 5 * time.Second
+
+// probeDownload returns the time to the first response byte, the moment
+// Xray's own observatory measures too, so the numbers are comparable. A node
+// counts as working only once the first 32 KB arrived within the attempt.
+// stalled reports a response that started and never completed.
+func probeDownload(ctx context.Context, client *http.Client, timeout time.Duration) (latency int, stalled bool) {
+	for _, target := range probeTargets {
+		if ctx.Err() != nil {
+			return 0, false
+		}
+		ms, started := probeOnce(ctx, client, target, timeout)
+		if ms > 0 {
+			return ms, false
+		}
+		stalled = stalled || started
+	}
+	return 0, stalled
+}
+
+func probeOnce(ctx context.Context, client *http.Client, target string, timeout time.Duration) (int, bool) {
+	attempt, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(attempt, http.MethodGet, target, nil)
+	if err != nil {
+		return 0, false
+	}
+	request.Header.Set("Range", "bytes=0-"+strconv.Itoa(probeBytes-1))
+	start := time.Now()
+	response, err := client.Do(request)
+	if err != nil {
+		return 0, false
+	}
+	defer response.Body.Close()
+	first := time.Since(start)
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
+		return 0, false
+	}
+	if n, _ := io.CopyN(io.Discard, response.Body, probeBytes); n < probeBytes {
+		return 0, true
+	}
+	return max(int(first/time.Millisecond), 1), false
+}
 
 // CheckServersHTTPS measures each node through its own loopback HTTP inbound.
 // A single temporary Xray process serves the batch and is always reaped.
@@ -127,19 +189,14 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 	if rt.Core != CoreXray || rt.CoreBin == "" {
 		return nil, fmt.Errorf("HTTPS-проверка требует Xray")
 	}
-	if options.Timeout < 2*time.Second {
-		options.Timeout = 8 * time.Second
-	}
-	if options.Timeout > 20*time.Second {
-		options.Timeout = 20 * time.Second
-	}
+	// The configured timeout belongs to the TCP ping. A download through a
+	// VPN node gets at least probeAttempt per file, a complete profile up to 20 s.
+	options.Timeout = min(max(options.Timeout, probeAttempt), 20*time.Second)
 	if options.Concurrency < 1 {
 		options.Concurrency = 3
 	}
-	if options.Concurrency > 6 {
-		options.Concurrency = 6
-	}
-	ctx, cancel := context.WithTimeout(parent, time.Duration(len(servers)/options.Concurrency+1)*options.Timeout+20*time.Second)
+	options.Concurrency = min(options.Concurrency, MaxProbeConcurrency)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(len(servers)/options.Concurrency+1)*options.Timeout*time.Duration(len(probeTargets))+20*time.Second)
 	defer cancel()
 	base := options.StateDir
 	if base != "" {
@@ -247,14 +304,18 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 	defer log.Close()
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, v := range os.Environ() {
-		if !strings.HasPrefix(v, "XRAY_LOCATION_CONFDIR=") && !strings.HasPrefix(v,"XRAY_LOCATION_CONFIG=") {
+		if !strings.HasPrefix(v, "XRAY_LOCATION_CONFDIR=") && !strings.HasPrefix(v, "XRAY_LOCATION_CONFIG=") {
 			env = append(env, v)
 		}
 	}
-	if os.Getenv("XRAY_LOCATION_ASSET")=="" {
-		assetDir:="/opt/etc/xray/dat"
-		if rt.XrayConfDir!="" { assetDir=filepath.Join(filepath.Dir(rt.XrayConfDir),"dat") }
-		if info,e:=os.Stat(assetDir);e==nil&&info.IsDir() { env=append(env,"XRAY_LOCATION_ASSET="+assetDir) }
+	if os.Getenv("XRAY_LOCATION_ASSET") == "" {
+		assetDir := "/opt/etc/xray/dat"
+		if rt.XrayConfDir != "" {
+			assetDir = filepath.Join(filepath.Dir(rt.XrayConfDir), "dat")
+		}
+		if info, e := os.Stat(assetDir); e == nil && info.IsDir() {
+			env = append(env, "XRAY_LOCATION_ASSET="+assetDir)
+		}
 	}
 	validate := exec.CommandContext(ctx, bin, "run", "-test", "-config", conf)
 	validate.Env = env
@@ -345,38 +406,16 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 				checked[index].LastChecked = time.Now()
 				options.report(checked[index])
 			}()
-			nodeCtx, nodeCancel := context.WithTimeout(ctx, options.Timeout)
-			defer nodeCancel()
 			proxy, _ := url.Parse("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
-			transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+			// No Accept-Encoding: the byte range must be the same size on the wire.
+			transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true, DisableCompression: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 			defer transport.CloseIdleConnections()
-			client := &http.Client{Transport: transport, Timeout: options.Timeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-			for targetIndex, target := range []string{"https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204"} {
-				attemptCtx := nodeCtx
-				attemptCancel := func() {}
-				if targetIndex == 0 {
-					attemptCtx, attemptCancel = context.WithTimeout(nodeCtx, options.Timeout/2)
-				}
-				request, e := http.NewRequestWithContext(attemptCtx, http.MethodGet, target, nil)
-				if e != nil {
-					attemptCancel()
-					continue
-				}
-				start := time.Now()
-				response, e := client.Do(request)
-				if e != nil {
-					attemptCancel()
-					continue
-				}
-				response.Body.Close()
-				attemptCancel()
-				if response.StatusCode == http.StatusNoContent {
-					checked[index].Latency = int(time.Since(start) / time.Millisecond)
-					if checked[index].Latency < 1 {
-						checked[index].Latency = 1
-					}
-					break
-				}
+			client := &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+			latency, stalled := probeDownload(ctx, client, options.Timeout)
+			if latency > 0 {
+				checked[index].Latency = latency
+			} else if stalled {
+				checked[index].CheckError = ProbeStalledError
 			}
 		}(i, port)
 	}

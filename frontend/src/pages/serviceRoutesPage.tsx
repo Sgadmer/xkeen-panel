@@ -10,7 +10,7 @@ import { ServiceOrderControl, useServiceOrder } from '@/components/serviceOrder'
 import { PageTitle } from '@/components/ios'
 import { ServiceKillSwitch, serviceKillSwitch, useKillSwitch } from '@/components/killSwitch'
 import { ServiceRoutePicker } from '@/components/serviceRoutePicker'
-import { useMultiPools, usePanelSettings } from '@/hooks/usePanelData'
+import { useMultiPools, usePanelSettings, useServers, useStatus } from '@/hooks/usePanelData'
 import { api } from '@/lib/api'
 import { countryLabel, withCountryFlag } from '@/lib/format'
 import { serviceRouteOptions, type ServiceTarget } from '@/lib/serviceRouteOptions'
@@ -60,7 +60,7 @@ function currentRoute(route: InheritedRoute) {
     if (route.kind === 'conditional') {
         return 'По списку блокировок'
     }
-    let current = 'Ядро пока не сообщило маршрут'
+    let current = 'Маршрут уточняется'
     if (route.kind === 'server' && route.endpoint) current = route.endpoint
     if (route.kind === 'direct') current = 'Напрямую, без VPN'
     if (route.kind === 'reject') current = 'Соединения блокируются'
@@ -90,7 +90,7 @@ function InheritedRouteInfo({route, fresh}: {route: InheritedRoute; fresh: boole
     if (route.kind === 'conditional') {
         return <div>
             <h3 className='font-medium'>Когда используется VPN</h3>
-            <p className='mt-1 text-muted-foreground'>Роутер сверяет адрес со списком блокировок Re:filter. Если адрес есть в списке, запрос идёт через основной VPN. Остальные адреса открываются напрямую. Ваши исключения тоже действуют.</p>
+            <p className='mt-1 text-muted-foreground'>Роутер сверяет адрес со списком блокировок Re:filter. Если адрес есть в списке, запрос идёт через VPN остальных сайтов. Остальные адреса открываются напрямую. Ваши исключения тоже действуют.</p>
         </div>
     }
     const groupPath = [route.group, ...route.via].filter(Boolean).join(' → ')
@@ -269,13 +269,16 @@ export function ServiceRoutesPage() {
     const autoCount = unassigned.filter(service => service.id !== 'steam').length
     const pendingService = change.isPending && change.variables !== 'auto-default' ? change.variables : undefined
     const killSwitch = useKillSwitch(view?.scope === 'mihomo')
+    const routesDown = useStatus().data?.routes_down ?? []
     const claudeProtection = killSwitch.data && serviceKillSwitch(killSwitch.data, 'claude').enabled
     const firewall = useClaudeApiFirewall(!!view?.services.some(service => service.id === 'claude'))
     const error = change.error ?? query.error ?? killSwitch.error
     const scopes = useMultiPools(view?.scope === 'mihomo').data?.scopes
     const targets = view?.targets
     const defaultServiceTarget = mihomo ? view.default_service_target : undefined
-    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries, defaultServiceTarget), [targets, scopes, avoidCountries, defaultServiceTarget])
+    const servers = useServers().data
+    const notes = useMemo(() => new Map((servers ?? []).flatMap(s => s.target_id && s.description ? [[s.target_id, s.description] as const] : [])), [servers])
+    const options = useMemo(() => serviceRouteOptions(targets ?? [], scopes, avoidCountries, defaultServiceTarget, notes), [targets, scopes, avoidCountries, defaultServiceTarget, notes])
 
     const renderService = (service: Service) => {
         if (!view) return null
@@ -319,6 +322,9 @@ export function ServiceRoutesPage() {
                 <p className='mt-1 min-h-5 truncate text-sm leading-5 text-muted-foreground' title={summary || undefined}>
                     {busy ? 'Меняем маршрут…' : summary}
                 </p>
+                {!busy && routesDown.includes(service.name) && <p role='status' className='mt-1 text-sm text-destructive'>
+                    VPN этой карточки не отвечает{killSwitch.data ? serviceKillSwitch(killSwitch.data, service.id).enabled ? ' · kill switch не выпускает сервис напрямую' : ' · сервис идёт напрямую' : ''}
+                </p>}
                 {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} direct={service.target === 'direct'} />}
                 <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
                     protectionEnabled={claudeProtection}

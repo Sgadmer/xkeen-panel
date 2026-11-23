@@ -36,7 +36,7 @@ export function GlobalKillSwitch() {
     return (
         <Group title='Защита VPN' footer={policy.error && !confirming
             ? <span role='alert' className='text-destructive'>{policy.error.message}</span>
-            : 'Действует на основной VPN-маршрут и на карточки с режимом «Как в настройках».'}>
+            : 'Действует на остальные сайты и на карточки с режимом «Как в настройках».'}>
             <Row label='Kill switch' hint={policy.data?.enabled === false
                 ? 'При отказе VPN разрешён запасной прямой выход.'
                 : 'Блокировать прямой выход, если выбранный VPN недоступен.'}
@@ -48,7 +48,7 @@ export function GlobalKillSwitch() {
                 busy={policy.busy} error={policy.error?.message}
                 onCancel={() => { setConfirming(false); policy.reset() }}
                 onConfirm={() => { policy.saveAsync({ enabled: false }).then(() => setConfirming(false), () => {}) }}>
-                <p>Если выбранный VPN-сервер перестанет отвечать, основной маршрут и карточки с режимом «Как в настройках» смогут выйти в интернет <strong className='text-foreground'>напрямую</strong>, с домашнего адреса.</p>
+                <p>Если выбранный VPN-сервер перестанет отвечать, остальные сайты и карточки с режимом «Как в настройках» смогут выйти в интернет <strong className='text-foreground'>напрямую</strong>, с домашнего адреса.</p>
                 <p className='text-muted-foreground'>Карточки с режимом «Всегда включён» останутся защищены.</p>
             </ProtectionWarning>}
         </Group>

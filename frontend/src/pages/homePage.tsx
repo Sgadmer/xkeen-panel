@@ -1,12 +1,13 @@
 import { type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
+    IconCloudDownload,
     IconDeviceDesktop,
     IconDownload,
-    IconRefresh,
     IconWorld,
 } from '@tabler/icons-react'
 import { Group, IconTile, Row, Switch } from '@/components/ios'
+import { useKillSwitch } from '@/components/killSwitch'
 import { useSetupState } from '@/pages/welcomePage'
 import { Logo } from '@/components/logo'
 import { ProtectionSummary } from '@/components/protectionSummary'
@@ -15,6 +16,7 @@ import {
     useLogs,
     useMultiPools,
     usePool,
+    useServerSources,
     useServers,
     useStatus,
     useSubscription,
@@ -25,6 +27,7 @@ import {
     countryName,
     countryFlag,
     panelEvents,
+    routesDownText,
     serverCountry,
     scopeLabel,
     statusInfo,
@@ -33,6 +36,7 @@ import {
     toneFill,
     toneText,
 } from '@/lib/format'
+import { usageWarnings } from '@/lib/subscription'
 import { cn } from '@/lib/utils'
 
 export function HomePage() {
@@ -40,13 +44,17 @@ export function HomePage() {
     const servers = useServers().data ?? []
     const pool = usePool().data
     const subscription = useSubscription().data
+    const sources = useServerSources().data ?? []
     const devices = useDevices().data
     const update = useUpdate().data
     const logs = useLogs().data ?? []
     const { auto, pin } = useServerActions()
     const setup = useSetupState().data
+    const killSwitch = useKillSwitch(status?.core === 'mihomo').data?.enabled
 
-    const info = statusInfo(status)
+    const info = statusInfo(status, killSwitch)
+    const routesDown = routesDownText(status)
+    const usage = usageWarnings(sources)
     const isPool = pool?.mode === 'pool'
     const isAuto = pool?.selection_kind ? pool.selection_kind === 'auto' : isPool && !pool?.pin_manual
     const catalog = useMultiPools(status?.core === 'mihomo').data
@@ -110,6 +118,12 @@ export function HomePage() {
                 </Group>
             )}
 
+            {usage.length > 0 && (
+                <Group>
+                    {usage.map(text => <Row key={text} label={<span className='text-warning'>{text}</span>} hint='Продлите подписку у провайдера' to='/servers' />)}
+                </Group>
+            )}
+
             <div className='grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start'>
                 <div className='flex flex-col gap-4'>
                     <section className='flex flex-col gap-3.5 rounded-card bg-card p-[18px]'>
@@ -126,10 +140,15 @@ export function HomePage() {
                                 <div className='truncate text-[15px] tracking-[-0.24px] text-muted-foreground'>
                                     {[sameName ? '' : endpoint, latency].filter(Boolean).join(' · ')}
                                 </div>
+                                {current?.description && <div className='truncate text-[13px] text-muted-foreground'>{current.description}</div>}
                             </div>
                         </div>
+                        {(info.detail || routesDown) && <div className='grid gap-1 border-t border-white/10 pt-2.5 text-[14px]'>
+                            {info.detail && <p className={toneText[info.tone]}>{info.label}. {info.detail}</p>}
+                            {routesDown && <p className='text-destructive'>{routesDown}</p>}
+                        </div>}
                         {!!pool && <div className='grid gap-1 border-t border-white/10 pt-2.5 text-[14px]'>
-                            <p className='break-words'><span className='text-muted-foreground'>{selective ? 'Маршрут для Re:filter' : 'Основной маршрут'} · </span>{route}</p>
+                            <p className='break-words'><span className='text-muted-foreground'>{selective ? 'Адреса из Re:filter' : 'Остальные сайты'} · </span>{route}</p>
                             {selective && <p className='text-muted-foreground'>После правил сервисов и исключений адреса из списка идут по выбранному маршруту. Остальные адреса открываются напрямую.</p>}
                             {source && <p className='break-words'><span className='text-muted-foreground'>Подписка · </span>{source}</p>}
                         </div>}
@@ -203,7 +222,7 @@ export function HomePage() {
                             to='/servers'
                             icon={
                                 <IconTile color='#ff9f0a'>
-                                    <IconRefresh
+                                    <IconCloudDownload
                                         className='size-[17px]'
                                         stroke={2.2}
                                     />

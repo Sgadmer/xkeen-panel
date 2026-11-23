@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/go-chi/chi/v5"
@@ -95,12 +96,17 @@ func TestPreferencesEventsAcrossReload(t *testing.T) {
 	})
 	m.client = mock
 	var s transitions
-	m.observe(&s, Snapshot{Route: "first", Checked: true, Connected: true})
+	start := time.Now()
+	m.observe(&s, Snapshot{Route: "first", Checked: true, Connected: true, At: start})
 	m.deliver(context.Background())
 	if len(deliveries) != 0 {
 		t.Fatal("sent initial snapshot as a change")
 	}
-	m.observe(&s, Snapshot{Route: "second", Latest: "v1", Checked: true, Connected: false})
+	m.observe(&s, Snapshot{Route: "first", Checked: true, Connected: false, At: start.Add(time.Minute)})
+	if len(m.pending) != 0 {
+		t.Fatal("a short outage must not be announced")
+	}
+	m.observe(&s, Snapshot{Route: "second", Latest: "v1", Checked: true, Connected: false, At: start.Add(3 * time.Minute)})
 	if len(m.pending) != 4 {
 		t.Fatalf("category selection got %d", len(m.pending))
 	}

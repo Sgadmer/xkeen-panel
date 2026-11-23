@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,8 @@ var subscriptionProfiles = []subscriptionProfile{
 type subscriptionFetchError struct {
 	message string
 	retry   bool
+	// timeout: the provider did not answer in time; worth asking once more.
+	timeout bool
 }
 
 func (err *subscriptionFetchError) Error() string { return err.message }
@@ -78,6 +81,12 @@ func (sm *SubscriptionManager) downloadAndParseContext(parent context.Context, r
 	defer cancel()
 	for _, profile := range subscriptionProfilesFor(state, rawURL) {
 		servers, err := sm.fetchSubscriptionProfile(ctx, rawURL, state.HWID, profile)
+		var slow *subscriptionFetchError
+		if err != nil && errors.As(err, &slow) && slow.timeout && ctx.Err() == nil {
+			// A busy provider usually answers the second request; the same
+			// profile is asked again, never a different one.
+			servers, err = sm.fetchSubscriptionProfile(ctx, rawURL, state.HWID, profile)
+		}
 		if err == nil {
 			if err := sm.rememberSubscriptionProfile(rawURL, state.HWID, profile.name); err != nil {
 				return nil, err
@@ -135,7 +144,9 @@ func (sm *SubscriptionManager) fetchSubscriptionProfile(ctx context.Context, raw
 	req.Header.Set("x-hwid", hwid)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, &subscriptionFetchError{message: subscriptionTransportMessage(err)}
+		var timeout net.Error
+		slow := errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout()
+		return nil, &subscriptionFetchError{message: subscriptionTransportMessage(err), timeout: slow}
 	}
 	defer resp.Body.Close()
 	if subscriptionTrueHeader(resp.Header, "x-hwid-max-devices-reached") || subscriptionTrueHeader(resp.Header, "x-hwid-limit") {
@@ -211,10 +222,59 @@ func (sm *SubscriptionManager) fetchSubscriptionProfile(ctx context.Context, raw
 		report.Warnings = append(report.Warnings, "Служебные сообщения провайдера исключены из списка серверов.")
 	}
 	report.Imported = len(usable)
+	usage := ParseSubscriptionUsage(resp.Header.Get("subscription-userinfo"))
+	if usage == nil {
+		usage = bodySubscriptionUsage(string(body))
+	}
 	sm.mu.Lock()
 	sm.pendingImportReport = cloneSubscriptionImportReport(report)
+	sm.pendingUsage = usage
 	sm.mu.Unlock()
 	return usable, nil
+}
+
+// ParseSubscriptionUsage reads "upload=…; download=…; total=…; expire=…".
+func ParseSubscriptionUsage(value string) *models.SubscriptionUsage {
+	usage := models.SubscriptionUsage{}
+	found := false
+	for _, part := range strings.Split(value, ";") {
+		key, raw, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || n < 0 {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "upload":
+			usage.Upload, found = n, true
+		case "download":
+			usage.Download, found = n, true
+		case "total":
+			usage.Total, found = n, true
+		case "expire":
+			usage.Expire, found = n, true
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &usage
+}
+
+// Some providers put the same line at the top of the body instead of a header.
+func bodySubscriptionUsage(body string) *models.SubscriptionUsage {
+	for i, line := range strings.SplitN(body, "\n", 32) {
+		if i == 31 {
+			break
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "#"))
+		if key, value, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(key), "subscription-userinfo") {
+			return ParseSubscriptionUsage(value)
+		}
+	}
+	return nil
 }
 
 // url.Error includes the full secret URL. Name the kind of failure with fixed
@@ -237,7 +297,8 @@ func subscriptionTransportMessage(err error) string {
 	case errors.As(err, &dns) && dns.IsNotFound:
 		return prefix + "адрес сервера подписки не найден" + stale
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
-		return prefix + "сервер подписки не ответил вовремя" + stale
+		// A slow answer is the provider's load, not a moved address.
+		return prefix + "сервер подписки не ответил вовремя, панель повторит позже"
 	case errors.As(err, &authority), errors.As(err, &hostname), errors.As(err, &invalid), errors.As(err, &verification):
 		return prefix + "сервер подписки предъявил недействительный TLS-сертификат"
 	}

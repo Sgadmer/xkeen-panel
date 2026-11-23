@@ -23,7 +23,8 @@ func ProfileIdentity(server models.Server) string {
 	if err != nil {
 		return ""
 	}
-	for _, key := range []string{"remarks", "name", "ps", "remark", "log"} {
+	// "meta" carries the provider's description for the app; display only.
+	for _, key := range []string{"remarks", "name", "ps", "remark", "log", "meta"} {
 		delete(profile, key)
 	}
 	raw, err := json.Marshal(profile)

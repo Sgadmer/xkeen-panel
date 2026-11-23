@@ -5,6 +5,10 @@ import { api } from '@/lib/api'
 type ProbeJob = {
     run: number
     running: boolean
+    /** The owner pressed the button again; results measured before stay. */
+    stopped?: boolean
+    /** Started by the panel itself: pool servers and new servers. */
+    background?: boolean
     ids: number[]
     results: { id: number; latency_ms: number }[]
     error?: string
@@ -32,6 +36,12 @@ export function useStreamLatency() {
         onSuccess: job => qc.setQueryData(key, job),
         onSettled: () => { void qc.invalidateQueries({ queryKey: key }) },
     })
+    const stop = useMutation({
+        mutationFn: () => api.del<ProbeJob>(path),
+        onMutate: () => qc.cancelQueries({ queryKey: key }),
+        onSuccess: job => qc.setQueryData(key, job),
+        onSettled: () => { void qc.invalidateQueries({ queryKey: key }) },
+    })
     const starts = useMutationState({
         filters: { mutationKey: startKey, status: 'pending' },
         select: mutation => mutation.state.variables as number[] | undefined,
@@ -55,11 +65,17 @@ export function useStreamLatency() {
     )
     return {
         check: (ids?: number[]) => {
-            if (!running && !qc.isMutating({ mutationKey: startKey })) start.mutate(ids)
+            // A background run gives way to the owner's check.
+            if ((!running || job?.background) && !qc.isMutating({ mutationKey: startKey })) start.mutate(ids)
         },
+        stop: () => { if (running && !stop.isPending) stop.mutate() },
+        stopping: stop.isPending,
+        // The last run was stopped by the owner and nothing runs now.
+        stopped: !running && !starting && !!job?.stopped,
+        background: !!running && !!job?.background,
         checking: starting || !!running || status.isLoading,
         error:
-            start.error?.message || status.error?.message || job?.error || '',
+            start.error?.message || stop.error?.message || status.error?.message || job?.error || '',
         progress: { completed: measured.size, total: starting ? pending.size : job?.ids.length ?? 0 },
         isPendingServer: (id: number) => (starting && starts[0] === undefined) || pending.has(id),
         latencyFor: (id: number) => (running ? measured.get(id) : undefined),

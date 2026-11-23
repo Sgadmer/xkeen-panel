@@ -73,6 +73,11 @@ func ParseSubscriptionDetailed(content string) ([]models.Server, ImportReport, e
 	for i := range servers {
 		servers[i].ID = i
 		servers[i].Latency = -1
+		name, description := SplitServerDescription(servers[i].Name)
+		servers[i].Name = name
+		if servers[i].Description == "" {
+			servers[i].Description = description
+		}
 		servers[i].Country = SubscriptionCountry(servers[i])
 	}
 	return servers, report, nil
@@ -160,6 +165,7 @@ func parseJSONSubscription(root json.RawMessage, report *ImportReport) ([]models
 				key := ServerIdentity(server)
 				if key != "" && !seen[key] {
 					seen[key] = true
+					server.Description = objectDescription(object)
 					servers = append(servers, server)
 					report.ImportedProfiles++
 					if bundle, bundleErr := BuildProfileBundle(server, ManualTag, nil); bundleErr == nil {
@@ -177,14 +183,18 @@ func parseJSONSubscription(root json.RawMessage, report *ImportReport) ([]models
 				return
 			}
 			if len(proxies) == 1 {
+				before := len(servers)
 				add(proxies[0], objectDisplayName(object))
+				describe(servers[before:], objectDescription(object))
 			} else {
 				report.SkippedUnsupported++
 			}
 			return
 		}
 		if _, ok := object["protocol"]; ok {
+			before := len(servers)
 			add(raw, objectDisplayName(object))
+			describe(servers[before:], objectDescription(object))
 			return
 		}
 		found := false

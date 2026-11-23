@@ -60,6 +60,12 @@ type Watchdog struct {
 	mihomoName      string
 	mihomoProtocol  string
 	mihomoSelective bool
+	mihomoPool      bool
+	serviceProbe    func(context.Context, string) []models.ServiceRouteHealth
+	poolRecheck     func() bool
+	lastPoolRecheck time.Time
+	searching       bool
+	routesDown      []string
 
 	// When the route was last reported as working. A line for every check
 	// would push the events worth reading out of the journal.
@@ -124,6 +130,63 @@ func (w *Watchdog) SetMihomoRecovery(recover func(context.Context) (string, erro
 	w.mihomoRecovery = recover
 }
 
+// SetServiceProbe wires the check of the cards' own VPN routes.
+func (w *Watchdog) SetServiceProbe(probe func(context.Context, string) []models.ServiceRouteHealth) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.serviceProbe = probe
+}
+
+// SetPoolRecheck wires the background re-check of the servers in the pools
+// in use; it reports whether a check started.
+func (w *Watchdog) SetPoolRecheck(recheck func() bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.poolRecheck = recheck
+}
+
+// A failed pool triggers at most one re-check of its servers in this period.
+const poolRecheckEvery = 5 * time.Minute
+
+// routeSummary is « · Швеция-1, 43 мс» for an event line, empty without a name.
+func routeSummary(name string, latency int) string {
+	if name == "" {
+		return ""
+	}
+	if latency > 0 {
+		return fmt.Sprintf(" · %s, %d мс", name, latency)
+	}
+	return " · " + name
+}
+
+// logRouteChanges writes one line when cards lose their VPN route and one
+// when they get it back, never a line per check.
+func logRouteChanges(w *Watchdog, previous, current []string) {
+	was := make(map[string]bool, len(previous))
+	for _, name := range previous {
+		was[name] = true
+	}
+	now := make(map[string]bool, len(current))
+	var lost, back []string
+	for _, name := range current {
+		now[name] = true
+		if !was[name] {
+			lost = append(lost, name)
+		}
+	}
+	for _, name := range previous {
+		if !now[name] {
+			back = append(back, name)
+		}
+	}
+	if len(lost) > 0 {
+		w.logUnhealthy("[MIHOMO] VPN не отвечает · %s", strings.Join(lost, ", "))
+	}
+	if len(back) > 0 {
+		w.writeLog("[OK] VPN снова работает · %s", strings.Join(back, ", "))
+	}
+}
+
 // SetEventBus wires the SSE event bus.
 func (w *Watchdog) SetEventBus(bus *sse.EventBus) {
 	w.eventBus = bus
@@ -157,7 +220,8 @@ func (w *Watchdog) Start(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	w.writeLog("Watchdog запущен (интервал: %s)", interval)
+	// Starts and stops are routine: they stay out of the owner's events.
+	log.Printf("Watchdog запущен (интервал: %s)", interval)
 
 	// Check once immediately
 	w.check(true)
@@ -165,7 +229,7 @@ func (w *Watchdog) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			w.writeLog("Watchdog остановлен")
+			log.Printf("Watchdog остановлен")
 			if w.logFile != nil {
 				w.logFile.Close()
 			}
@@ -202,9 +266,28 @@ func (w *Watchdog) check(restoreSelection bool) {
 				conn.Close()
 			}
 		}
+		// The cards' own routes: a card on a pool used to stay dead while
+		// only the default route was watched.
+		var routes []models.ServiceRouteHealth
+		w.mu.RLock()
+		serviceProbe, poolRecheck := w.serviceProbe, w.poolRecheck
+		w.mu.RUnlock()
+		if serviceProbe != nil && internet {
+			ctx, cancel := context.WithTimeout(context.Background(), 24*time.Second)
+			routes = serviceProbe(ctx, w.config.CheckURL)
+			cancel()
+		}
+		down, poolDown := []string{}, false
+		for _, route := range routes {
+			if !route.OK {
+				down = append(down, route.Services...)
+				poolDown = poolDown || route.Pool
+			}
+		}
+		defaultPoolDown := err != nil && result.Checked && internet && result.Pool
 		w.mu.Lock()
 		w.lastCheck, w.mihomoName, w.mihomoProtocol = time.Now(), result.Name, result.Protocol
-		w.mihomoSelective = result.Selective
+		w.mihomoSelective, w.mihomoPool = result.Selective, result.Pool
 		w.connected, w.lastLatency, w.internet = err == nil, result.Latency, internet
 		w.proxyChecked = result.Checked
 		recover := w.mihomoRecovery
@@ -217,11 +300,28 @@ func (w *Watchdog) check(restoreSelection bool) {
 		if tryRecovery {
 			w.failCount = 0
 		}
+		// A dead pool server is replaced by the router within one probe
+		// round. When the whole pool stopped answering, the panel re-checks
+		// its servers, and the pool is rebuilt from those that work.
+		recheck := (defaultPoolDown || poolDown) && poolRecheck != nil && time.Since(w.lastPoolRecheck) >= poolRecheckEvery
+		if recheck {
+			w.lastPoolRecheck = time.Now()
+		}
+		w.searching = defaultPoolDown && time.Since(w.lastPoolRecheck) < poolRecheckEvery
+		previous := w.routesDown
+		w.routesDown = down
 		w.mu.Unlock()
-		if err != nil {
-			w.logUnhealthy("[MIHOMO] Проверка общего маршрута: %v", err)
-		} else {
-			w.logHealthy("[OK] Общий маршрут Mihomo работает (%dms)", result.Latency)
+		switch {
+		case err == nil:
+			w.logHealthy("[OK] VPN работает · Остальные сайты%s", routeSummary(result.Name, result.Latency))
+		case !internet:
+			w.logUnhealthy("[FAIL] Нет интернета у провайдера — VPN тут ни при чём")
+		default:
+			w.logUnhealthy("[MIHOMO] VPN не отвечает · Остальные сайты%s: %v", routeSummary(result.Name, 0), err)
+		}
+		logRouteChanges(w, previous, down)
+		if recheck && poolRecheck() {
+			w.writeLog("[MIHOMO] Сервер автовыбора не отвечает — проверяю остальные серверы пула")
 		}
 		w.publishStatus()
 		if tryRecovery {
@@ -229,7 +329,7 @@ func (w *Watchdog) check(restoreSelection bool) {
 			replacement, err := recover(attempt)
 			cancel()
 			if err != nil {
-				w.writeLog("[MIHOMO] Общий маршрут сохранён: %v", err)
+				w.writeLog("[MIHOMO] Сервер для остальных сайтов не заменён: %v", err)
 			} else if replacement != "" {
 				w.writeLog("[MIHOMO] Выбран проверенный резерв той же страны: %s", replacement)
 				w.CheckNow()
@@ -945,7 +1045,9 @@ func (w *Watchdog) GetStatus() models.Status {
 	// In pool mode traffic goes through the pinned node, not the subscription's active entry
 	if w.mihomoProbe != nil && rt.Core == xkeen.CoreMihomo {
 		status.CurrentServer, status.Protocol = w.mihomoName, w.mihomoProtocol
-		status.Selective = w.mihomoSelective
+		status.Selective, status.Pool = w.mihomoSelective, w.mihomoPool
+		status.Searching = w.searching && !w.connected
+		status.RoutesDown = append([]string(nil), w.routesDown...)
 	} else if server := w.currentServer(); server != nil {
 		status.CurrentServer = server.Name
 		status.Protocol = server.Protocol

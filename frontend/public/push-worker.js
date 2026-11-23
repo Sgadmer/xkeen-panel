@@ -3,10 +3,10 @@ self.addEventListener('install', event => event.waitUntil(self.skipWaiting()))
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()))
 
 const notices = {
-    server: ['Смена VPN-сервера', 'Изменился сервер общего маршрута.', '/servers'],
+    server: ['Смена VPN-сервера', 'Изменился сервер для остальных сайтов.', '/servers'],
     update: ['Обновление панели', 'Доступна новая версия XKeen.', '/settings/update'],
-    offline: ['VPN недоступен', 'Проверка общего маршрута завершилась ошибкой.', '/diagnostics'],
-    online: ['VPN восстановлен', 'Общий маршрут снова прошёл проверку.', '/diagnostics'],
+    offline: ['VPN не работает', 'VPN не отвечает больше 2 минут.', '/'],
+    online: ['VPN снова работает', 'Связь через VPN восстановилась.', '/'],
     kill_switch: ['Запрос остановлен защитой VPN', 'Не удалось использовать выбранный VPN. Прямой выход запрещён. Подробности — в журнале.', '/journal?kind=kill_switch'],
     test: ['Проверка уведомлений', 'XKeen может присылать события на это устройство.', '/settings/notifications'],
 }

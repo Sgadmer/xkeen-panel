@@ -18,7 +18,13 @@ type Snapshot struct {
 	Latest       string
 	GuardEventID string
 	GuardAt      time.Time
+	// When the sample was taken; zero means now.
+	At time.Time
 }
+
+// An outage is announced once it lasted this long: a short pause, such as the
+// router switching servers, is not worth a notification.
+const outageNotice = 2 * time.Minute
 
 type message struct {
 	Kind    string `json:"kind"`
@@ -56,6 +62,7 @@ type transitions struct {
 	health      string
 	guard       string
 	guardNotice time.Time
+	downSince   time.Time
 }
 
 func (s *transitions) changes(now Snapshot) []message {
@@ -76,16 +83,26 @@ func (s *transitions) changes(now Snapshot) []message {
 		s.route = now.Route
 	}
 	if now.Checked {
-		kind := "offline"
+		at := now.At
+		if at.IsZero() {
+			at = time.Now()
+		}
+		// A startup sample establishes a baseline. An outage is reported once
+		// it lasted outageNotice, and a recovery only after a reported outage.
 		if now.Connected {
-			kind = "online"
+			if s.health == "offline" {
+				out = append(out, message{Kind: "online"})
+			}
+			s.health, s.downSince = "online", time.Time{}
+		} else {
+			if s.downSince.IsZero() {
+				s.downSince = at
+			}
+			if s.health != "offline" && at.Sub(s.downSince) >= outageNotice {
+				out = append(out, message{Kind: "offline"})
+				s.health = "offline"
+			}
 		}
-		// A startup sample establishes a baseline. Send the first outage,
-		// and wait for a real transition before reporting a recovery.
-		if kind != s.health && (s.health != "" || kind == "offline") {
-			out = append(out, message{Kind: kind})
-		}
-		s.health = kind
 	}
 	return out
 }

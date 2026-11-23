@@ -56,9 +56,7 @@ func main() {
 		log.Fatal(http.ListenAndServe("127.0.0.1:3300", demo.Handler(frontend)))
 	}
 
-	if rule, ok := localtz.Apply("/etc/localtime"); ok {
-		log.Printf("Часовой пояс взят из /etc/localtime: %s", rule)
-	}
+	zone, zoneApplied := localtz.Apply("/etc/localtime")
 
 	// Resolved now: once an update renames the running file, the link points at .prev
 	binPath, err := os.Executable()
@@ -68,6 +66,13 @@ func main() {
 	if err != nil {
 		log.Printf("Путь к бинарю не определён (%v) — самообновление недоступно", err)
 		binPath = ""
+	}
+	takeSupervision()
+	if superviseSupported && binPath != "" && !underSupervisor {
+		os.Exit(supervise(binPath))
+	}
+	if zoneApplied {
+		log.Printf("Часовой пояс взят из /etc/localtime: %s", zone)
 	}
 
 	// Load the configuration
@@ -156,9 +161,13 @@ func main() {
 	eventBus := sse.NewEventBus()
 	watchdog.SetEventBus(eventBus)
 	watchdog.SetPoolStore(poolStore)
+	if restartsBefore > 0 {
+		watchdog.Log("[PANEL] Панель неожиданно остановилась и сама запустилась снова")
+	}
 	if cards != nil {
 		watchdog.SetMihomoProbe(cards.ProbeDefault)
 		watchdog.SetMihomoRecovery(cards.RecoverDefault)
+		watchdog.SetServiceProbe(cards.ProbeServiceRoutes)
 	}
 
 	siteStore := xkeen.NewSiteStore(cfg.DataDir)
@@ -403,6 +412,10 @@ func main() {
 	}
 
 	if <-stopped {
+		if underSupervisor {
+			// The supervisor replaces itself with the new version
+			os.Exit(exitNewVersion)
+		}
 		// Same PID and name, so the init script keeps recognising the process
 		err := syscall.Exec(binPath, os.Args, os.Environ())
 		log.Fatalf("Не удалось запустить новую версию: %v", err)

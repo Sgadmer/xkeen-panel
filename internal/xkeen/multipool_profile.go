@@ -33,12 +33,18 @@ func MultiPoolProfile(servers []models.Server) (models.Server, error) {
 	sort.Slice(outbounds, func(i, j int) bool {
 		return mapOf(outbounds[i])["tag"].(string) < mapOf(outbounds[j])["tag"].(string)
 	})
-	// serviceWorkerConfig adds the terminal blackhole, protects resolver
-	// traffic through the same balancer, and sets blackhole as fallbackTag.
+	// Until the first probe round finishes leastPing has no live node and
+	// returns its fallback. A blackhole there cut every device off for minutes
+	// after each subscription update. The first member by tag is a VPN node like
+	// any other and keeps the generation stable; serviceWorkerConfig keeps an
+	// explicit fallbackTag and still adds the terminal blackhole for resolver
+	// traffic.
+	balancer := balancerBlock("pool", selector)
+	balancer["fallbackTag"] = mapOf(outbounds[0])["tag"]
 	profile := map[string]interface{}{
 		"outbounds": outbounds,
 		"routing": map[string]interface{}{
-			"balancers": []interface{}{balancerBlock("pool", selector)},
+			"balancers": []interface{}{balancer},
 			"rules": []interface{}{map[string]interface{}{
 				"type": "field", "network": "tcp,udp", "balancerTag": "pool",
 			}},

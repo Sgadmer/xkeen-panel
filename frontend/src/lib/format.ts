@@ -77,22 +77,40 @@ export function plural(n: number, one: string, few: string, many: string) {
 
 export type Tone = 'good' | 'warn' | 'bad' | 'idle'
 
-export function statusInfo(s?: Status): { label: string; tone: Tone } {
+export type StatusInfo = { label: string; tone: Tone; detail?: string }
+
+// One vocabulary for every screen. killSwitch is the global kill switch when
+// known: it decides whether a dead VPN pauses the internet or lets it out directly.
+export function statusInfo(s?: Status, killSwitch?: boolean): StatusInfo {
     if (!s) return { label: 'Загрузка', tone: 'idle' }
     if (s.restarting) return { label: 'Перезапуск', tone: 'warn' }
     if (s.process_unknown) return { label: 'Состояние ядра неизвестно', tone: 'warn' }
-    if (!s.xray_running) return { label: 'Прокси остановлен', tone: 'bad' }
+    if (!s.xray_running) return { label: 'VPN остановлен', tone: 'bad', detail: 'Ядро XKeen не запущено.' }
     if (!isSet(s.last_check)) return { label: 'Проверяю', tone: 'idle' }
+    const vpn = s.selective ? 'VPN для Re:filter' : 'VPN'
     if (s.core === 'mihomo' && !s.proxy_checked) {
-        if (s.current_server === 'DIRECT') return { label: s.selective ? 'Для списка выбран прямой выход' : 'Основной маршрут напрямую', tone: s.selective ? 'warn' : 'idle' }
-        if (s.current_server === 'REJECT') return { label: s.selective ? 'Маршрут для списка заблокирован' : 'Основной маршрут заблокирован', tone: 'warn' }
-        return { label: 'Проверка маршрута недоступна', tone: 'warn' }
+        if (s.current_server === 'DIRECT') return s.selective
+            ? { label: 'Re:filter напрямую', tone: 'warn', detail: 'Для адресов из Re:filter выбран прямой выход.' }
+            : { label: 'Напрямую', tone: 'idle', detail: 'Остальные сайты открываются без VPN.' }
+        if (s.current_server === 'REJECT') return { label: 'Заблокировано', tone: 'warn', detail: s.selective ? 'Адреса из Re:filter заблокированы.' : 'Остальные сайты заблокированы.' }
+        return { label: 'Проверка VPN недоступна', tone: 'warn' }
     }
-    if (s.connected && s.proxy_checked)
-        return { label: s.selective ? 'VPN для списка работает' : 'VPN-маршрут работает', tone: 'good' }
+    if (s.connected && s.proxy_checked) return { label: vpn + ' работает', tone: 'good' }
     if (s.connected) return { label: 'Не подтверждено', tone: 'warn' }
-    if (!s.internet) return { label: 'Нет интернета', tone: 'bad' }
-    return { label: s.selective ? 'VPN для списка не отвечает' : 'Основной маршрут не отвечает', tone: 'bad' }
+    if (!s.internet) return { label: 'Нет интернета у провайдера', tone: 'bad', detail: 'Роутер не выходит в интернет даже напрямую — VPN тут ни при чём.' }
+    if (s.searching) return { label: vpn + ' ищет сервер', tone: 'warn', detail: 'Сервер автовыбора не ответил — панель проверяет остальные серверы пула.' }
+    const paused = s.held || killSwitch === true
+    const detail = s.selective
+        ? paused ? 'Адреса из Re:filter не открываются: kill switch не выпускает их напрямую.' : undefined
+        : paused ? 'Интернет приостановлен: kill switch не выпускает трафик напрямую.'
+            : killSwitch === false ? 'Трафик идёт напрямую, с домашнего адреса.' : undefined
+    return { label: vpn + ' не работает', tone: 'bad', detail }
+}
+
+// The cards whose own VPN route stopped answering.
+export function routesDownText(s?: Status) {
+    const names = s?.routes_down ?? []
+    return names.length ? `Не отвечает VPN: ${names.join(', ')}` : ''
 }
 
 export const toneText: Record<Tone, string> = {
@@ -150,9 +168,11 @@ export function panelEvents(lines: string[], limit: number): PanelEvent[] {
     return events
 }
 
+// <200 ms green, 200–499 orange, slower or no answer red; 0 is not measured yet.
 export function latencyTone(ms: number): Tone {
     if (ms < 0) return 'bad'
-    if (ms < 200) return 'idle'
+    if (ms === 0) return 'idle'
+    if (ms < 200) return 'good'
     if (ms < 500) return 'warn'
     return 'bad'
 }

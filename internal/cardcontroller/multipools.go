@@ -169,6 +169,38 @@ func (c *Controller) MultiPools() ([]MultiPool, error) {
 	return p.pools, nil
 }
 
+// PoolMemberIDs lists the catalogue IDs of every server in a pool that some
+// route uses now: the servers the panel re-checks most often, because the
+// router can switch to any of them at any moment.
+func (c *Controller) PoolMemberIDs() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, err := c.read()
+	if err != nil {
+		return nil
+	}
+	var nodes []poolNode
+	seen := map[int]bool{}
+	ids := []int{}
+	for _, key := range p.assigned {
+		pool := p.pool(key)
+		if pool == nil {
+			continue
+		}
+		if nodes == nil {
+			nodes = c.poolNodes(c.catalog())
+		}
+		for _, s := range pool.members(nodes) {
+			if !seen[s.ID] {
+				seen[s.ID] = true
+				ids = append(ids, s.ID)
+			}
+		}
+	}
+	sort.Ints(ids)
+	return ids
+}
+
 func (p profile) pool(id string) *MultiPool {
 	for i := range p.pools {
 		if p.pools[i].ID == id {
@@ -272,7 +304,7 @@ func (c *Controller) EditMultiPool(ctx context.Context, id string, spec *PoolSpe
 	var result MultiPool
 	if spec == nil {
 		if used {
-			return result, errors.New("сначала смените этот мультипул в маршрутах сервисов или в основном маршруте")
+			return result, errors.New("сначала смените этот мультипул в маршрутах сервисов или для остальных сайтов")
 		}
 		p.pools = slices.DeleteFunc(p.pools, func(item MultiPool) bool { return item.ID == id })
 	} else {

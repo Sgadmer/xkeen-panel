@@ -19,9 +19,10 @@ const (
 	DefaultBalancerTag  = "balancer"
 	DefaultPoolSelector = "sub-"
 	defaultProbeURL     = "https://www.google.com/generate_204"
-	// A dead node stays selectable until the next probe, so this is how long a
-	// pool can keep sending traffic into a hole
-	defaultProbeEvery = "1m"
+	// A dead node stays selectable until the next probe round, so this is how
+	// long a pool can keep sending new connections into a hole. With every node
+	// probed at once, one round costs about 13 KB of traffic per node.
+	defaultProbeEvery = "2m"
 )
 
 // BuildPoolOutbounds renders one outbound per server, tagged <selector><N>.
@@ -158,25 +159,31 @@ func splitAPIAddr(addr string) (string, int, error) {
 // observatoryBlock enables the probing leastPing needs — without it the strategy
 // has no latency data to rank nodes by.
 //
-// The interval scales with pool size: observatory probes every node separately,
-// so a minute-long cycle over a large pool means constant handshakes on the
-// router.
+// Without enableConcurrency Xray probes one node, sleeps the whole interval,
+// then probes the next: a fresh worker of 88 nodes needed hours for one round
+// and sent everything to its fallback until the first live node came up. All
+// nodes are probed at once now, so a new worker knows its live nodes within
+// seconds. The interval grows with pool size to keep the probe traffic near
+// 60 MB a day.
 func observatoryBlock(selector string, nodes int) map[string]interface{} {
 	return map[string]interface{}{
-		"subjectSelector": []interface{}{selector},
-		"probeURL":        defaultProbeURL,
-		"probeInterval":   probeIntervalFor(nodes),
+		"subjectSelector":   []interface{}{selector},
+		"probeURL":          defaultProbeURL,
+		"probeInterval":     probeIntervalFor(nodes),
+		"enableConcurrency": true,
 	}
 }
 
 func probeIntervalFor(nodes int) string {
 	switch {
-	case nodes <= 20:
+	case nodes <= 8:
 		return defaultProbeEvery
-	case nodes <= 40:
-		return "3m"
-	default:
+	case nodes <= 20:
 		return "5m"
+	case nodes <= 40:
+		return "10m"
+	default:
+		return "15m"
 	}
 }
 

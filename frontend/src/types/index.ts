@@ -26,6 +26,8 @@ export type Server = {
     check_error?: string
     profile_nodes?: number
     pool_tag?: string
+    /** A short note from the provider, e.g. "Обход белых списков LTE". */
+    description?: string
 }
 
 export type Status = {
@@ -37,6 +39,12 @@ export type Status = {
     /** The internet is paused for devices: a restart under a kill switch. */
     held?: boolean
     selective?: boolean
+    /** The automatic choice stopped answering and the panel checks the pool. */
+    searching?: boolean
+    /** Cards whose own VPN route does not answer. */
+    routes_down?: string[]
+    /** The route for the other sites is an automatic pool. */
+    pool?: boolean
     restarting: boolean
     current_server: string
     protocol: string
@@ -165,7 +173,11 @@ export type ServerSource = {
     skipped_composite?: number
     skipped_unsupported?: number
     native_provider?: boolean
+    usage?: SubscriptionUsage
 }
+
+/** From the provider's subscription-userinfo: bytes and a Unix time; 0 is unknown or unlimited. */
+export type SubscriptionUsage = { upload?: number; download?: number; total?: number; expire?: number }
 
 export type PoolMember = { source_id: string; target_id: string }
 

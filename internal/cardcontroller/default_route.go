@@ -187,7 +187,7 @@ func (c *Controller) currentDefault(ctx context.Context) (profile, DefaultRoute,
 	}
 	state := c.defaultRoute(p, live)
 	if state.Group == "" || !p.api.ruleMode(ctx) {
-		return p, DefaultRoute{}, errors.New("контроллер не подтвердил общий маршрут Mihomo")
+		return p, DefaultRoute{}, errors.New("Mihomo не подтвердил маршрут для остальных сайтов")
 	}
 	if state.SelectionKind == "auto" && state.Current == state.ScopeID {
 		endpoint := fallbackSelection(live[state.Group].Now, live)
@@ -357,12 +357,12 @@ func (c *Controller) ProbeDefault(ctx context.Context, checkURL string) (models.
 	c.mu.Lock()
 	p, state, err := c.currentDefault(ctx)
 	c.mu.Unlock()
-	probe := models.RouteProbe{Name: state.Name, Protocol: state.Protocol, Latency: -1, Selective: refilterEnabled(p.doc)}
+	probe := models.RouteProbe{Name: state.Name, Protocol: state.Protocol, Latency: -1, Selective: refilterEnabled(p.doc), Pool: state.SelectionKind == "auto"}
 	if err != nil {
 		return probe, err
 	}
 	if state.probeTarget == "" {
-		return probe, errors.New("общий маршрут не использует доступный прокси")
+		return probe, errors.New("для остальных сайтов не выбран рабочий VPN-сервер")
 	}
 	var result struct{ Delay int }
 	path := "/proxies/" + url.PathEscape(state.probeTarget) + "/delay?timeout=8000&url=" + url.QueryEscape(checkURL)
@@ -383,8 +383,10 @@ func (c *Controller) ProbeDefault(ctx context.Context, checkURL string) (models.
 			return probe, err
 		}
 	}
+	// The core's own status code means nothing to the owner: the server failed
+	// two URL tests in a row.
 	probe.Checked = true
-	return probe, err
+	return probe, errors.New("сервер не ответил на проверку")
 }
 
 // A batched probe uses a temporary Xray process, like the workers that serve

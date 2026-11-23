@@ -137,7 +137,7 @@ export function DiagnosticsPage() {
                     >
                         <Check
                             verdict={proxyVerdict}
-                            label={s?.selective ? 'VPN для адресов из Re:filter' : 'Прокси через VPN'}
+                            label={s?.selective ? 'VPN для адресов из Re:filter' : 'VPN для остальных сайтов'}
                             detail={
                                 s?.current_server === 'DIRECT' && !s.proxy_checked ? 'Прямое подключение' :
                                 s?.connected && s.latency_ms > 0
@@ -160,7 +160,7 @@ export function DiagnosticsPage() {
                                       ? 'ok'
                                       : 'bad'
                             }
-                            label='Интернет у роутера'
+                            label='Интернет у провайдера'
                         />
                         <Check
                             verdict={

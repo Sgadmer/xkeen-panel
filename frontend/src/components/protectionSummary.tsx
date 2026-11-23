@@ -30,7 +30,7 @@ export function ProtectionSummary() {
     const cards = aiServiceIds.flatMap(id => routes.services.find(service => service.id === id) ?? [])
     const claude = cards.find(card => card.id === 'claude')
     const findings: Finding[] = []
-    if (!policy.enabled) findings.push({ text: 'Общий kill switch выключен', hint: 'При отказе VPN основной маршрут выйдет напрямую.', to: '/settings/protection' })
+    if (!policy.enabled) findings.push({ text: 'Общий kill switch выключен', hint: 'Если VPN перестанет работать, остальные сайты пойдут напрямую.', to: '/settings/protection' })
     if (mode?.enabled) findings.push({ text: 'Неопознанный трафик идёт напрямую', hint: 'Включён режим «только по списку блокировок».', to: '/settings/protection' })
     for (const card of cards) {
         if (card.target === 'direct') findings.push({ text: `${card.name} идёт напрямую`, to: '/services' })

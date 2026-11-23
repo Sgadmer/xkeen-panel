@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -27,6 +28,8 @@ type SourceSummary struct {
 	ImportedProfiles   int       `json:"imported_profiles,omitempty"`
 	SkippedComposite   int       `json:"skipped_composite,omitempty"`
 	SkippedUnsupported int       `json:"skipped_unsupported,omitempty"`
+	// Usage: traffic and end date as the provider reported them.
+	Usage *models.SubscriptionUsage `json:"usage,omitempty"`
 }
 
 type SourceInput struct {
@@ -113,6 +116,7 @@ func SourceSummaries(data models.SubscriptionData) []SourceSummary {
 			ID: s.ID, Name: s.Name, Kind: s.Kind, Host: sourceHost(s.URL),
 			ServerCount: counts[s.ID], LastUpdated: s.LastUpdated, CanRefresh: s.Kind == "subscription" && s.URL != "",
 			ImportedProfiles: s.Report.ImportedProfiles, SkippedComposite: s.Report.SkippedComposite, SkippedUnsupported: s.Report.SkippedUnsupported,
+			Usage: s.Usage,
 		})
 	}
 	return sources
@@ -240,6 +244,14 @@ func (sm *SubscriptionManager) importSource(ctx context.Context, source models.S
 			return nil, err
 		}
 		source.Report = cloneSubscriptionImportReport(sm.pendingImportReport)
+		sm.mu.RLock()
+		if sm.pendingUsage != nil {
+			usage := *sm.pendingUsage
+			source.Usage = &usage
+		} else {
+			source.Usage = nil
+		}
+		sm.mu.RUnlock()
 	case "file", "server":
 		if source.URL != "" || len(content) == 0 || len(content) > 4<<20 {
 			return nil, errors.New("нужно содержимое файла или ссылка сервера размером до 4 МиБ")
@@ -251,6 +263,14 @@ func (sm *SubscriptionManager) importSource(ctx context.Context, source models.S
 	default:
 		return nil, errors.New("неизвестный тип источника")
 	}
+	described := 0
+	for _, server := range fresh {
+		if server.Description != "" {
+			described++
+		}
+	}
+	// Only the panel's own log: whether a provider sends descriptions at all.
+	log.Printf("Источник %q: описания у %d из %d серверов", source.Name, described, len(fresh))
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}

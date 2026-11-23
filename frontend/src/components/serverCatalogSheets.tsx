@@ -8,7 +8,7 @@ import { useMultiPools, usePanelSettings, usePool, useServers, useServerSources 
 import { invalidateServerData } from '@/hooks/useServerActions'
 import { api } from '@/lib/api'
 import { countryLabel, serverCountry, timeAgo } from '@/lib/format'
-import { importWarnings, safeNotice } from '@/lib/subscription'
+import { importWarnings, safeNotice, usageText, usageWarnings } from '@/lib/subscription'
 import type { MultiPool, PoolMember, Server, ServerSource, SubscriptionUpdateResponse } from '@/types'
 
 const field = 'min-h-11 w-full rounded-xl border border-white/10 bg-fill px-3 text-[16px] outline-none focus:border-tint'
@@ -53,7 +53,7 @@ function SourceList() {
             {sources.data?.map(item => <Row key={item.id} label={<span className='break-words'>{item.name}</span>}
                 hint={[kinds[item.kind], item.host !== item.name && item.host, 'Записей: ' + item.server_count, item.imported_profiles && `Режимов провайдера: ${item.imported_profiles}`,
                     item.skipped_composite && `Пропущено составных профилей: ${item.skipped_composite}`,
-                    item.native_provider && 'Используется профилем Mihomo'].filter(Boolean).join(' · ')}
+                    item.native_provider && 'Используется профилем Mihomo', usageText(item.usage)].filter(Boolean).join(' · ')}
                 onClick={() => select(item.id)} trailing={arrow} />)}
             <Row label='Добавить источник' tone='tint' onClick={() => select('add')} />
         </Group>
@@ -88,6 +88,8 @@ function SourceEditor({ source, onBack, onDone }: { source: ServerSource; onBack
         <Back onClick={onBack} />
         <Group title='Источник'>
             <Row label={kinds[source.kind]} hint={source.host} detail={'Записей: ' + source.server_count} />
+            {!!usageText(source.usage) && <Row label='По данным провайдера' hint={usageText(source.usage)} />}
+            {usageWarnings([source]).map(text => <Row key={text} label={<span className='text-warning'>{text.slice(source.name.length + 2)}</span>} hint='Продлите подписку у провайдера' />)}
             {!!source.imported_profiles && <Row label='Доступные режимы провайдера' detail={String(source.imported_profiles)} />}
             {!!source.skipped_composite && <Row label='Пропущено составных профилей' detail={String(source.skipped_composite)}
                 hint='Эти профили используют функции, которые панель не может перенести.' />}
@@ -151,7 +153,7 @@ function MultiPoolList({ initialId }: { initialId: string | null }) {
                 const selected = item.source_ids?.map(id => sources.data?.find(source => source.id === id)?.name || 'Удалённый источник')
                 const countryText = item.countries?.length ? item.countries.map(countryLabel).join(', ') : 'Все разрешённые страны'
                 return <Row key={item.id} label={<span className='break-words'>{item.name}</span>}
-                    hint={[active === item.id && 'Основной маршрут', item.include_filtered !== false && (selected?.length ? selected.join(', ') : 'Все источники'), item.include_filtered !== false && countryText,
+                    hint={[active === item.id && 'Для остальных сайтов', item.include_filtered !== false && (selected?.length ? selected.join(', ') : 'Все источники'), item.include_filtered !== false && countryText,
                         !!item.members?.length && `Конфигов вручную: ${item.members.length}`,
                         memberSummary(item)].filter(Boolean).join(' · ')}
                     onClick={() => { setNotice(''); setEdit(item.id) }} trailing={arrow} />
@@ -233,7 +235,7 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
         },
         onSuccess: async (_, kind) => {
             await invalidateServerData(qc)
-            onDone({ save: 'Мультипул сохранён.', delete: 'Мультипул удалён.', pin: 'Мультипул назначен основным маршрутом.', auto: 'Включён общий автовыбор.' }[kind])
+            onDone({ save: 'Мультипул сохранён.', delete: 'Мультипул удалён.', pin: 'Остальные сайты идут через этот мультипул.', auto: 'Включён общий автовыбор.' }[kind])
         },
     })
     return <>
@@ -293,7 +295,7 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
                     // Already in the pool through the conditions: nothing to tick by hand.
                     const matched = !selected && byRules(server)
                     return <Choice key={key} checked={selected || matched} disabled={action.isPending || matched || excluded.includes(code) && !selected}
-                        label={server.name} hint={[server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна', matched && 'Уже в пуле по условиям'].filter(Boolean).join(' · ')}
+                        label={server.name} hint={[server.description, server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна', matched && 'Уже в пуле по условиям'].filter(Boolean).join(' · ')}
                         onChange={() => setMembers(prev => selected ? prev.filter(item => memberKey(item) !== key) :
                             [...prev, { source_id: server.source_id || 'legacy', target_id: server.target_id! }])} />
                 })}
@@ -309,9 +311,9 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
             <Row label={action.isPending && action.variables === 'save' ? 'Сохраняем…' : 'Сохранить мультипул'} tone='tint'
                 disabled={!valid || !dirty || action.isPending || !servers.data || !settings.data} onClick={() => action.mutate('save')} />
         </Group>
-        {pool && <Group title='Основной маршрут'>
-            <Row label={active ? 'Вернуть общий автовыбор' : 'Назначить основным маршрутом'}
-                hint={pool.member_count ? (active ? 'Этот пул уже выбран для основного маршрута.' : 'Для сервисов со своим маршрутом сохраняется их выбор.')
+        {pool && <Group title='Остальные сайты'>
+            <Row label={active ? 'Вернуть общий автовыбор' : 'Пустить остальные сайты через этот пул'}
+                hint={pool.member_count ? (active ? 'Остальные сайты уже идут через этот пул.' : 'Для сервисов со своим маршрутом сохраняется их выбор.')
                     : 'Подходящих VPN-серверов нет. Трафик, назначенный этому пулу, блокируется.'}
                 tone='tint' disabled={dirty || action.isPending || (!active && !pool.member_count)} onClick={() => action.mutate(active ? 'auto' : 'pin')} />
         </Group>}
