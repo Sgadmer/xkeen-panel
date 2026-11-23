@@ -21,6 +21,23 @@ export function countryLabel(code?: string) {
     return [countryFlag(code), countryName(code)].filter(Boolean).join(' ')
 }
 
+// «Без страны» among the excluded locations: ZZ, the code of an unknown region.
+export const NO_COUNTRY = 'ZZ'
+
+export function locationLabel(code: string) {
+    return code === NO_COUNTRY ? 'Без страны' : countryLabel(code)
+}
+
+export function locationName(code: string) {
+    return code === NO_COUNTRY ? 'Без страны' : countryName(code)
+}
+
+// Whether automatic choice skips a server of this location; a server without
+// one is skipped when «Без страны» is excluded.
+export function locationExcluded(avoid: string[], code?: string) {
+    return avoid.includes((code || NO_COUNTRY).toUpperCase())
+}
+
 export function withCountryFlag(name: string, code?: string) {
     const flag = countryFlag(code)
     return flag && !/\p{Regional_Indicator}{2}/u.test(name) ? flag + ' ' + name : name

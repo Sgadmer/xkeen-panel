@@ -51,6 +51,7 @@ import {
     countryLabel,
     isSet,
     latencyTone,
+    locationExcluded,
     scopeLabel,
     serverCountry,
     timeAgo,
@@ -61,7 +62,7 @@ import {
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { importWarnings, safeNotice } from '@/lib/subscription'
-import type { AutoScope, Server } from '@/types'
+import type { AutoScope, PoolNode, Server } from '@/types'
 
 const OTHER = '—'
 
@@ -208,9 +209,10 @@ export function ServersPage() {
     const view: Tab = canChoosePool ? saved.tab : 'all'
     const setTab = (next: Tab) => changeView({ tab: next })
 
-    const routerLatency = useMemo(() => new Map((pool?.nodes ?? [])
+    const routerNodes = useMemo(() => new Map((pool?.nodes ?? [])
         .filter(node => node.server_id >= 0 && node.router_latency_ms !== undefined)
-        .map(node => [node.server_id, node.router_latency_ms!])), [pool])
+        .map(node => [node.server_id, node])), [pool])
+    const routerLatency = useMemo(() => new Map([...routerNodes].map(([id, node]) => [id, node.router_latency_ms!])), [routerNodes])
     // The number a row shows: the router's own for pool servers, a running
     // check's, or the last completed check.
     const shownLatency = (s: Server) => routerLatency.get(s.id) ?? latencyFor(s.id)
@@ -263,12 +265,13 @@ export function ServersPage() {
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
-        countryExcluded: avoidCountries.includes(serverCountry(s)),
+        countryExcluded: locationExcluded(avoidCountries, serverCountry(s)),
         busy: routeBusy,
         probeBusy: checking || routeBusy,
         measuring: isPendingServer(s.id),
         // A pool server shows the router's own number in every list.
-        liveLatency: routerLatency.get(s.id) ?? latencyFor(s.id),
+        routerNode: routerNodes.get(s.id),
+        liveLatency: latencyFor(s.id),
         onCheck: () => check([s.id]),
         onSelect: () => select.mutate(s.id),
     })
@@ -359,18 +362,23 @@ export function ServersPage() {
                 measuring={providerModes.every(server => isPendingServer(server.id))}
                 onClick={() => check(providerModes.map(server => server.id))} />
         </span>} footer='Это готовые варианты из вашей подписки. Какие серверы входят в каждый вариант и как они выбираются, решает поставщик VPN.'>
-            {profiles.map(server => {
-                const ms = latencyFor(server.id) ?? server.latency_ms
-                const measured = server.probe_kind === 'https' || latencyFor(server.id) !== undefined
-                return <div key={server.id} className='flex min-w-0 items-center gap-1'>
-                    <div className='min-w-0 flex-1'><Row label={server.name}
-                    hint={[server.source_name, `${server.profile_nodes ?? 0} серверов`, server.active && 'Выбран'].filter(Boolean).join(' · ')}
-                    onClick={() => select.mutate(server.id)} disabled={routeBusy || server.active}
-                    trailing={<Latency measuring={isPendingServer(server.id)} ms={measured ? ms : 0} />} /></div>
-                    <ProbeButton label={`Обновить пинг сервера ${server.name}`} disabled={checking || routeBusy}
-                        measuring={isPendingServer(server.id)} onClick={() => check([server.id])} />
-                </div>
-            })}
+            {profiles.map(server => <ServerCard key={server.id}
+                title={withCountryFlag(server.name, serverCountry(server))}
+                chips={<>
+                    <ProtocolBadge protocol={server.protocol} className='' />
+                    {server.active && <Hint label='Выбран: через этот режим идут остальные сайты' className='text-tint'>
+                        <IconCheck aria-hidden className='size-[13px]' stroke={3} />
+                    </Hint>}
+                </>}
+                source={[server.source_name, `${server.profile_nodes ?? 0} серверов`].filter(Boolean).join(' · ')}
+                check={checkInfo(server, undefined, latencyFor(server.id))}
+                measuring={isPendingServer(server.id)}
+                highlighted={server.active}
+                selectLabel={`Выбрать режим ${server.name}`}
+                onSelect={() => select.mutate(server.id)}
+                selectDisabled={routeBusy || server.active}
+                probe={{ label: `Обновить пинг сервера ${server.name}`, disabled: checking || routeBusy, onCheck: () => check([server.id]) }}
+            />)}
         </Group>
     )
 
@@ -539,20 +547,18 @@ export function ServersPage() {
                             {poolRows.map(r => (
                                 <PoolRow
                                     key={r.node.tag}
-                                    name={r.node.name}
+                                    node={r.node}
                                     country={r.country}
                                     protocol={r.protocol}
                                     source={r.source}
                                     description={r.description}
                                     server={r.server}
-                                    routerMeasured={r.routerMeasured}
-                                    latency={r.routerMeasured ? r.latency : latencyFor(r.node.server_id) ?? r.latency}
+                                    liveLatency={latencyFor(r.node.server_id)}
                                     // The panel checks pool servers too; while it does, the row shows it
                                     // like any other, and the router's number returns afterwards.
                                     measuring={r.node.server_id >= 0 && isPendingServer(r.node.server_id)}
                                     current={r.current}
-                                    excludedUntil={r.node.excluded_until}
-                                    countryExcluded={avoidCountries.includes(r.country ?? '')}
+                                    countryExcluded={locationExcluded(avoidCountries, r.country)}
                                     busy={routeBusy}
                                     probeBusy={checking || routeBusy}
                                     onCheck={r.node.server_id >= 0 ? () => check([r.node.server_id]) : undefined}
@@ -770,44 +776,41 @@ function siteLabel(domains: string[]) {
 }
 
 function PoolRow({
-    name,
+    node,
+    server,
     country,
     protocol,
     source,
     description,
-    server,
-    routerMeasured,
-    latency,
+    liveLatency,
     measuring,
     current,
-    excludedUntil,
     countryExcluded,
     busy,
     probeBusy,
     onCheck,
     onSelect,
 }: {
-    name: string
+    node: PoolNode
+    server?: Server
     country?: string
     protocol?: string
     source?: string
     description?: string
-    server?: Server
-    routerMeasured: boolean
-    latency: number
+    liveLatency?: number
     measuring: boolean
     current: boolean
-    excludedUntil?: string
     countryExcluded: boolean
     busy: boolean
     probeBusy: boolean
     onCheck?: () => void
     onSelect: () => void
 }) {
+    const excludedUntil = node.excluded_until
     const back = excludedUntil && new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
     return (
         <ServerCard
-            title={withCountryFlag(name, country)}
+            title={withCountryFlag(node.name, country)}
             titleMuted={!!excludedUntil}
             chips={<>
                 {protocol && <ProtocolBadge protocol={protocol} className='' />}
@@ -824,14 +827,13 @@ function PoolRow({
             source={source}
             note={shortNote(description) || undefined}
             noteTitle={description}
-            latency={latency}
+            check={checkInfo(server, node, liveLatency)}
             measuring={measuring}
-            {...panelCheck(server, routerMeasured)}
             highlighted={current}
-            selectLabel={`Выбрать сервер ${name}`}
+            selectLabel={`Выбрать сервер ${node.name}`}
             onSelect={onSelect}
             selectDisabled={busy || current}
-            probe={onCheck && { label: `Обновить пинг сервера ${name}`, disabled: probeBusy, onCheck }}
+            probe={onCheck && { label: `Обновить пинг сервера ${node.name}`, disabled: probeBusy, onCheck }}
         />
     )
 }
@@ -1043,11 +1045,42 @@ function SearchField({
     )
 }
 
+// What a row says about its last check: the router's own probe for a pool
+// server, the result of a check running now, or the panel's last check.
+type CheckInfo = { latency: number; error?: string; failed: boolean; at?: string; by: 'router' | 'panel' | 'none' }
+
+function checkInfo(server: Server | undefined, node?: PoolNode, live?: number): CheckInfo {
+    if (node?.router_latency_ms !== undefined) {
+        const ms = node.router_latency_ms
+        return { latency: ms, failed: ms < 0, at: isSet(node.router_checked_at) ? node.router_checked_at : undefined, by: 'router' }
+    }
+    if (live !== undefined) return { latency: live, failed: live < 0, at: new Date().toISOString(), by: 'panel' }
+    if (server?.probe_kind === 'https') {
+        return {
+            latency: server.check_error ? 0 : server.latency_ms,
+            error: server.check_error || undefined,
+            failed: !!server.check_error || server.latency_ms < 0,
+            at: isSet(server.last_checked) ? server.last_checked : undefined,
+            by: 'panel',
+        }
+    }
+    return { latency: server ? 0 : node?.latency_ms ?? 0, failed: false, by: 'none' }
+}
+
+function checkHint(check: CheckInfo) {
+    if (!check.at) return 'Сервер ещё не проверялся'
+    const clock = new Date(check.at).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
+    const what = check.by === 'router'
+        ? check.failed ? 'Роутер не получил ответа' : 'Роутер проверил'
+        : check.failed ? 'Не ответил на проверку' : 'Проверен'
+    return `${what} ${agoLabel(check.at)}, в ${clock}`
+}
+
 // One server in a list: the name with its protocol and status chips, the
 // subscription and the provider's note on their own lines; the number and the
 // check time under each other on the right, the gauge centred at the edge.
 // The whole row selects the server; hints and the gauge keep their own taps.
-function ServerCard({ title, titleMuted, chips, source, note, noteTitle, latency, measuring, error, checkedAt, failed,
+function ServerCard({ title, titleMuted, chips, source, note, noteTitle, check, measuring,
     highlighted, selectLabel, onSelect, selectDisabled, probe }: {
     title: React.ReactNode
     titleMuted?: boolean
@@ -1055,18 +1088,14 @@ function ServerCard({ title, titleMuted, chips, source, note, noteTitle, latency
     source?: string
     note?: string
     noteTitle?: string
-    latency: number
+    check: CheckInfo
     measuring: boolean
-    error?: string
-    checkedAt?: string
-    failed?: boolean
     highlighted?: boolean
     selectLabel: string
     onSelect: () => void
     selectDisabled: boolean
     probe?: { label: string; disabled: boolean; onCheck: () => void }
 }) {
-    const clock = checkedAt ? new Date(checkedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ''
     // A row without a provider's note is two lines high.
     const rows = 1 + (source ? 1 : 0) + (note ? 1 : 0)
     const timeRow = Math.max(rows, 2)
@@ -1074,7 +1103,7 @@ function ServerCard({ title, titleMuted, chips, source, note, noteTitle, latency
 
     return (
         <div className={cn('relative grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-1.5 gap-y-0.5 py-2.5',
-            highlighted && '-mx-2 rounded-xl bg-[#4f46e5]/22 px-2')}>
+            highlighted && '-mx-2 my-1 rounded-xl bg-white/[0.05] px-2 ring-[1.5px] ring-[#8b7cff]')}>
             <button type='button' aria-label={selectLabel} onClick={onSelect} disabled={selectDisabled}
                 className='absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default' />
             <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1' style={{ gridColumn: 1, gridRow: 1 }}>
@@ -1092,20 +1121,19 @@ function ServerCard({ title, titleMuted, chips, source, note, noteTitle, latency
                 {note}
             </span>}
             <span className='justify-self-end' style={{ gridColumn: 2, gridRow: 1 }}>
-                {error && !measuring
+                {check.error && !measuring
                     ? <span className='inline-flex w-[4.25rem] justify-end'>
-                        <Hint label={error} round={false} className='text-destructive'>
+                        <Hint label={check.error} round={false} className='text-destructive'>
                             <IconAlertTriangle aria-hidden className='size-[18px]' stroke={2.2} />
                         </Hint>
                     </span>
-                    : <Latency measuring={measuring} ms={latency} />}
+                    : <Latency measuring={measuring} ms={check.latency} />}
             </span>
-            {checkedAt && !measuring && (
+            {!measuring && (
                 <span className='justify-self-end' style={{ gridColumn: 2, gridRow: timeRow }}>
-                    <Hint round={false}
-                        label={`${failed ? 'Не ответил на проверку' : 'Проверен'} ${agoLabel(checkedAt)}, в ${clock}`}
-                        className={cn('text-[13px] tabular-nums', failed ? 'text-destructive' : 'text-muted-foreground')}>
-                        {timeAgo(checkedAt)}
+                    <Hint round={false} label={checkHint(check)}
+                        className={cn('text-[13px] tabular-nums', check.failed ? 'text-destructive' : 'text-muted-foreground')}>
+                        {check.at ? timeAgo(check.at) : 'не проверен'}
                     </Hint>
                 </span>
             )}
@@ -1116,19 +1144,9 @@ function ServerCard({ title, titleMuted, chips, source, note, noteTitle, latency
     )
 }
 
-// What the panel's own check found for a server, unless the router's live
-// number stands in for it.
-function panelCheck(server: Server | undefined, live: boolean) {
-    if (!server || live || server.probe_kind !== 'https') return {}
-    return {
-        error: server.check_error || undefined,
-        failed: !!server.check_error || server.latency_ms < 0,
-        checkedAt: isSet(server.last_checked) ? server.last_checked : undefined,
-    }
-}
-
 function ServerRow({
     server,
+    routerNode,
     liveLatency,
     measuring,
     countryExcluded,
@@ -1138,6 +1156,7 @@ function ServerRow({
     onSelect,
 }: {
     server: Server
+    routerNode?: PoolNode
     measuring: boolean
     liveLatency?: number
     countryExcluded: boolean
@@ -1146,12 +1165,7 @@ function ServerRow({
     onCheck: () => void
     onSelect: () => void
 }) {
-    // A pool server shows the router's own number; it has no check time.
-    const live = liveLatency !== undefined
-    const check = panelCheck(server, live)
-    const measured = liveLatency ?? (server.probe_kind === 'https' && !check.error ? server.latency_ms : 0)
     const inPool = !!server.pool_tag && !countryExcluded
-
     return (
         <ServerCard
             title={withCountryFlag(server.name, serverCountry(server))}
@@ -1170,9 +1184,8 @@ function ServerRow({
             source={server.source_name}
             note={shortNote(server.description) || undefined}
             noteTitle={server.description}
-            latency={measured}
+            check={checkInfo(server, routerNode, liveLatency)}
             measuring={measuring}
-            {...check}
             highlighted={server.active}
             selectLabel={`Выбрать сервер ${server.name}`}
             onSelect={onSelect}

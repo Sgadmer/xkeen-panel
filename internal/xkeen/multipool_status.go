@@ -56,8 +56,9 @@ func addPoolMetrics(cfg map[string]interface{}, socket string) {
 }
 
 type memberObservation struct {
-	Alive bool
-	Delay int64
+	Alive       bool
+	Delay       int64
+	LastTryTime int64 `json:"last_try_time"` // unix seconds, set when a probe ends
 }
 
 // Match Xray's leastPing strategy for this panel-generated worker only.
@@ -92,12 +93,28 @@ func CardPoolMember(ctx context.Context, rt Runtime, id string, port int) string
 // worker itself measured for every member, in milliseconds; -1 marks a member
 // the worker considers dead. These are the numbers the choice is made from.
 func CardPoolState(ctx context.Context, rt Runtime, id string, port int) (string, map[string]int) {
+	member, observed := CardPoolObservations(ctx, rt, id, port)
+	delays := make(map[string]int, len(observed))
+	for tag, v := range observed {
+		delays[tag] = v.Delay
+	}
+	return member, delays
+}
+
+// PoolObservation is what the pool worker measured for one member and when.
+type PoolObservation struct {
+	Delay int       // milliseconds; -1 when the member did not answer
+	Tried time.Time // when its last probe ended; zero if not known
+}
+
+// CardPoolObservations is CardPoolState with the time of each probe.
+func CardPoolObservations(ctx context.Context, rt Runtime, id string, port int) (string, map[string]PoolObservation) {
 	socket := poolStatusSocket(filepath.Join(filepath.Dir(rt.XrayConfDir), "xkeen-panel-cards"), id, port)
 	if socket == "" {
 		return "", nil
 	}
 	entries := readPoolObservations(ctx, socket)
-	delays := make(map[string]int, len(entries))
+	observed := make(map[string]PoolObservation, len(entries))
 	for tag, v := range entries {
 		if !IsProfileInternalTag(tag) {
 			continue
@@ -106,13 +123,16 @@ func CardPoolState(ctx context.Context, rt Runtime, id string, port int) (string
 		if !ok || !profileHashPattern.MatchString(member) {
 			continue
 		}
+		o := PoolObservation{Delay: int(v.Delay)}
 		if !v.Alive || v.Delay <= 0 || v.Delay > 600000 {
-			delays[member] = -1
-		} else {
-			delays[member] = int(v.Delay)
+			o.Delay = -1
 		}
+		if v.LastTryTime > 0 {
+			o.Tried = time.Unix(v.LastTryTime, 0)
+		}
+		observed[member] = o
 	}
-	return measuredPoolMember(entries), delays
+	return measuredPoolMember(entries), observed
 }
 
 func readPoolMetrics(ctx context.Context, socket string) string {

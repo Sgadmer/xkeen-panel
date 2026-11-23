@@ -7,7 +7,7 @@ import { Sheet } from '@/components/sheet'
 import { useMultiPools, usePanelSettings, usePool, useServers, useServerSources } from '@/hooks/usePanelData'
 import { invalidateServerData } from '@/hooks/useServerActions'
 import { api } from '@/lib/api'
-import { countryLabel, serverCountry, timeAgo } from '@/lib/format'
+import { countryLabel, locationExcluded, serverCountry, timeAgo } from '@/lib/format'
 import { importWarnings, safeNotice, usageText, usageWarnings } from '@/lib/subscription'
 import type { MultiPool, PoolMember, Server, ServerSource, SubscriptionUpdateResponse } from '@/types'
 
@@ -200,7 +200,7 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
     const ruleSources = filterEnabled && !allSources ? sourceIds : []
     const shownSources = listSource === null ? ruleSources : listSource ? [listSource] : []
     const listValue = listSource ?? (ruleSources.length === 1 ? ruleSources[0] : ruleSources.length ? RULE_SOURCES : '')
-    const byRules = (server: Server) => filterEnabled && !excluded.includes(serverCountry(server))
+    const byRules = (server: Server) => filterEnabled && !locationExcluded(excluded, serverCountry(server))
         && (allSources || sourceIds.includes(server.source_id || 'legacy'))
         && (allCountries || countries.includes(serverCountry(server)))
     const normalized = search.trim().toLocaleLowerCase('ru')
@@ -294,8 +294,9 @@ function MultiPoolEditor({ pool, sources, active, onBack, onDone }: {
                     const selected = selectedKeys.has(key)
                     // Already in the pool through the conditions: nothing to tick by hand.
                     const matched = !selected && byRules(server)
-                    return <Choice key={key} checked={selected || matched} disabled={action.isPending || matched || excluded.includes(code) && !selected}
-                        label={server.name} hint={[server.description, server.source_name, countryLabel(code), server.protocol, excluded.includes(code) && 'Исключённая страна', matched && 'Уже в пуле по условиям'].filter(Boolean).join(' · ')}
+                    const off = locationExcluded(excluded, code)
+                    return <Choice key={key} checked={selected || matched} disabled={action.isPending || matched || off && !selected}
+                        label={server.name} hint={[server.description, server.source_name, countryLabel(code), server.protocol, off && 'Исключённая локация', matched && 'Уже в пуле по условиям'].filter(Boolean).join(' · ')}
                         onChange={() => setMembers(prev => selected ? prev.filter(item => memberKey(item) !== key) :
                             [...prev, { source_id: server.source_id || 'legacy', target_id: server.target_id! }])} />
                 })}

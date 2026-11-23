@@ -4,7 +4,7 @@ import { IconArrowsExchange, IconBan, IconChevronRight, IconRefresh } from '@tab
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { CountriesSheet, RefreshSheet, intervalLabel } from '@/components/settingsSheets'
 import { usePanelSettings, useServers, useStatus } from '@/hooks/usePanelData'
-import { countryName, serverCountry } from '@/lib/format'
+import { NO_COUNTRY, countryName, locationName, serverCountry } from '@/lib/format'
 import { api } from '@/lib/api'
 import type { PanelSettings, Status } from '@/types'
 
@@ -35,13 +35,18 @@ const avoidedOf = (settings?: PanelSettings) =>
 // label a subscription gives its server.
 export function ExcludedLocations() {
     const servers = useServers()
+    // Every location group of the servers list, «Без страны» last.
     const countries = useMemo(() => {
         const codes = new Set<string>()
+        let unknown = false
         for (const server of servers.data ?? []) {
+            if (server.protocol === 'xray-profile') continue
             const code = serverCountry(server).trim()
-            if (server.protocol !== 'xray-profile' && /^[A-Z]{2}$/.test(code)) codes.add(code)
+            if (/^[A-Z]{2}$/.test(code)) codes.add(code)
+            else unknown = true
         }
-        return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
+        const sorted = [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
+        return unknown ? [...sorted, NO_COUNTRY] : sorted
     }, [servers.data])
     const [open, setOpen] = useState(false)
     const settings = usePanelSettings()
@@ -56,7 +61,7 @@ export function ExcludedLocations() {
                 icon={icon('#ff453a', IconBan)}
                 label='Исключенные локации'
                 hint={countryStatus || (settings.data
-                    ? visibleAvoid.map(code => countryName(code)).join(', ') || 'Нет: автовыбор берёт все локации'
+                    ? visibleAvoid.map(locationName).join(', ') || 'Нет: автовыбор берёт все локации'
                     : '—')}
                 onClick={() => setOpen(true)}
                 disabled={!settings.data}

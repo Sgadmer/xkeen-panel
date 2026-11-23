@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { IconCheck } from '@tabler/icons-react'
 import { Group, Row } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
-import { countryLabel } from '@/lib/format'
+import { locationLabel } from '@/lib/format'
 
 const check = <IconCheck className='size-5 shrink-0 text-tint' stroke={2.6} />
 
@@ -63,6 +63,9 @@ export function CountriesSheet({
             title='Исключенные локации'
             done={{ label: 'Готово', onClick: save, disabled: saving }}
         >
+            <p className='px-4 pb-3 text-[13px] leading-snug text-muted-foreground'>
+                Локации названы так, как их подписал провайдер в подписке. Где сервер стоит на самом деле, они могут и не показывать.
+            </p>
             <Group
                 footer={
                     error ? (
@@ -75,7 +78,7 @@ export function CountriesSheet({
                 {candidates.map(code => (
                     <Row
                         key={code}
-                        label={countryLabel(code)}
+                        label={locationLabel(code)}
                         disabled={saving}
                         onClick={() => setEdits(prev => ({ ...prev, [code]: !(prev[code] ?? value.includes(code)) }))}
                         trailing={

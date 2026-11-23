@@ -89,6 +89,8 @@ export type PoolNode = {
     latency_ms: number
     /** Measured by the router's own pool worker; the choice is made from it. -1: no answer. */
     router_latency_ms?: number
+    /** When the router's pool worker last probed the node. */
+    router_checked_at?: string
     excluded_until?: string
 }
 

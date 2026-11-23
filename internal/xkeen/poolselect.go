@@ -229,7 +229,9 @@ func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurre
 func CountryExcluded(server models.Server, excluded []string) bool {
 	country := ServerCountry(server)
 	if country == "" {
-		return false
+		// A server its subscription gives no location is excluded as the
+		// group «Без страны», stored as ZZ, the code for an unknown region.
+		country = NoCountryCode
 	}
 	for _, code := range excluded {
 		if strings.EqualFold(country, strings.TrimSpace(code)) {
@@ -238,6 +240,9 @@ func CountryExcluded(server models.Server, excluded []string) bool {
 	}
 	return false
 }
+
+// NoCountryCode stands for «no location» in the excluded locations.
+const NoCountryCode = "ZZ"
 
 // PoolSelectionFromConfig builds the selection rules out of the panel config.
 func PoolSelectionFromConfig(cfg *models.Config) PoolSelection {

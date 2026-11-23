@@ -1,4 +1,4 @@
-import { countryLabel, scopeLabel, unavailableCountryReason } from '@/lib/format'
+import { countryLabel, locationExcluded, scopeLabel, unavailableCountryReason } from '@/lib/format'
 import type { AutoScope } from '@/types'
 
 export interface ServiceTarget {
@@ -65,7 +65,7 @@ export function serviceRouteOptions(targets: ServiceTarget[], scopes: AutoScope[
             title = sources.length > 1 ? 'Общие · ' + sources.join(' + ') : sources[0] || 'Без провайдера'
             order = sources.length > 1 ? 6 : sources.length ? 5 : 7
             if (target.kind === 'profile') detail = 'Режим провайдера'
-            if (target.kind === 'server' && target.country && avoided.includes(target.country)) detail = 'Только вручную'
+            if (target.kind === 'server' && locationExcluded(avoided, target.country)) detail = 'Только вручную'
             const note = target.kind === 'server' ? notes?.get(target.id) : undefined
             if (note) detail = [note.length > 30 ? note.slice(0, 29).trimEnd() + '…' : note, detail].filter(Boolean).join(' · ')
         }
