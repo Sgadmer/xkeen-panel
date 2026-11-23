@@ -2,6 +2,7 @@ package cardcontroller
 
 import (
 	"context"
+	"net/netip"
 	"regexp"
 	"strings"
 	"time"
@@ -16,6 +17,70 @@ type trafficRecorder struct {
 	raw    []byte
 	names  map[string]string
 	exits  map[string]ConnectionExit
+	// Site names of recent connections, by device, address and port.
+	sites   map[string]siteName
+	sitesAt time.Time
+}
+
+type siteName struct {
+	name string
+	seen time.Time
+}
+
+// Mihomo writes a connection to its log by address when it learnt the site's
+// name from the connection itself. While the connection is open the core
+// still knows that name, so the recorder looks at the open connections, at
+// most a few times a second, and keeps what it saw for a few minutes: the
+// journal shows the site instead of a bare IP. A connection that closed
+// before the look stays an address.
+const (
+	siteLookupEvery = 300 * time.Millisecond
+	siteNameKeep    = 5 * time.Minute
+)
+
+func (r *trafficRecorder) siteName(p profile, entry trafficlog.Entry) string {
+	if _, err := netip.ParseAddr(entry.Host); err != nil || entry.Device == "" {
+		return ""
+	}
+	key := entry.Device + "|" + entry.Host + "|" + entry.Port
+	if site, ok := r.sites[key]; ok {
+		return site.name
+	}
+	if time.Since(r.sitesAt) < siteLookupEvery || p.api.base == "" {
+		return ""
+	}
+	r.sitesAt = time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	var snapshot struct{ Connections []connectionTracker }
+	if p.api.request(ctx, "GET", "/connections", nil, &snapshot) != nil {
+		return ""
+	}
+	now := time.Now()
+	if r.sites == nil {
+		r.sites = map[string]siteName{}
+	}
+	for k, site := range r.sites {
+		if now.Sub(site.seen) > siteNameKeep {
+			delete(r.sites, k)
+		}
+	}
+	for _, f := range snapshot.Connections {
+		name := hostOnly(f.Metadata.Host)
+		if name == "" {
+			name = hostOnly(f.Metadata.SniffHost)
+		}
+		if _, err := netip.ParseAddr(name); name == "" || err == nil {
+			continue
+		}
+		source, err1 := netip.ParseAddr(f.Metadata.SourceIP)
+		target, err2 := netip.ParseAddr(f.Metadata.DestinationIP)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		r.sites[source.Unmap().String()+"|"+target.Unmap().String()+"|"+f.Metadata.DestinationPort] = siteName{name, now}
+	}
+	return r.sites[key].name
 }
 
 // SetTrafficRecorder is set once before starting the observer. Disabled
@@ -33,6 +98,12 @@ func (c *Controller) recordTraffic(level, payload string, p profile, guard *Guar
 		r.project(c, p)
 	}
 	if entry, ok := r.parse(level, payload, guard); ok {
+		if name := r.siteName(p, entry); name != "" {
+			entry.Host = name
+			if entry.ServiceID == "" {
+				entry.ServiceID = xkeen.ServiceForHost(name)
+			}
+		}
 		r.record(entry)
 	}
 }

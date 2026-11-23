@@ -62,7 +62,7 @@ func ParseSubscriptionDetailed(content string) ([]models.Server, ImportReport, e
 	}
 	report.Imported = len(servers)
 	if report.SkippedComposite > 0 {
-		report.Warnings = append(report.Warnings, "Часть режимов провайдера использует функции, которые панель не поддерживает, и пропущена. Остальные серверы и режимы на месте.")
+		report.Warnings = append(report.Warnings, skippedModesWarning)
 	}
 	if report.SkippedUnsupported > 0 {
 		report.Warnings = append(report.Warnings, "Часть записей не является поддерживаемым самостоятельным Xray-сервером.")

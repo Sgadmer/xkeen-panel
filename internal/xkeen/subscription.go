@@ -352,8 +352,21 @@ type subscriptionStoredData struct {
 
 func cloneSubscriptionImportReport(report ImportReport) ImportReport {
 	report.Warnings = append([]string(nil), report.Warnings...)
+	for i, warning := range report.Warnings {
+		if current, ok := renamedWarnings[warning]; ok {
+			report.Warnings[i] = current
+		}
+	}
 	return report
 }
+
+// Warnings stored by an earlier version read as the current ones at once,
+// without waiting for the next download of the subscription.
+var renamedWarnings = map[string]string{
+	"Некоторые составные профили используют неподдерживаемые функции; доступные серверы и профили сохранены.": skippedModesWarning,
+}
+
+const skippedModesWarning = "Часть режимов провайдера использует функции, которые панель не поддерживает, и пропущена. Остальные серверы и режимы на месте."
 
 func subscriptionSnapshotKey(data models.SubscriptionData) string {
 	encoded, _ := json.Marshal(data)

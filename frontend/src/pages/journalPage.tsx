@@ -181,10 +181,10 @@ export function JournalPage() {
     const siteRows = sites.data?.sites ?? []
 
     const deviceChoices = useMemo(() => {
-        const choices = new Map<string, { id: string; name: string; ip?: string }>()
+        const choices = new Map<string, { id: string; name: string; ip?: string; online?: boolean }>()
         for (const owner of known) if (owner.ip || owner.mac) {
             const id = owner.mac ? 'mac:' + owner.mac.toLowerCase() : 'ip:' + owner.ip
-            choices.set(id, { id, ip: owner.ip, name: owner.name || owner.ip || 'Устройство' })
+            choices.set(id, { id, ip: owner.ip, name: owner.name || owner.ip || 'Устройство', online: owner.active })
         }
         for (const owner of pages.data?.pages[0]?.devices ?? []) {
             if (!choices.has(owner.id)) choices.set(owner.id, { id: owner.id, ip: owner.ip, name: owner.name || owner.ip || 'Устройство' })
@@ -238,7 +238,13 @@ export function JournalPage() {
         <div className='grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4'>
             <select aria-label='Устройство' className={field} value={active.device} disabled={!!capture} onChange={event => update({ device: event.target.value })}>
                 <option value=''>Все устройства</option>
-                {deviceChoices.map(owner => <option key={owner.id} value={owner.id}>{owner.name}{owner.ip && owner.ip !== owner.name ? ' · ' + owner.ip : ''}</option>)}
+                {/* Devices at home now first, then the ones that are away. */}
+                {[{ label: 'В сети', online: true }, { label: 'Не в сети', online: false }].map(part => {
+                    const list = deviceChoices.filter(owner => !!owner.online === part.online)
+                    return list.length > 0 && <optgroup key={part.label} label={part.label}>
+                        {list.map(owner => <option key={owner.id} value={owner.id}>{owner.name}{owner.ip && owner.ip !== owner.name ? ' · ' + owner.ip : ''}</option>)}
+                    </optgroup>
+                })}
             </select>
             <select aria-label='Сервис' className={field} value={active.service} onChange={event => update({ service: event.target.value })}>
                 <option value=''>Все сервисы</option>
