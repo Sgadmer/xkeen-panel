@@ -1,12 +1,46 @@
 package xkeen
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"xkeen-panel/internal/models"
 )
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The first phase asks for one byte and falls back to the second CDN.
+func TestReachAsksForOneByteAndTriesTheSecondCDN(t *testing.T) {
+	answer := func(firstCDN, secondCDN int) bool {
+		client := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			if r.Header.Get("Range") != "bytes=0-0" {
+				t.Fatalf("reach must ask for a single byte, asked %q", r.Header.Get("Range"))
+			}
+			code := secondCDN
+			if r.URL.String() == probeTargets[0] {
+				code = firstCDN
+			}
+			if code == 0 {
+				return nil, errors.New("silent")
+			}
+			return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader("x"))}, nil
+		})}
+		return probeReach(context.Background(), client, time.Second)
+	}
+	if !answer(http.StatusPartialContent, 0) || !answer(0, http.StatusOK) || !answer(http.StatusForbidden, http.StatusPartialContent) {
+		t.Fatal("a node that returned the byte through either CDN is reachable")
+	}
+	if answer(0, 0) || answer(http.StatusForbidden, http.StatusBadGateway) {
+		t.Fatal("a node with no good answer is not reachable")
+	}
+}
 
 // The settings of the old TCP ping must not slow the server check down: a
 // router installed long ago kept 3 at a time and 8 s per try.

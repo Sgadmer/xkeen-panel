@@ -103,9 +103,48 @@ func probeOnce(ctx context.Context, client *http.Client, target string, timeout 
 	return max(int(first/time.Millisecond), 1), false
 }
 
+// probeReach reports whether a node returns anything at all: one byte of the
+// first file, or of the second when the first CDN is out of reach.
+func probeReach(ctx context.Context, client *http.Client, timeout time.Duration) bool {
+	for _, target := range probeTargets {
+		if ctx.Err() != nil {
+			return false
+		}
+		attempt, cancel := context.WithTimeout(ctx, timeout)
+		request, err := http.NewRequestWithContext(attempt, http.MethodGet, target, nil)
+		if err == nil {
+			request.Header.Set("Range", "bytes=0-0")
+			var response *http.Response
+			if response, err = client.Do(request); err == nil {
+				io.Copy(io.Discard, io.LimitReader(response.Body, 1<<10))
+				response.Body.Close()
+				ok := response.StatusCode == http.StatusOK || response.StatusCode == http.StatusPartialContent
+				cancel()
+				if ok {
+					return true
+				}
+				continue
+			}
+		}
+		cancel()
+	}
+	return false
+}
+
 // CheckServersHTTPS measures each node through its own loopback HTTP inbound.
 // A single temporary Xray process serves the batch and is always reaped.
 func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions) ([]models.Server, error) {
+	parent := options.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	// One check at a time: the owner's and the panel's own never overlap.
+	select {
+	case httpsProbeGate <- struct{}{}:
+	case <-parent.Done():
+		return nil, fmt.Errorf("проверка отменена")
+	}
+	defer func() { <-httpsProbeGate }()
 	checked := append([]models.Server(nil), servers...)
 	var ordinary []models.Server
 	var indexes []int
@@ -115,39 +154,71 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 			indexes = append(indexes, i)
 		}
 	}
-	if len(ordinary) > 0 {
-		result, err := probeIndependentNodes(rt, ordinary, nodeProbeOptions(options), checkServersHTTPSBatch)
-		if err != nil {
-			return nil, err
-		}
-		for i, server := range result {
-			checked[indexes[i]] = server
-		}
-	}
+	// A complete profile needs a core of its own and up to 20 s per file. They
+	// used to wait for each other and for all single servers; now they run
+	// alongside, a few at a time.
+	var wg sync.WaitGroup
+	cancelled := false
+	var mu sync.Mutex
+	slots := make(chan struct{}, profileProbeConcurrency)
 	for i, server := range servers {
 		if len(server.RawProfile) == 0 {
 			continue
 		}
-		profileOptions := options
-		if profileOptions.Timeout < 20*time.Second {
-			profileOptions.Timeout = 20 * time.Second
-		}
-		result, err := checkServersHTTPSBatch(rt, []models.Server{server}, profileOptions)
-		if err != nil {
-			if options.Context != nil && options.Context.Err() != nil {
-				return nil, fmt.Errorf("проверка отменена")
+		wg.Add(1)
+		go func(i int, server models.Server) {
+			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+			case <-parent.Done():
+				mu.Lock()
+				cancelled = true
+				mu.Unlock()
+				return
 			}
-			checked[i].Latency = -1
-			checked[i].ProbeKind = "https"
-			checked[i].LastChecked = time.Now()
-			checked[i].CheckError = "Профиль не принят ядром или не прошёл HTTPS-проверку"
-			options.report(checked[i])
-			continue
+			defer func() { <-slots }()
+			profileOptions := options
+			if profileOptions.Timeout < 20*time.Second {
+				profileOptions.Timeout = 20 * time.Second
+			}
+			result, err := checkServersHTTPSBatch(rt, []models.Server{server}, profileOptions)
+			if err != nil {
+				if parent.Err() != nil {
+					mu.Lock()
+					cancelled = true
+					mu.Unlock()
+					return
+				}
+				checked[i].Latency = -1
+				checked[i].ProbeKind = "https"
+				checked[i].LastChecked = time.Now()
+				checked[i].CheckError = "Профиль не принят ядром или не прошёл HTTPS-проверку"
+				options.report(checked[i])
+				return
+			}
+			checked[i] = result[0]
+		}(i, server)
+	}
+	var nodesErr error
+	if len(ordinary) > 0 {
+		var result []models.Server
+		result, nodesErr = probeIndependentNodes(rt, ordinary, nodeProbeOptions(options), checkServersHTTPSBatch)
+		for i, server := range result {
+			checked[indexes[i]] = server
 		}
-		checked[i] = result[0]
+	}
+	wg.Wait()
+	if nodesErr != nil {
+		return nil, nodesErr
+	}
+	if cancelled {
+		return nil, fmt.Errorf("проверка отменена")
 	}
 	return checked, nil
 }
+
+// Complete profiles checked at once, each by a core of its own.
+const profileProbeConcurrency = 3
 
 // nodeProbeOptions sets the pace of a check of single servers.
 //
@@ -192,12 +263,6 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 	if parent == nil {
 		parent = context.Background()
 	}
-	select {
-	case httpsProbeGate <- struct{}{}:
-	case <-parent.Done():
-		return nil, fmt.Errorf("проверка отменена")
-	}
-	defer func() { <-httpsProbeGate }()
 	if rt.Core != CoreXray || rt.CoreBin == "" {
 		return nil, fmt.Errorf("HTTPS-проверка требует Xray")
 	}
@@ -399,10 +464,42 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 	if ca, e := os.ReadFile("/opt/etc/ssl/certs/ca-certificates.crt"); e == nil {
 		roots.AppendCertsFromPEM(ca)
 	}
-	semaphore := make(chan struct{}, options.Concurrency)
+	client := func(localPort int) (*http.Client, func()) {
+		proxy, _ := url.Parse("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
+		// No Accept-Encoding: the byte range must be the same size on the wire.
+		transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true, DisableCompression: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+		return &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, transport.CloseIdleConnections
+	}
+	finish := func(index int) {
+		checked[index].LastChecked = time.Now()
+		options.report(checked[index])
+	}
+	// Phase one asks every node at once for a single byte, the way a client
+	// app pings: a silent node costs its timeout once for the whole batch
+	// instead of once per wave of 16. Most of a subscription can be silent.
+	reachable := make([]bool, len(ports))
 	var wg sync.WaitGroup
 	for i, port := range ports {
 		if port == 0 {
+			continue
+		}
+		wg.Add(1)
+		go func(index, localPort int) {
+			defer wg.Done()
+			c, done := client(localPort)
+			defer done()
+			if reachable[index] = probeReach(ctx, c, options.Timeout); !reachable[index] {
+				finish(index)
+			}
+		}(i, port)
+	}
+	wg.Wait()
+	// Phase two downloads 32 KB through the nodes that answered, a few at a
+	// time: the number shown is measured without the crowd, and a node whose
+	// link freezes after the first kilobytes is still caught.
+	semaphore := make(chan struct{}, options.Concurrency)
+	for i, port := range ports {
+		if port == 0 || !reachable[i] {
 			continue
 		}
 		wg.Add(1)
@@ -414,16 +511,10 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 				return
 			}
 			defer func() { <-semaphore }()
-			defer func() {
-				checked[index].LastChecked = time.Now()
-				options.report(checked[index])
-			}()
-			proxy, _ := url.Parse("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
-			// No Accept-Encoding: the byte range must be the same size on the wire.
-			transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true, DisableCompression: true, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
-			defer transport.CloseIdleConnections()
-			client := &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-			latency, stalled := probeDownload(ctx, client, options.Timeout)
+			defer finish(index)
+			c, done := client(localPort)
+			defer done()
+			latency, stalled := probeDownload(ctx, c, options.Timeout)
 			if latency > 0 {
 				checked[index].Latency = latency
 			} else if stalled {
