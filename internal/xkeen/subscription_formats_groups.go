@@ -38,11 +38,13 @@ func appendClashGroups(servers []models.Server, groups []interface{}, endpoints 
 		name, _ := group["name"].(string)
 		if names[name] != 1 {
 			report.SkippedComposite++
+			noteSkippedGroup(report, name, "group/same-name", group)
 			continue
 		}
 		server, err := importedClashURLTest(group, endpoints, &budget)
 		if err != nil {
 			report.SkippedComposite++
+			noteSkippedGroup(report, name, "group/unsupported", group)
 			continue
 		}
 		servers = append(servers, server)

@@ -438,6 +438,7 @@ func (sm *SubscriptionManager) saveCatalogLocked(previous models.SubscriptionDat
 		sm.importReport.SkippedComposite += r.SkippedComposite
 		sm.importReport.SkippedUnsupported += r.SkippedUnsupported
 		sm.importReport.Warnings = append(sm.importReport.Warnings, r.Warnings...)
+		sm.importReport.Skipped = append(sm.importReport.Skipped, r.Skipped...)
 	}
 	if err := sm.saveLocked(); err != nil {
 		sm.data, sm.importReport = &previous, previousReport

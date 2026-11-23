@@ -352,6 +352,7 @@ type subscriptionStoredData struct {
 
 func cloneSubscriptionImportReport(report ImportReport) ImportReport {
 	report.Warnings = append([]string(nil), report.Warnings...)
+	report.Skipped = append([]models.SkippedMode(nil), report.Skipped...)
 	for i, warning := range report.Warnings {
 		if current, ok := renamedWarnings[warning]; ok {
 			report.Warnings[i] = current

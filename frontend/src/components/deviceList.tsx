@@ -2,15 +2,9 @@ import { useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
-    IconDeviceDesktop,
-    IconDeviceLaptop,
-    IconDeviceMobile,
-    IconDeviceTv,
-    IconDeviceWatch,
-    IconHome,
+    IconDevices,
     IconPencil,
     IconSearch,
-    type Icon,
 } from '@tabler/icons-react'
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { DeviceEditor } from '@/components/deviceEditor'
@@ -19,31 +13,6 @@ import { api } from '@/lib/api'
 import { plural } from '@/lib/format'
 import type { Device, DevicesResponse } from '@/types'
 
-// The icon is guessed from the name the device gave itself. Smart-home gear
-// comes before TV boxes: «Hue Sync Box» is a lamp controller, not a TV.
-const KINDS: { re: RegExp; icon: Icon; color: string }[] = [
-    { re: /watch|часы/i, icon: IconDeviceWatch, color: '#8e8e93' },
-    {
-        re: /iphone|phone|телефон|фон|android|pixel|galaxy|poco|oneplus|redmi|xiaomi|samsung|\bs2\d|honor|huawei|realme|vivo|oppo|nokia|motorola/i,
-        icon: IconDeviceMobile,
-        color: '#30d158',
-    },
-    {
-        re: /macbook|book|laptop|ноут/i,
-        icon: IconDeviceLaptop,
-        color: '#0a84ff',
-    },
-    {
-        re: /хаб|hub|hue|bridge|sync|станц|lamp|ламп|розетк|датчик|esp-|tuya|yeelight|aqara/i,
-        icon: IconHome,
-        color: '#ff9f0a',
-    },
-    {
-        re: /\btv|tv\b|телевиз|ящик|box|приставк/i,
-        icon: IconDeviceTv,
-        color: '#6366f1',
-    },
-]
 
 const OFFLINE_KEY = 'xkeen.devices.offline.v1'
 
@@ -55,14 +24,6 @@ function offlineShown() {
     }
 }
 
-function kindOf(name: string) {
-    return (
-        KINDS.find(k => k.re.test(name)) ?? {
-            icon: IconDeviceDesktop,
-            color: '#64d2ff',
-        }
-    )
-}
 
 export function DeviceGroups({
     data,
@@ -106,17 +67,17 @@ export function DeviceGroups({
         onSettled: () => qc.invalidateQueries({ queryKey: ['devices'] }),
     })
 
+    // The router does not tell what kind of device it is, so every device has
+    // the same icon instead of a guess from its name.
     const row = (d: Device) => {
-        const kind = kindOf(d.name)
-        const KindIcon = kind.icon
         const route = d.vpn ? (d.via === 'segment' ? 'Через VPN, как вся сеть' : 'Через VPN') : 'Напрямую'
         return (
             <Row
                 key={d.mac}
                 icon={
                     <span className={d.active ? '' : 'opacity-45'}>
-                        <IconTile color={kind.color}>
-                            <KindIcon className='size-[17px]' stroke={2.2} />
+                        <IconTile color='#0a84ff'>
+                            <IconDevices className='size-[17px]' stroke={2.2} />
                         </IconTile>
                     </span>
                 }

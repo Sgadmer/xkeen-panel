@@ -90,6 +90,10 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 			if groups, ok := object["proxy-groups"].([]interface{}); ok {
 				if unified, present := object["unified-delay"]; present && unified != false {
 					report.SkippedComposite += len(groups)
+					for _, raw := range groups {
+						name, _ := mapOf(raw)["name"].(string)
+						noteSkippedGroup(report, name, "clash/unified-delay", mapOf(raw))
+					}
 				} else {
 					clashGroups = groups
 				}
@@ -150,6 +154,11 @@ func parseForeignSubscription(body string, report *ImportReport) ([]models.Serve
 		outbound, name, err := convert(object)
 		if errors.Is(err, errFormatComposite) {
 			report.SkippedComposite++
+			label, _ := object["name"].(string)
+			if label == "" {
+				label, _ = object["tag"].(string)
+			}
+			noteSkippedGroup(report, label, "endpoint/dependency", object)
 			continue
 		}
 		if err != nil {

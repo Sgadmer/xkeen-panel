@@ -96,6 +96,7 @@ func parseJSONSubscription(root json.RawMessage, report *ImportReport) ([]models
 		if err != nil || hasOutboundDependency(outbound) {
 			if hasOutboundDependency(outbound) {
 				report.SkippedComposite++
+				noteSkippedMode(report, hint, "outbound/dependency", raw)
 			} else {
 				report.SkippedUnsupported++
 			}
@@ -160,6 +161,7 @@ func parseJSONSubscription(root json.RawMessage, report *ImportReport) ([]models
 				server, err := serverFromRawProfile(raw)
 				if err != nil {
 					report.SkippedComposite++
+					noteSkippedMode(report, objectDisplayName(object), skippedReason(err, "profile"), raw)
 					return
 				}
 				key := ServerIdentity(server)

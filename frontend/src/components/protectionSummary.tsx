@@ -6,7 +6,6 @@ import { useDevices, useStatus } from '@/hooks/usePanelData'
 import { aiServiceIds } from '@/lib/aiServiceGroup'
 import { api } from '@/lib/api'
 import { countryLabel, plural, withCountryFlag } from '@/lib/format'
-import type { ListResponse } from '@/types'
 
 type Route = { kind: 'server' | 'direct' | 'reject' | 'unknown'; name?: string; country?: string; pool?: string }
 type Routes = { services: { id: string; name: string; target: string; blocked: boolean; current_route?: Route }[] }
@@ -14,13 +13,6 @@ type Firewall = { available: boolean; installed: boolean; ready: boolean }
 type Mode = { enabled: boolean; mode?: 'protected' | 'blocklist' | 'custom' }
 
 type Finding = { text: string; hint?: string; to: string }
-
-// XKeen's own list «Только эти порты через VPN»: when filled, every other port
-// leaves past the VPN, its cards and kill switch. Empty means all ports.
-export function usePortsThroughVPN(enabled: boolean) {
-    const list = useQuery({ queryKey: ['xkeen-list', 'port_proxying'], queryFn: () => api.get<ListResponse>('/api/xkeen/lists/port_proxying'), enabled, staleTime: 60000 }).data
-    return (list?.content ?? '').split(/\r?\n/).map(line => line.replace(/#.*/, '').trim()).filter(Boolean).map(port => port.replace(':', '–'))
-}
 
 // One answer to "is everything protected right now": the kill switch, where
 // unrecognised traffic goes, and the AI cards. Each weak spot links to the
@@ -32,7 +24,6 @@ export function ProtectionSummary() {
     const firewall = useQuery({ queryKey: ['claude-api-firewall'], queryFn: () => api.get<Firewall>('/api/service-routes/claude-api-firewall'), enabled: mihomo, refetchInterval: 30000 }).data
     const mode = useQuery({ queryKey: ['routing-blocklist'], queryFn: () => api.get<Mode>('/api/routing/blocklist'), enabled: mihomo, refetchInterval: 60000 }).data
     const devices = useDevices().data
-    const ports = usePortsThroughVPN(mihomo)
     if (!mihomo) return null
     if (!policy || !routes) return <Group title='Защита'><Row label='Проверяем защиту…' /></Group>
 
@@ -41,7 +32,6 @@ export function ProtectionSummary() {
     const findings: Finding[] = []
     if (!policy.enabled) findings.push({ text: 'Общий kill switch выключен', hint: 'Если VPN перестанет работать, остальные сайты пойдут напрямую.', to: '/settings/protection' })
     if (mode?.enabled) findings.push({ text: 'Неопознанный трафик идёт напрямую', hint: 'Включён режим «только по списку блокировок».', to: '/settings/protection' })
-    if (ports.length > 0) findings.push({ text: 'Через VPN идут только порты ' + ports.join(', '), hint: 'Остальные порты, например звонки и игры, идут напрямую, мимо VPN и kill switch.', to: '/exclusions' })
     for (const card of cards) {
         if (card.target === 'direct') findings.push({ text: `${card.name} идёт напрямую`, to: '/services' })
         else if (!serviceKillSwitch(policy, card.id).enabled) findings.push({ text: `Kill switch выключен · ${card.name}`, to: '/services' })

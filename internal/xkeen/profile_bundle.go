@@ -56,6 +56,21 @@ func profileError() error {
 	return fmt.Errorf("профиль содержит неподдерживаемую или неоднозначную конфигурацию Xray")
 }
 
+// profileDetail is profileError with a fixed ASCII code of the check that
+// refused the profile, kept for the import report: never a key, tag or value.
+type profileDetail string
+
+func (d profileDetail) Error() string { return profileError().Error() }
+
+// ProfileRefusal is the code of the check that refused a profile, if known.
+func ProfileRefusal(err error) string {
+	var detail profileDetail
+	if errors.As(err, &detail) {
+		return string(detail)
+	}
+	return ""
+}
+
 type profileRenderError struct {
 	phase string
 	cause error
@@ -443,14 +458,14 @@ func (r *profileRenderer) outbound(outbound, template map[string]interface{}) er
 
 func (r *profileRenderer) balancer(balancer map[string]interface{}) error {
 	if !profileKeys(balancer, "tag", "selector", "strategy", "fallbackTag") {
-		return profileError()
+		return profileDetail("balancer-keys")
 	}
 	oldTag := balancer["tag"].(string)
 	newTag := r.balancerTags[oldTag]
 	balancer["tag"] = newTag
 	selectors, err := profileStrings(balancer["selector"])
 	if err != nil || len(selectors) == 0 {
-		return profileError()
+		return profileDetail("selector-format")
 	}
 	mapped := make([]interface{}, 0, len(selectors))
 	matched := false
@@ -464,13 +479,16 @@ func (r *profileRenderer) balancer(balancer map[string]interface{}) error {
 		}
 	}
 	if !matched {
-		return profileError()
+		return profileDetail("selector-unmatched")
 	}
 	balancer["selector"] = mapped
 	if fallback, ok := balancer["fallbackTag"].(string); ok && fallback != "" {
 		target := r.outboundTags[fallback]
 		if target == "" {
-			return profileError()
+			if r.balancerTags[fallback] != "" {
+				return profileDetail("fallback-is-balancer")
+			}
+			return profileDetail("fallback-unknown")
 		}
 		balancer["fallbackTag"] = target
 		r.edge("b:"+newTag, "o:"+target)
@@ -478,16 +496,16 @@ func (r *profileRenderer) balancer(balancer map[string]interface{}) error {
 	strategy := mapOf(balancer["strategy"])
 	if strategy != nil {
 		if !profileKeys(strategy, "type", "settings") {
-			return profileError()
+			return profileDetail("strategy-keys")
 		}
 		kind, _ := strategy["type"].(string)
 		if !profileOneOf(strings.ToLower(kind), "", "random", "roundrobin", "leastping", "leastload") {
-			return profileError()
+			return profileDetail("strategy-type")
 		}
 		if settings := mapOf(strategy["settings"]); settings != nil {
 			if strings.EqualFold(kind, "leastLoad") {
 				if !profileKeys(settings, "costs", "baselines", "expected", "maxRTT", "tolerance") {
-					return profileError()
+					return profileDetail("leastload-settings")
 				}
 				if costs, ok := settings["costs"]; ok {
 					rewritten, err := r.costs(costs)
@@ -497,7 +515,7 @@ func (r *profileRenderer) balancer(balancer map[string]interface{}) error {
 					settings["costs"] = rewritten
 				}
 			} else if len(settings) != 0 {
-				return profileError()
+				return profileDetail("strategy-settings")
 			}
 		}
 	}

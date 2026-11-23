@@ -190,6 +190,17 @@ type ImportReport struct {
 	SkippedComposite   int      `json:"skipped_composite"`
 	SkippedUnsupported int      `json:"skipped_unsupported"`
 	Warnings           []string `json:"warnings,omitempty"`
+	// Skipped names the provider's modes the panel could not take over.
+	Skipped []SkippedMode `json:"skipped,omitempty"`
+}
+
+// SkippedMode is a provider's mode the panel could not take over: its name,
+// the step that refused it and the features it uses — setting names and
+// kinds only, never addresses, keys or other values.
+type SkippedMode struct {
+	Name     string   `json:"name"`
+	Reason   string   `json:"reason"`
+	Features []string `json:"features,omitempty"`
 }
 
 // Status is the connection status reported to the UI.
