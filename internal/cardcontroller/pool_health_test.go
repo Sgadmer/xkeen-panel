@@ -3,6 +3,7 @@ package cardcontroller
 import (
 	"context"
 	"testing"
+	"time"
 
 	"xkeen-panel/internal/models"
 	"xkeen-panel/internal/xkeen"
@@ -38,6 +39,56 @@ func TestSilentServerLeavesAllLocations(t *testing.T) {
 	silent.forget([]string{"b"})
 	if silent.has("b") {
 		t.Fatal("a failed rebuild must not keep the server out")
+	}
+}
+
+// The pool's own answers join each server's history, and the pool carries
+// traffic through the member with the best number, not the luckiest answer.
+func TestPoolCarriesTrafficThroughTheBestNumber(t *testing.T) {
+	a, b := poolServer("A", "DE", "10001"), poolServer("B", "NL", "10002")
+	a.ID, b.ID = 1, 2
+	start := time.Now().Add(-time.Hour)
+	for i, ms := range []int{100, 110} {
+		xkeen.ApplyPing(&a, ms, "", start.Add(time.Duration(i)*time.Minute))
+	}
+	for i, ms := range []int{300, 310} {
+		xkeen.ApplyPing(&b, ms, "", start.Add(time.Duration(i)*time.Minute))
+	}
+	servers := []models.Server{a, b}
+	stored := 0
+	c := &Controller{catalog: func() []models.Server { return servers }}
+	c.SetPingRecorder(func(samples []models.Server, full bool) {
+		for _, s := range samples {
+			for i := range servers {
+				if servers[i].ID == s.ID && xkeen.ApplyPing(&servers[i], s.Latency, s.CheckError, s.LastChecked) {
+					stored++
+				}
+			}
+		}
+	})
+	idA, idB := xkeen.ServiceTargetID(a), xkeen.ServiceTargetID(b)
+	w := poolWorker{pool: allPoolID, id: "worker", port: 20001}
+	// A slow blip for A, a lucky answer for B: the router alone would move to B.
+	observed := map[string]xkeen.PoolObservation{idA: {Delay: 400, Tried: start.Add(5 * time.Minute)}, idB: {Delay: 80, Tried: start.Add(5 * time.Minute)}}
+	targets := c.targetServers()
+	for round := 0; round < 2; round++ {
+		tried := map[string]time.Time{}
+		members := map[poolWorker][]string{w: c.storePoolPings(w, observed, tried, targets.lookup(servers))}
+		c.poolTried = tried
+		var pinned []string
+		c.pinBestMembers(context.Background(), []poolWorker{w}, members, targets.lookup(servers), func(_ context.Context, _ xkeen.Runtime, _ string, _ int, member string) error {
+			pinned = append(pinned, member)
+			return nil
+		})
+		if round == 0 && (len(pinned) != 1 || pinned[0] != idA) {
+			t.Fatalf("A (median 110) beats B (median 300), pinned %v", pinned)
+		}
+		if round == 1 && len(pinned) != 0 {
+			t.Fatalf("an unchanged choice must not call the worker again: %v", pinned)
+		}
+	}
+	if stored != 2 || servers[0].Latency != 110 || servers[1].Latency != 300 {
+		t.Fatalf("each answer is stored once: stored=%d A=%d B=%d", stored, servers[0].Latency, servers[1].Latency)
 	}
 }
 

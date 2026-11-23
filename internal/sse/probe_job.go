@@ -223,7 +223,13 @@ func (j *ProbeJobs) execute(r *probeRun, servers []models.Server) {
 		}
 		r.seen[s.ID] = true
 		r.finished = append(r.finished, s)
-		r.progress.Results = append(r.progress.Results, Measurement{ID: s.ID, Latency: s.Latency, LastChecked: s.LastChecked})
+		// The screen shows the server's number as it will be stored: the
+		// median of its recent checks, not this single answer.
+		shown := s
+		if j.sub != nil {
+			shown = j.sub.PreviewPing(s)
+		}
+		r.progress.Results = append(r.progress.Results, Measurement{ID: s.ID, Latency: shown.Latency, LastChecked: shown.LastChecked})
 	}
 	var checked []models.Server
 	var err error

@@ -207,7 +207,13 @@ func prepareProfileWorker(rt Runtime, targetID string, server models.Server, tem
 	if profile == "" {
 		return nil, profileError()
 	}
-	raw, err := json.Marshal([]interface{}{"v1", profile, mapOf(mapOf(template["streamSettings"])["sockopt"])["mark"]})
+	// A pool worker of this version also opens the routing API, so it is a
+	// generation of its own: an older one is replaced at the next rebuild.
+	version := "v1"
+	if server.GeneratedPool {
+		version = "v2-pool-api"
+	}
+	raw, err := json.Marshal([]interface{}{version, profile, mapOf(mapOf(template["streamSettings"])["sockopt"])["mark"]})
 	if err != nil {
 		return nil, profileError()
 	}
@@ -251,6 +257,10 @@ func prepareProfileWorker(rt Runtime, targetID string, server models.Server, tem
 			}
 			addPoolMetrics(config, socket)
 		}
+		if err := preparePoolAPIPort(dir, &key); err != nil {
+			return nil, err
+		}
+		addPoolAPI(config, key.APIPort)
 	}
 	data, err := json.Marshal(config)
 	if err != nil {

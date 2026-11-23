@@ -157,7 +157,6 @@ export function ServersPage() {
     const shownScope = isAuto ? selectedScope ?? allLocations : undefined
     // Only «Все локации» has a limit of its own; other pools take every server they hold.
     const wholePool = shownScope && (shownScope.kind === 'source' || shownScope.kind === 'custom') ? shownScope : undefined
-    const routerMeasured = (pool?.nodes ?? []).some(node => node.router_latency_ms !== undefined)
     const providerModes = servers.filter(s => s.protocol === 'xray-profile')
     const sites = useSites().data
     const subscription = useSubscription().data
@@ -211,13 +210,9 @@ export function ServersPage() {
     const view: Tab = canChoosePool ? saved.tab : 'all'
     const setTab = (next: Tab) => changeView({ tab: next })
 
-    const routerNodes = useMemo(() => new Map((pool?.nodes ?? [])
-        .filter(node => node.server_id >= 0 && node.router_latency_ms !== undefined)
-        .map(node => [node.server_id, node])), [pool])
-    const routerLatency = useMemo(() => new Map([...routerNodes].map(([id, node]) => [id, node.router_latency_ms!])), [routerNodes])
-    // The number a row shows: the router's own for pool servers, a running
-    // check's, or the last completed check.
-    const shownLatency = (s: Server) => routerLatency.get(s.id) ?? latencyFor(s.id)
+    // The number a row shows: the server's one number, as a running check
+    // has just updated it or as stored.
+    const shownLatency = (s: Server) => latencyFor(s.id)
         ?? (s.probe_kind === 'https' && !s.check_error ? s.latency_ms : 0)
 
     const catalogGroups = useMemo(() => groupServers(servers, order), [servers, order])
@@ -244,13 +239,11 @@ export function ServersPage() {
                     protocol: server?.protocol,
                     source: server?.source_name,
                     description: server?.description,
-                    // The router picks by its own measurement, so that is the number to show.
-                    routerMeasured: n.router_latency_ms !== undefined,
-                    latency: n.router_latency_ms ?? (server
+                    latency: server
                         ? server.probe_kind === 'https'
                             ? server.latency_ms
                             : 0
-                        : n.latency_ms),
+                        : n.latency_ms,
                     current: n.tag === pool?.current_tag,
                     excluded: !!n.excluded_until,
                 }
@@ -271,8 +264,6 @@ export function ServersPage() {
         busy: routeBusy,
         probeBusy: checking || routeBusy,
         measuring: isPendingServer(s.id),
-        // A pool server shows the router's own number in every list.
-        routerNode: routerNodes.get(s.id),
         liveLatency: latencyFor(s.id),
         onCheck: () => check([s.id]),
         onSelect: () => select.mutate(s.id),
@@ -338,7 +329,7 @@ export function ServersPage() {
                                 ? `Проверено ${progress.completed} из ${progress.total}. Нажмите ещё раз, чтобы остановить.`
                                 : stopped
                                 ? 'Проверка остановлена. Уже измеренные серверы сохранены.'
-                                : 'Все серверы разом, затем загрузка через ответившие'
+                                : 'Роутер проверит все серверы так же, как серверы пула'
                         }
                         onClick={() => (probing ? stop() : check())}
                         disabled={stopping}
@@ -381,8 +372,7 @@ export function ServersPage() {
                     </Hint>}
                 </>}
                 source={[server.source_name, `${server.profile_nodes ?? 0} серверов`].filter(Boolean).join(' · ')}
-                // In a pool the mode shows the router's own number, like any server.
-                check={checkInfo(server, routerNodes.get(server.id), latencyFor(server.id))}
+                check={checkInfo(server, latencyFor(server.id))}
                 measuring={isPendingServer(server.id)}
                 highlighted={server.active}
                 selectLabel={`Выбрать режим ${server.name}`}
@@ -478,8 +468,7 @@ export function ServersPage() {
                             title='Автовыбор'
                             footer={
                                 isAuto
-                                    ? 'Роутер сам регулярно проверяет серверы пула и ведёт трафик через самый быстрый. Если сервер перестал отвечать, роутер переходит на другой, а панель заменяет его в пуле.'
-                                        + (routerMeasured ? ' Числа в этом списке — замеры самого роутера.' : '')
+                                    ? 'Роутер проверяет серверы пула каждую минуту и ведёт трафик через сервер с лучшим числом. Число у сервера — средний из трёх последних замеров роутера, одно и то же на всех экранах. Если сервер дважды подряд не ответил, панель заменяет его в пуле.'
                                     : mihomo ? 'Выбор пула включит автоматический режим.' : 'Включите автовыбор, чтобы панель снова выбирала сервер сама.'
                             }
                         >
@@ -754,7 +743,7 @@ function AllLocationsLimit({ limit, count, eligible, disabled, mutation }: {
             </div>
             <p id='all-locations-summary' className='text-[13px] text-muted-foreground'>
                 В пуле {count} из {eligible} подходящих. Первыми попадают серверы с наименьшей задержкой из всех подписок.
-                {' '}Режимы провайдера участвуют наравне с серверами. Дубли, исключённые локации и узлы с неудачной HTTPS-проверкой пропускаются.
+                {' '}Режимы провайдера участвуют наравне с серверами. Дубли, исключённые локации и серверы, которые не ответили роутеру или не загружают страницы, пропускаются.
             </p>
             <div id='all-locations-feedback' aria-live='polite' className='text-[13px] empty:hidden'>
                 {!valid ? 'Введите целое число от 1 до 256.' : mutation.isError
@@ -838,7 +827,7 @@ function PoolRow({
             source={source}
             note={shortNote(description) || undefined}
             noteTitle={description}
-            check={checkInfo(server, node, liveLatency)}
+            check={checkInfo(server, liveLatency, node.latency_ms)}
             measuring={measuring}
             highlighted={current}
             selectLabel={`Выбрать сервер ${node.name}`}
@@ -1056,35 +1045,33 @@ function SearchField({
     )
 }
 
-// What a row says about its last check: the router's own probe for a pool
-// server, the result of a check running now, or the panel's last check.
-type CheckInfo = { latency: number; error?: string; failed: boolean; at?: string; by: 'router' | 'panel' | 'none' }
+// What a row says about the server's one number: the router's last checks,
+// as a running check has just updated them or as stored.
+type CheckInfo = { latency: number; error?: string; failed: boolean; at?: string; answers: number[] }
 
-function checkInfo(server: Server | undefined, node?: PoolNode, live?: number): CheckInfo {
-    if (node?.router_latency_ms !== undefined) {
-        const ms = node.router_latency_ms
-        return { latency: ms, failed: ms < 0, at: isSet(node.router_checked_at) ? node.router_checked_at : undefined, by: 'router' }
-    }
-    if (live !== undefined) return { latency: live, failed: live < 0, at: new Date().toISOString(), by: 'panel' }
+function checkInfo(server: Server | undefined, live?: number, nodeMs = 0): CheckInfo {
+    const answers = (server?.ping_samples ?? []).filter(sample => sample.ms > 0).map(sample => sample.ms)
+    if (live !== undefined) return { latency: live, failed: live < 0, at: new Date().toISOString(), answers }
     if (server?.probe_kind === 'https') {
         return {
             latency: server.check_error ? 0 : server.latency_ms,
             error: server.check_error || undefined,
             failed: !!server.check_error || server.latency_ms < 0,
             at: isSet(server.last_checked) ? server.last_checked : undefined,
-            by: 'panel',
+            answers,
         }
     }
-    return { latency: server ? 0 : node?.latency_ms ?? 0, failed: false, by: 'none' }
+    return { latency: server ? 0 : nodeMs, failed: false, answers }
 }
 
 function checkHint(check: CheckInfo) {
-    if (!check.at) return 'Сервер ещё не проверялся'
+    if (!check.at) return 'Роутер ещё не проверял этот сервер'
     const clock = new Date(check.at).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
-    const what = check.by === 'router'
-        ? check.failed ? 'Роутер не получил ответа' : 'Роутер проверил'
-        : check.failed ? 'Не ответил на проверку' : 'Проверен'
-    return `${what} ${agoLabel(check.at)}, в ${clock}`
+    const what = check.failed ? 'Роутер не получил ответа' : 'Роутер проверил'
+    const recent = check.answers.length > 1 && !check.failed
+        ? `. Последние замеры: ${check.answers.join(', ')} мс — показан средний из них`
+        : ''
+    return `${what} ${agoLabel(check.at)}, в ${clock}${recent}`
 }
 
 // One server in a list: the name with its protocol and status chips, the
@@ -1157,7 +1144,6 @@ function ServerCard({ title, titleMuted, chips, source, note, noteTitle, check, 
 
 function ServerRow({
     server,
-    routerNode,
     liveLatency,
     measuring,
     countryExcluded,
@@ -1167,7 +1153,6 @@ function ServerRow({
     onSelect,
 }: {
     server: Server
-    routerNode?: PoolNode
     measuring: boolean
     liveLatency?: number
     countryExcluded: boolean
@@ -1195,7 +1180,7 @@ function ServerRow({
             source={server.source_name}
             note={shortNote(server.description) || undefined}
             noteTitle={server.description}
-            check={checkInfo(server, routerNode, liveLatency)}
+            check={checkInfo(server, liveLatency)}
             measuring={measuring}
             highlighted={server.active}
             selectLabel={`Выбрать сервер ${server.name}`}

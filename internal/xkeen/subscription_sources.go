@@ -483,6 +483,7 @@ func (sm *SubscriptionManager) replaceSourceServersLocked(source models.Subscrip
 	inherit := func(s *models.Server, prev models.Server) {
 		s.ID, s.CountryOverride = prev.ID, prev.CountryOverride
 		s.Latency, s.LastChecked, s.ProbeKind, s.CheckError = prev.Latency, prev.LastChecked, prev.ProbeKind, prev.CheckError
+		s.PingSamples, s.LoadError = prev.PingSamples, prev.LoadError
 	}
 	var changed []int
 	for i := range fresh {
@@ -532,6 +533,7 @@ func (sm *SubscriptionManager) replaceSourceServersLocked(source models.Subscrip
 			s.ID, s.CountryOverride = matches[0].ID, matches[0].CountryOverride
 			if prev := matches[0]; sameEndpoint(prev, *s) && prev.Latency > 0 && prev.CheckError == "" {
 				s.Latency, s.LastChecked, s.ProbeKind = prev.Latency, prev.LastChecked, prev.ProbeKind
+				s.PingSamples = prev.PingSamples
 			}
 			for _, field := range changedOutboundFields(matches[0], *s) {
 				fields[field] = true

@@ -68,6 +68,8 @@ func backgroundCheckIDs(all []models.Server, pool []int, catalog bool, now time.
 		switch {
 		case inPool[s.ID] && !profile:
 		case s.ProbeKind != "https" && !profile:
+		// A number from before the router's check took over is replaced first.
+		case len(s.PingSamples) == 0:
 		case catalog && s.LastChecked.Before(stale):
 		default:
 			continue

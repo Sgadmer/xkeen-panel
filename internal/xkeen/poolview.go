@@ -20,13 +20,9 @@ type PoolNodeView struct {
 	Address  string `json:"address"`
 	Port     int    `json:"port"`
 	Country  string `json:"country,omitempty"`
-	Latency  int    `json:"latency_ms"`
-	// RouterLatency is the delay the pool worker measured itself: the number
-	// the automatic choice is made from. -1 means the worker got no answer.
-	RouterLatency *int `json:"router_latency_ms,omitempty"`
-	// RouterCheckedAt is when the pool worker last probed the node.
-	RouterCheckedAt *time.Time `json:"router_checked_at,omitempty"`
-	ExcludedUntil   *time.Time `json:"excluded_until,omitempty"`
+	// Latency is the server's one number (see ping.go).
+	Latency       int        `json:"latency_ms"`
+	ExcludedUntil *time.Time `json:"excluded_until,omitempty"`
 }
 
 func DescribePool(nodes []PoolNode, excluded map[string]time.Time) []PoolNodeView {

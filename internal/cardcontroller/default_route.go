@@ -197,17 +197,9 @@ func (c *Controller) currentDefault(ctx context.Context) (profile, DefaultRoute,
 				continue
 			}
 			port, _ := proxy["port"].(int)
-			id, observed := xkeen.CardPoolObservations(ctx, c.rt, strings.TrimPrefix(endpoint, nodePrefix+state.ScopeID+"-"), port)
-			for i := range state.Nodes {
-				if o, measured := observed[state.Nodes[i].Tag]; measured {
-					delay := o.Delay
-					state.Nodes[i].RouterLatency = &delay
-					if !o.Tried.IsZero() {
-						tried := o.Tried
-						state.Nodes[i].RouterCheckedAt = &tried
-					}
-				}
-			}
+			// The nodes show their servers' numbers: the pool's own answers are
+			// already in them (see MaintainPools).
+			id := xkeen.CardPoolMember(ctx, c.rt, strings.TrimPrefix(endpoint, nodePrefix+state.ScopeID+"-"), port)
 			if id != "" {
 				for _, node := range state.Nodes {
 					if node.Tag == id {

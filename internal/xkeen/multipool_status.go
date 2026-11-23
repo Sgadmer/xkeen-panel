@@ -132,11 +132,24 @@ func CardPoolObservations(ctx context.Context, rt Runtime, id string, port int) 
 		}
 		observed[member] = o
 	}
-	return measuredPoolMember(entries), observed
+	return currentPoolMember(socket, entries), observed
 }
 
 func readPoolMetrics(ctx context.Context, socket string) string {
-	return measuredPoolMember(readPoolObservations(ctx, socket))
+	return currentPoolMember(socket, readPoolObservations(ctx, socket))
+}
+
+// currentPoolMember is the member the panel pinned the worker to, or the one
+// the worker picks by itself when nothing is pinned.
+func currentPoolMember(socket string, entries map[string]memberObservation) string {
+	if pin := pinnedPoolMember(socket); pin != "" {
+		for tag := range entries {
+			if IsProfileInternalTag(tag) && tag[69:] == "ob-member-"+pin {
+				return pin
+			}
+		}
+	}
+	return measuredPoolMember(entries)
 }
 
 func readPoolObservations(ctx context.Context, socket string) map[string]memberObservation {

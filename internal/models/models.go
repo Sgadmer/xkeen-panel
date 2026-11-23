@@ -117,22 +117,36 @@ type Server struct {
 	Name       string `json:"name"`
 	// Description is the provider's short note under the name (Happ's
 	// serverDescription), shown as a second line when present.
-	Description     string          `json:"description,omitempty"`
-	Address         string          `json:"address"`
-	Port            int             `json:"port"`
-	Protocol        string          `json:"protocol"`
-	Active          bool            `json:"active"`
-	Latency         int             `json:"latency_ms"`
-	RawURI          string          `json:"raw_uri,omitempty"`
-	RawOutbound     json.RawMessage `json:"raw_outbound,omitempty"`
-	RawProfile      json.RawMessage `json:"raw_profile,omitempty"`
-	ProfileNodes    int             `json:"profile_nodes,omitempty"`
-	GeneratedPool   bool            `json:"-"`
-	ProbeKind       string          `json:"probe_kind,omitempty"`
-	CheckError      string          `json:"check_error,omitempty"`
-	LastChecked     time.Time       `json:"last_checked,omitempty"`
-	Country         string          `json:"country,omitempty"`
-	CountryOverride string          `json:"country_override,omitempty"`
+	Description   string          `json:"description,omitempty"`
+	Address       string          `json:"address"`
+	Port          int             `json:"port"`
+	Protocol      string          `json:"protocol"`
+	Active        bool            `json:"active"`
+	Latency       int             `json:"latency_ms"`
+	RawURI        string          `json:"raw_uri,omitempty"`
+	RawOutbound   json.RawMessage `json:"raw_outbound,omitempty"`
+	RawProfile    json.RawMessage `json:"raw_profile,omitempty"`
+	ProfileNodes  int             `json:"profile_nodes,omitempty"`
+	GeneratedPool bool            `json:"-"`
+	ProbeKind     string          `json:"probe_kind,omitempty"`
+	CheckError    string          `json:"check_error,omitempty"`
+	LastChecked   time.Time       `json:"last_checked,omitempty"`
+	// PingSamples are the router's last measurements of the server, oldest
+	// first. Latency and CheckError are computed from them (xkeen.ApplyPing).
+	PingSamples []PingSample `json:"ping_samples,omitempty"`
+	// LoadError is the verdict of the last full check when the server answered
+	// but could not load a page. It holds until the next full check.
+	LoadError       string `json:"load_error,omitempty"`
+	Country         string `json:"country,omitempty"`
+	CountryOverride string `json:"country_override,omitempty"`
+}
+
+// PingSample is one measurement by the router's own Xray check: the time to
+// the answer through the server, or -1 when it did not answer.
+type PingSample struct {
+	Ms    int       `json:"ms"`
+	At    time.Time `json:"at"`
+	Error string    `json:"error,omitempty"`
 }
 
 // SubscriptionData is the stored subscription (data/subscription.json).

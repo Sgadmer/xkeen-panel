@@ -61,10 +61,62 @@ var probeTargets = []string{
 const probeBytes = 32 << 10
 const probeAttempt = 5 * time.Second
 
-// probeDownload returns the time to the first response byte, the moment
-// Xray's own observatory measures too, so the numbers are comparable. A node
-// counts as working only once the first 32 KB arrived within the attempt.
-// stalled reports a response that started and never completed.
+// ProbeLoadError marks a node that answers the router's check but does not
+// deliver the first 32 KB of a page.
+const ProbeLoadError = "Сервер отвечает, но не загружает страницы"
+
+// routerProbeTimeout is how long the router's Xray check waits for an answer.
+const routerProbeTimeout = 5 * time.Second
+
+// probeLikeRouter sends the request of the router's own Xray check: a GET of
+// defaultProbeURL on a fresh connection, timed to the answer, 5 s at most. A
+// provider's mode is measured this way, through its own core.
+func probeLikeRouter(ctx context.Context, client *http.Client) int {
+	attempt, cancel := context.WithTimeout(ctx, routerProbeTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(attempt, http.MethodGet, defaultProbeURL, nil)
+	if err != nil {
+		return -1
+	}
+	start := time.Now()
+	response, err := client.Do(request)
+	if err != nil {
+		return -1
+	}
+	response.Body.Close()
+	return max(int(time.Since(start)/time.Millisecond), 1)
+}
+
+// awaitObservations waits for the first round of the core's own check, in
+// which every subject is probed at once, and returns its results by tag.
+func awaitObservations(ctx context.Context, socket string, tags []string) map[string]memberObservation {
+	deadline := time.Now().Add(3*routerProbeTimeout + time.Second)
+	var seen map[string]memberObservation
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		seen = readPoolObservations(ctx, socket)
+		done := seen != nil
+		for _, tag := range tags {
+			if seen[tag].LastTryTime == 0 {
+				done = false
+				break
+			}
+		}
+		if done {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return seen
+}
+
+// probeDownload tells whether a page loads through a node: a node counts as
+// working only once the first 32 KB arrived within the attempt. It returns the
+// time to the first byte; stalled reports a response that started and never
+// completed. The number shown for a server is not this one, but the router's
+// check (see ping.go).
 func probeDownload(ctx context.Context, client *http.Client, timeout time.Duration) (latency int, stalled bool) {
 	for _, target := range probeTargets {
 		if ctx.Err() != nil {
@@ -103,36 +155,10 @@ func probeOnce(ctx context.Context, client *http.Client, target string, timeout 
 	return max(int(first/time.Millisecond), 1), false
 }
 
-// probeReach reports whether a node returns anything at all: one byte of the
-// first file, or of the second when the first CDN is out of reach.
-func probeReach(ctx context.Context, client *http.Client, timeout time.Duration) bool {
-	for _, target := range probeTargets {
-		if ctx.Err() != nil {
-			return false
-		}
-		attempt, cancel := context.WithTimeout(ctx, timeout)
-		request, err := http.NewRequestWithContext(attempt, http.MethodGet, target, nil)
-		if err == nil {
-			request.Header.Set("Range", "bytes=0-0")
-			var response *http.Response
-			if response, err = client.Do(request); err == nil {
-				io.Copy(io.Discard, io.LimitReader(response.Body, 1<<10))
-				response.Body.Close()
-				ok := response.StatusCode == http.StatusOK || response.StatusCode == http.StatusPartialContent
-				cancel()
-				if ok {
-					return true
-				}
-				continue
-			}
-		}
-		cancel()
-	}
-	return false
-}
-
-// CheckServersHTTPS measures each node through its own loopback HTTP inbound.
-// A single temporary Xray process serves the batch and is always reaped.
+// CheckServersHTTPS measures every node the way the router's pool workers do:
+// a temporary Xray process runs the same check (its observatory) over all of
+// them at once, then a page is loaded through each node that answered. The
+// process is always reaped.
 func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions) ([]models.Server, error) {
 	parent := options.Context
 	if parent == nil {
@@ -200,11 +226,13 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 		}(i, server)
 	}
 	var nodesErr error
-	if len(ordinary) > 0 {
+	chunk := probeChunk()
+	for start := 0; start < len(ordinary) && nodesErr == nil; start += chunk {
+		end := min(start+chunk, len(ordinary))
 		var result []models.Server
-		result, nodesErr = probeIndependentNodes(rt, ordinary, nodeProbeOptions(options), checkServersHTTPSBatch)
+		result, nodesErr = probeIndependentNodes(rt, ordinary[start:end], nodeProbeOptions(options), checkServersHTTPSBatch)
 		for i, server := range result {
-			checked[indexes[i]] = server
+			checked[indexes[start+i]] = server
 		}
 	}
 	wg.Wait()
@@ -219,6 +247,31 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 
 // Complete profiles checked at once, each by a core of its own.
 const profileProbeConcurrency = 3
+
+const observedPrefix = "probe-obs-"
+
+func observedTag(i int) string { return observedPrefix + strconv.Itoa(i) + "-" }
+
+// probeChunk is how many single servers one temporary core checks at once.
+// The router's check opens a connection through every one of them at the same
+// moment; a router short of memory gets them in parts.
+func probeChunk() int {
+	const all, part = MaxMultiPoolMembers, 32
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return all
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "MemAvailable:" {
+			if kb, err := strconv.Atoi(fields[1]); err == nil && kb < 256*1024 {
+				return part
+			}
+			break
+		}
+	}
+	return all
+}
 
 // nodeProbeOptions sets the pace of a check of single servers.
 //
@@ -306,9 +359,15 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 	for i, server := range servers {
 		checked[i].Latency = -1
 		checked[i].ProbeKind = "https"
-		checked[i].CheckError = ""
+		checked[i].CheckError, checked[i].LoadError = "", ""
 		checked[i].LastChecked = time.Now()
-		out, buildErr := BuildServerOutbound(server, "probe-node-"+strconv.Itoa(i), map[string]interface{}{
+		// A single server is a subject of the core's own check; a provider's
+		// mode routes by its own rules and is measured through its inbound.
+		tag := observedTag(i)
+		if len(server.RawProfile) > 0 {
+			tag = "probe-node-" + strconv.Itoa(i)
+		}
+		out, buildErr := BuildServerOutbound(server, tag, map[string]interface{}{
 			"streamSettings": map[string]interface{}{"sockopt": map[string]interface{}{"mark": 255}},
 		})
 		if buildErr != nil {
@@ -331,15 +390,35 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		reserved = append(reserved, listener)
 		port := listener.Addr().(*net.TCPAddr).Port
 		ports[i] = port
-		tag := "probe-in-" + strconv.Itoa(i)
-		inbounds = append(inbounds, map[string]interface{}{"listen": "127.0.0.1", "port": port, "protocol": "http", "tag": tag, "settings": map[string]interface{}{}})
+		inbound := "probe-in-" + strconv.Itoa(i)
+		inbounds = append(inbounds, map[string]interface{}{"listen": "127.0.0.1", "port": port, "protocol": "http", "tag": inbound, "settings": map[string]interface{}{}})
 		outbounds = append(outbounds, out)
-		rules = append(rules, map[string]interface{}{"type": "field", "inboundTag": []string{tag}, "outboundTag": out["tag"]})
+		rules = append(rules, map[string]interface{}{"type": "field", "inboundTag": []string{inbound}, "outboundTag": out["tag"]})
 	}
 	if len(outbounds) == 0 {
 		return checked, nil
 	}
 	config := map[string]interface{}{"log": map[string]interface{}{"loglevel": "error"}, "inbounds": inbounds, "outbounds": outbounds, "routing": map[string]interface{}{"rules": rules}}
+	// The router's own check, configured as in the pool workers: every subject
+	// at once, as soon as the core starts. Its results come over a private
+	// socket in the check's directory.
+	var socket string
+	var observed []string
+	if profileBundle == nil {
+		if path := filepath.Join(dir, "obs.sock"); len(path) <= 102 {
+			for i := range servers {
+				if ports[i] != 0 {
+					observed = append(observed, observedTag(i))
+				}
+			}
+			socket = path
+			config["observatory"] = map[string]interface{}{
+				"subjectSelector": []interface{}{observedPrefix}, "probeURL": defaultProbeURL,
+				"probeInterval": "1h", "enableConcurrency": true,
+			}
+			addPoolMetrics(config, socket)
+		}
+	}
 	if profileBundle != nil {
 		bundle := profileBundle
 		binding, err := BindProfileRules(*bundle, []string{"probe-in-0"})
@@ -474,32 +553,49 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 		checked[index].LastChecked = time.Now()
 		options.report(checked[index])
 	}
-	// Phase one asks every node at once for a single byte, the way a client
-	// app pings: a silent node costs its timeout once for the whole batch
-	// instead of once per wave of 16. Most of a subscription can be silent.
-	reachable := make([]bool, len(ports))
+	// The number: the router's check. Single servers get it from the core's
+	// observatory; a provider's mode gets the same request through its inbound.
 	var wg sync.WaitGroup
+	answered := make([]bool, len(ports))
+	if socket != "" {
+		results := awaitObservations(ctx, socket, observed)
+		for i, port := range ports {
+			if port == 0 {
+				continue
+			}
+			o := results[observedTag(i)]
+			if o.Alive && o.Delay > 0 && o.Delay < 600000 {
+				checked[i].Latency, answered[i] = int(o.Delay), true
+			}
+		}
+	} else {
+		for i, port := range ports {
+			if port == 0 {
+				continue
+			}
+			wg.Add(1)
+			go func(index, localPort int) {
+				defer wg.Done()
+				c, done := client(localPort)
+				defer done()
+				if ms := probeLikeRouter(ctx, c); ms > 0 {
+					checked[index].Latency, answered[index] = ms, true
+				}
+			}(i, port)
+		}
+		wg.Wait()
+	}
+	// The verdict: a page must load through a server that answered. A node
+	// whose link freezes after the first kilobytes, the way blocking hits a
+	// VPN link, keeps its number but is marked as not loading pages.
+	semaphore := make(chan struct{}, options.Concurrency)
 	for i, port := range ports {
 		if port == 0 {
 			continue
 		}
-		wg.Add(1)
-		go func(index, localPort int) {
-			defer wg.Done()
-			c, done := client(localPort)
-			defer done()
-			if reachable[index] = probeReach(ctx, c, options.Timeout); !reachable[index] {
-				finish(index)
-			}
-		}(i, port)
-	}
-	wg.Wait()
-	// Phase two downloads 32 KB through the nodes that answered, a few at a
-	// time: the number shown is measured without the crowd, and a node whose
-	// link freezes after the first kilobytes is still caught.
-	semaphore := make(chan struct{}, options.Concurrency)
-	for i, port := range ports {
-		if port == 0 || !reachable[i] {
+		if !answered[i] {
+			checked[i].CheckError = PingNoAnswer
+			finish(i)
 			continue
 		}
 		wg.Add(1)
@@ -514,11 +610,11 @@ func checkServersHTTPSBatch(rt Runtime, servers []models.Server, options ProbeOp
 			defer finish(index)
 			c, done := client(localPort)
 			defer done()
-			latency, stalled := probeDownload(ctx, c, options.Timeout)
-			if latency > 0 {
-				checked[index].Latency = latency
-			} else if stalled {
-				checked[index].CheckError = ProbeStalledError
+			if loaded, stalled := probeDownload(ctx, c, options.Timeout); loaded <= 0 {
+				checked[index].LoadError = ProbeLoadError
+				if stalled {
+					checked[index].LoadError = ProbeStalledError
+				}
 			}
 		}(i, port)
 	}

@@ -24,6 +24,7 @@ type SubscriptionManager struct {
 	rollbackSnapshotKey  string
 	pendingMoves         []TargetMove
 	changedFields        []string
+	pingSaved            time.Time
 	// Optional injection for deterministic HTTP/TLS tests; production uses the
 	// standard verified-TLS transport. Redirect policy is always enforced.
 	httpClient *http.Client
@@ -106,49 +107,109 @@ func (sm *SubscriptionManager) GetServers() []models.Server {
 	return cloneSubscriptionServers(sm.data.Servers)
 }
 
-// UpdateLatencies stores measured latencies by stable server identity.
+// UpdateLatencies stores the results of a full check by stable server
+// identity. A router check adds one sample to the server's ping history and
+// renews its page-loading verdict; see ping.go.
 func (sm *SubscriptionManager) UpdateLatencies(checked []models.Server) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-
-	type probeKey struct{ source, identity string }
-	results := make(map[probeKey]models.Server, len(checked))
-	for _, c := range checked {
-		if key := ServerIdentity(c); key != "" {
-			results[probeKey{c.SourceID, key}] = c
-		}
-	}
-
-	now := time.Now()
 	previous := sm.data.Servers
-	sm.data.Servers = append([]models.Server(nil), previous...)
-	for i := range sm.data.Servers {
-		s := &sm.data.Servers[i]
-		identity := ServerIdentity(*s)
-		result, ok := results[probeKey{s.SourceID, identity}]
-		if !ok && s.SourceID == "legacy" {
-			result, ok = results[probeKey{"", identity}]
-		}
-		if ok {
-			if sm.data.Servers[i].ProbeKind == "https" && result.ProbeKind != "https" {
-				continue
-			}
-			at := result.LastChecked
-			if at.IsZero() || result.ProbeKind != "https" {
-				at = now
-			}
-			if s.LastChecked.After(at) {
-				continue
-			}
-			s.Latency, s.ProbeKind, s.CheckError, s.LastChecked = result.Latency, result.ProbeKind, result.CheckError, at
-		}
-	}
-
+	sm.applyResultsLocked(checked, true)
 	if err := sm.saveLocked(); err != nil {
 		sm.data.Servers = previous
 		return err
 	}
+	sm.pingSaved = time.Now()
 	return nil
+}
+
+// RecordPings stores what the pool workers measured: one sample each, the
+// page-loading verdict untouched. They come every minute, so the file is
+// written at most every pingSaveEvery; the numbers on screen change at once.
+func (sm *SubscriptionManager) RecordPings(samples []models.Server) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if !sm.applyResultsLocked(samples, false) || time.Since(sm.pingSaved) < pingSaveEvery {
+		return nil
+	}
+	if err := sm.saveLocked(); err != nil {
+		return err
+	}
+	sm.pingSaved = time.Now()
+	return nil
+}
+
+const pingSaveEvery = 10 * time.Minute
+
+// PreviewPing is what the server would show once this check result is stored.
+// It is called for every result of a running check, so it finds the server by
+// its ID instead of computing identities.
+func (sm *SubscriptionManager) PreviewPing(result models.Server) models.Server {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if i := sm.serverIndexLocked(result.ID); i >= 0 && sm.data.Servers[i].SourceID == result.SourceID {
+		s := sm.data.Servers[i]
+		applyCheckResult(&s, result, true)
+		return s
+	}
+	return result
+}
+
+// applyResultsLocked reports whether any stored server changed. A full check
+// may outlive a subscription refresh, so its results are matched by server
+// identity, computed once per server. The pool's answers come every few
+// seconds for servers of the current catalogue and are matched by ID.
+func (sm *SubscriptionManager) applyResultsLocked(checked []models.Server, full bool) bool {
+	type probeKey struct{ source, identity string }
+	index := map[probeKey]int{}
+	if full {
+		for i, s := range sm.data.Servers {
+			if identity := ServerIdentity(s); identity != "" {
+				index[probeKey{s.SourceID, identity}] = i
+				if s.SourceID == "legacy" {
+					index[probeKey{"", identity}] = i
+				}
+			}
+		}
+	}
+	changed := false
+	sm.data.Servers = append([]models.Server(nil), sm.data.Servers...)
+	for _, result := range checked {
+		i := -1
+		if full {
+			if identity := ServerIdentity(result); identity != "" {
+				if found, ok := index[probeKey{result.SourceID, identity}]; ok {
+					i = found
+				}
+			}
+		} else if found := sm.serverIndexLocked(result.ID); found >= 0 && sm.data.Servers[found].SourceID == result.SourceID {
+			i = found
+		}
+		if i >= 0 {
+			changed = applyCheckResult(&sm.data.Servers[i], result, full) || changed
+		}
+	}
+	return changed
+}
+
+// applyCheckResult stores one result. The router's check (ProbeKind "https")
+// becomes a ping sample; the old TCP ping of an Xray-only setup is kept as it
+// was, and never replaces a router's result.
+func applyCheckResult(s *models.Server, result models.Server, full bool) bool {
+	if result.ProbeKind == "https" {
+		if full {
+			s.LoadError = result.LoadError
+		}
+		if !ApplyPing(s, result.Latency, result.CheckError, result.LastChecked) {
+			RecomputePing(s)
+		}
+		return true
+	}
+	if s.ProbeKind == "https" {
+		return false
+	}
+	s.Latency, s.ProbeKind, s.CheckError, s.LastChecked = result.Latency, result.ProbeKind, result.CheckError, time.Now()
+	return true
 }
 
 // SetCountryOverride saves a manual correction to the subscription's country.

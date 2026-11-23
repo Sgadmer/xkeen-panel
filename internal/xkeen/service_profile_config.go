@@ -27,6 +27,9 @@ type serviceWorkerKey struct {
 	User string
 	Cert string
 	Key  string
+	// APIPort is the loopback port of a pool worker's routing API, through
+	// which the panel picks the member (see pool_pin.go). Zero elsewhere.
+	APIPort int `json:",omitempty"`
 }
 
 func newServiceWorkerKey(port int) (serviceWorkerKey, error) {

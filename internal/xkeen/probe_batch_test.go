@@ -16,29 +16,27 @@ type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// The first phase asks for one byte and falls back to the second CDN.
-func TestReachAsksForOneByteAndTriesTheSecondCDN(t *testing.T) {
-	answer := func(firstCDN, secondCDN int) bool {
+// A provider's mode is measured with the request of the router's own check:
+// a plain GET of the pools' probe file, timed to the answer.
+func TestModeIsMeasuredWithTheRoutersRequest(t *testing.T) {
+	answer := func(fail bool) int {
 		client := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
-			if r.Header.Get("Range") != "bytes=0-0" {
-				t.Fatalf("reach must ask for a single byte, asked %q", r.Header.Get("Range"))
+			if r.Method != http.MethodGet || r.URL.String() != defaultProbeURL || r.Header.Get("Range") != "" {
+				t.Fatalf("not the router's request: %s %s range %q", r.Method, r.URL, r.Header.Get("Range"))
 			}
-			code := secondCDN
-			if r.URL.String() == probeTargets[0] {
-				code = firstCDN
-			}
-			if code == 0 {
+			if fail {
 				return nil, errors.New("silent")
 			}
-			return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader("x"))}, nil
+			time.Sleep(15 * time.Millisecond)
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
 		})}
-		return probeReach(context.Background(), client, time.Second)
+		return probeLikeRouter(context.Background(), client)
 	}
-	if !answer(http.StatusPartialContent, 0) || !answer(0, http.StatusOK) || !answer(http.StatusForbidden, http.StatusPartialContent) {
-		t.Fatal("a node that returned the byte through either CDN is reachable")
+	if ms := answer(false); ms < 15 {
+		t.Fatalf("an answer took %d ms", ms)
 	}
-	if answer(0, 0) || answer(http.StatusForbidden, http.StatusBadGateway) {
-		t.Fatal("a node with no good answer is not reachable")
+	if ms := answer(true); ms != -1 {
+		t.Fatalf("no answer is -1, got %d", ms)
 	}
 }
 

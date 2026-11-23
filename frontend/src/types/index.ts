@@ -22,6 +22,8 @@ export type Server = {
     country?: string
     country_override?: string
     last_checked?: string
+    /** The router's last checks; latency_ms is the middle one of the answers. */
+    ping_samples?: { ms: number; at: string; error?: string }[]
     probe_kind?: string
     check_error?: string
     profile_nodes?: number
@@ -87,10 +89,6 @@ export type PoolNode = {
     port: number
     country?: string
     latency_ms: number
-    /** Measured by the router's own pool worker; the choice is made from it. -1: no answer. */
-    router_latency_ms?: number
-    /** When the router's pool worker last probed the node. */
-    router_checked_at?: string
     excluded_until?: string
 }
 

@@ -64,6 +64,15 @@ type Controller struct {
 	guard                guardJournal
 	// «Все локации» servers the router could not reach: see pool_health.go.
 	silent silentMembers
+	// Where the router's measurements are stored (see SetPingRecorder) and
+	// what the pool loop already took and decided: see pool_health.go.
+	recordPings func(samples []models.Server, full bool)
+	poolTried   map[string]time.Time
+	poolPinned  map[string]poolPin
+	pinUpgrade  bool
+	// Tests replace the pool workers' report and API; nil uses the real ones.
+	observePool func(ctx context.Context, rt xkeen.Runtime, id string, port int) (string, map[string]xkeen.PoolObservation)
+	pinMember   func(ctx context.Context, rt xkeen.Runtime, id string, port int, member string) error
 	// Set while a subscription refresh is applied: see soft_swap.go.
 	soft        bool
 	retired     map[string]retiredWorker

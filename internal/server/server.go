@@ -123,8 +123,17 @@ func (s *Server) Handler() http.Handler {
 		return nil
 	})
 	if s.Cards != nil {
+		s.Cards.SetPingRecorder(func(samples []models.Server, full bool) {
+			store := s.subscription.RecordPings
+			if full {
+				store = s.subscription.UpdateLatencies
+			}
+			if err := store(samples); err != nil {
+				log.Printf("Не удалось сохранить замеры роутера: %v", err)
+			}
+		})
 		go runBackgroundChecks(lifetime, handlers.Checks, s.Cards.PoolMemberIDs, s.subscription.GetServers)
-		go replaceSilentPoolMembers(lifetime, s.Cards, s.watchdog)
+		go maintainPools(lifetime, s.Cards, s.watchdog)
 		if s.watchdog != nil {
 			s.watchdog.SetPoolRecheck(func() bool { return handlers.Checks.StartBackground(s.Cards.PoolMemberIDs()) })
 		}

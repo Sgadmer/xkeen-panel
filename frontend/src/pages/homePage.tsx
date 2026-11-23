@@ -24,10 +24,8 @@ import {
 } from '@/hooks/usePanelData'
 import { useServerActions } from '@/hooks/useServerActions'
 import {
-    agoLabel,
     countryName,
     countryFlag,
-    isSet,
     latencyTone,
     panelEvents,
     routesDownText,
@@ -85,16 +83,9 @@ export function HomePage() {
     // A server named after its country would otherwise be printed twice.
     const place = countryName(code)
     const sameName = !!place && !!endpoint && endpoint.replace(/[^\p{L}\p{N} ]/gu, '').trim().toLowerCase() === place.toLowerCase()
-    // The same number as in the server list: the pool's own measurement, or the last check of the server.
-    const routerMs = node?.router_latency_ms !== undefined && node.router_latency_ms > 0 ? node.router_latency_ms : 0
-    const checkedMs = current?.probe_kind === 'https' && current.latency_ms > 0 ? current.latency_ms : 0
-    // Coloured like the number in the server list.
-    const shownMs = direct || blocked || awaitingMember ? 0 : routerMs || checkedMs
-    const ago = !routerMs && shownMs && isSet(current?.last_checked) ? agoLabel(current?.last_checked) : ''
-    const latency = shownMs > 0 && <>
-        <span className={toneText[latencyTone(shownMs)]}>{shownMs} мс</span>
-        {ago && ' · ' + ago}
-    </>
+    // The server's one number, the same as in the server list and coloured alike.
+    const shownMs = direct || blocked || awaitingMember || current?.probe_kind !== 'https' ? 0 : Math.max(current.latency_ms, 0)
+    const latency = shownMs > 0 && <span className={toneText[latencyTone(shownMs)]}>{shownMs} мс</span>
 
     const inVpn = devices?.devices.filter(d => d.vpn).length ?? 0
     const online = devices?.devices.filter(d => d.active).length ?? 0
