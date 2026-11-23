@@ -71,6 +71,8 @@ type poolNode struct {
 	id      string
 	server  models.Server
 	allowed bool
+	// The pool worker got no answer from it lately.
+	silent bool
 }
 
 func (c *Controller) poolNodes(servers []models.Server) []poolNode {
@@ -84,7 +86,7 @@ func (c *Controller) poolNodes(servers []models.Server) []poolNode {
 		// Each subscription labels its own locations. Deduplicate only after
 		// applying this entry's country and the requested pool's scope.
 		allowed := id != "" && (!filter || c.autoAllowed != nil && c.autoAllowed(s))
-		nodes = append(nodes, poolNode{id: id, server: s, allowed: allowed})
+		nodes = append(nodes, poolNode{id: id, server: s, allowed: allowed, silent: c.silent.has(id)})
 	}
 	sort.SliceStable(nodes, func(i, j int) bool {
 		a, b := nodes[i], nodes[j]
@@ -134,7 +136,7 @@ func (pool *MultiPool) members(nodes []poolNode) []models.Server {
 		limit = normalizeAutoLimit(pool.limit)
 	}
 	for _, n := range nodes {
-		if !n.allowed || seen[n.id] || probeRank(n.server) == 2 && pool.ID == allPoolID {
+		if !n.allowed || seen[n.id] || (probeRank(n.server) == 2 || n.silent) && pool.ID == allPoolID {
 			continue
 		}
 		member := memberKey(n)

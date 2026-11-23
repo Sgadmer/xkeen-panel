@@ -60,6 +60,8 @@ type Controller struct {
 	autoPoolLimit        int
 	probeURL             string
 	guard                guardJournal
+	// «Все локации» servers the router could not reach: see pool_health.go.
+	silent silentMembers
 	// Set while a subscription refresh is applied: see soft_swap.go.
 	soft        bool
 	retired     map[string]retiredWorker

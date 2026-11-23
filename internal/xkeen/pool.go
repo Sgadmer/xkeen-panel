@@ -18,7 +18,9 @@ import (
 const (
 	DefaultBalancerTag  = "balancer"
 	DefaultPoolSelector = "sub-"
-	defaultProbeURL     = "https://www.google.com/generate_204"
+	// The same CDN the panel's check downloads from, so the router and the
+	// panel judge a server by the same thing. The file is small (a few KB).
+	defaultProbeURL     = "https://cdn.jsdelivr.net/npm/jquery@3.7.1/package.json"
 	// A dead node stays selectable until the next probe round, so this is how
 	// long a pool can keep sending new connections into a hole. With every node
 	// probed at once, one round costs about 13 KB of traffic per node.

@@ -124,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	if s.Cards != nil {
 		go runBackgroundChecks(lifetime, handlers.Checks, s.Cards.PoolMemberIDs, s.subscription.GetServers)
+		go replaceSilentPoolMembers(lifetime, s.Cards, s.watchdog)
 		if s.watchdog != nil {
 			s.watchdog.SetPoolRecheck(func() bool { return handlers.Checks.StartBackground(s.Cards.PoolMemberIDs()) })
 		}
