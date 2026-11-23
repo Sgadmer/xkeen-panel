@@ -135,20 +135,28 @@ func (pool *MultiPool) members(nodes []poolNode) []models.Server {
 	if pool.ID == allPoolID {
 		limit = normalizeAutoLimit(pool.limit)
 	}
-	for _, n := range nodes {
-		if !n.allowed || seen[n.id] || (probeRank(n.server) == 2 || n.silent) && pool.ID == allPoolID {
-			continue
-		}
-		member := memberKey(n)
-		include := pool.IncludeFiltered == nil || *pool.IncludeFiltered
-		if !explicit[member] && (!include || len(pool.SourceIDs) > 0 && !slices.Contains(pool.SourceIDs, member.SourceID) ||
-			len(pool.Countries) > 0 && !slices.Contains(pool.Countries, strings.ToUpper(xkeen.ServerCountry(n.server)))) {
-			continue
-		}
-		seen[n.id] = true
-		pool.EligibleCount++
-		if len(result) < limit {
-			result = append(result, n.server)
+	// A server the router got no answer from goes to the back of «Все локации»
+	// rather than out of it: it is taken only when nothing else is left, so a
+	// bad minute of the internet can never shrink or empty the pool.
+	for _, lastResort := range []bool{false, true} {
+		for _, n := range nodes {
+			if silent := n.silent && pool.ID == allPoolID; silent != lastResort {
+				continue
+			}
+			if !n.allowed || seen[n.id] || probeRank(n.server) == 2 && pool.ID == allPoolID {
+				continue
+			}
+			member := memberKey(n)
+			include := pool.IncludeFiltered == nil || *pool.IncludeFiltered
+			if !explicit[member] && (!include || len(pool.SourceIDs) > 0 && !slices.Contains(pool.SourceIDs, member.SourceID) ||
+				len(pool.Countries) > 0 && !slices.Contains(pool.Countries, strings.ToUpper(xkeen.ServerCountry(n.server)))) {
+				continue
+			}
+			seen[n.id] = true
+			pool.EligibleCount++
+			if len(result) < limit {
+				result = append(result, n.server)
+			}
 		}
 	}
 	pool.MemberCount = len(result)

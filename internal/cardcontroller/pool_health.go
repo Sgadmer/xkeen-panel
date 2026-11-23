@@ -62,9 +62,16 @@ func (s *silentMembers) forget(ids []string) {
 // from out of «Все локации», so the next fastest servers take their places.
 // Nothing changes while every member is silent: then the trouble is the
 // internet or the probe, not the servers. It returns how many were replaced.
+//
+// The swap is soft, like a subscription reissue: new connections go to the
+// new worker at once, while connections already open keep running through the
+// previous one until they end. Closing them used to break every download and
+// call through the pool on each replacement.
 func (c *Controller) ReplaceSilentPoolMembers(ctx context.Context) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.soft = true
+	defer func() { c.soft = false }()
 	p, err := c.read()
 	if err != nil {
 		return 0, err

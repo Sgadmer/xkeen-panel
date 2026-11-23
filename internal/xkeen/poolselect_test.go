@@ -152,7 +152,7 @@ func TestSelectPoolServersEmptyWhenAllAvoided(t *testing.T) {
 
 // Probe load scales with pool size, so the interval has to scale with it.
 func TestProbeIntervalScalesWithPoolSize(t *testing.T) {
-	cases := map[int]string{5: "2m", 8: "2m", 9: "5m", 20: "5m", 21: "10m", 40: "10m", 81: "15m"}
+	cases := map[int]string{5: "1m", 8: "1m", 9: "5m", 20: "5m", 21: "10m", 40: "10m", 81: "15m"}
 
 	for nodes, want := range cases {
 		if got := probeIntervalFor(nodes); got != want {

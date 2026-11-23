@@ -20,11 +20,12 @@ const (
 	DefaultPoolSelector = "sub-"
 	// The same CDN the panel's check downloads from, so the router and the
 	// panel judge a server by the same thing. The file is small (a few KB).
-	defaultProbeURL     = "https://cdn.jsdelivr.net/npm/jquery@3.7.1/package.json"
+	defaultProbeURL = "https://cdn.jsdelivr.net/npm/jquery@3.7.1/package.json"
 	// A dead node stays selectable until the next probe round, so this is how
-	// long a pool can keep sending new connections into a hole. With every node
-	// probed at once, one round costs about 13 KB of traffic per node.
-	defaultProbeEvery = "2m"
+	// long a pool can keep sending new connections into a hole. A small pool is
+	// what a person actually browses through, so it is probed every minute:
+	// one round costs about 13 KB of traffic per node, about 150 MB a day for 8.
+	defaultProbeEvery = "1m"
 )
 
 // BuildPoolOutbounds renders one outbound per server, tagged <selector><N>.
@@ -165,8 +166,8 @@ func splitAPIAddr(addr string) (string, int, error) {
 // then probes the next: a fresh worker of 88 nodes needed hours for one round
 // and sent everything to its fallback until the first live node came up. All
 // nodes are probed at once now, so a new worker knows its live nodes within
-// seconds. The interval grows with pool size to keep the probe traffic near
-// 60 MB a day.
+// seconds. The interval grows with pool size to keep the probe traffic of a
+// large pool near 60 MB a day.
 func observatoryBlock(selector string, nodes int) map[string]interface{} {
 	return map[string]interface{}{
 		"subjectSelector":   []interface{}{selector},

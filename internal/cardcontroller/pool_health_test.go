@@ -24,6 +24,15 @@ func TestSilentServerLeavesAllLocations(t *testing.T) {
 	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
 		t.Fatalf("the next fastest server must take the silent one's place: %+v", got)
 	}
+	pool = MultiPool{ID: allPoolID, limit: 3}
+	got = pool.members(nodes)
+	if len(got) != 3 || got[2].ID != 2 || pool.EligibleCount != 3 {
+		t.Fatalf("a silent server must fill the pool rather than leave it short: %+v", got)
+	}
+	everyone := MultiPool{ID: "custom"}
+	if got := everyone.members(nodes); len(got) != 3 || got[1].ID != 2 {
+		t.Fatalf("only «Все локации» reorders silent servers: %+v", got)
+	}
 	silent.forget([]string{"b"})
 	if silent.has("b") {
 		t.Fatal("a failed rebuild must not keep the server out")
