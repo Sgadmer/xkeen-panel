@@ -74,6 +74,30 @@ func cardWorkerRuntime(rt Runtime) (Runtime, error) {
 	return rt, nil
 }
 
+// PrepareProfileMember starts the isolated worker of a provider's complete
+// profile, the same one a card would use, and returns the outbound a pool
+// worker reaches it through: a loopback VLESS link pinned to the worker's own
+// certificate. Inside that worker the profile's direct exits are blocked, so
+// a profile in a pool can never send traffic past the VPN.
+func PrepareProfileMember(rt Runtime, id string, server models.Server, tag string) (map[string]interface{}, error) {
+	if len(server.RawProfile) == 0 || id == "" || ServiceTargetID(server) != id {
+		return nil, fmt.Errorf("участник пула не является режимом провайдера")
+	}
+	worker, err := cardWorkerRuntime(rt)
+	if err != nil {
+		return nil, err
+	}
+	template, err := cardTransportTemplate(rt.MihomoConf)
+	if err != nil {
+		return nil, err
+	}
+	key, err := prepareProfileWorker(worker, id, server, template)
+	if err != nil {
+		return nil, err
+	}
+	return key.outbound(tag), nil
+}
+
 // PrepareCardProxy preserves the complete provider policy for aggregate
 // targets. A standalone endpoint is the only tunnel in its isolated profile.
 func PrepareCardProxy(rt Runtime, id string, server models.Server) (CardProxy, error) {

@@ -49,6 +49,7 @@ type Controller struct {
 	validate             func(context.Context, string) error
 	prepare              func(xkeen.Runtime, string, models.Server) (xkeen.CardProxy, error)
 	probe                func(xkeen.Runtime, []models.Server, xkeen.ProbeOptions) ([]models.Server, error)
+	prepareMember        func(xkeen.Runtime, string, models.Server, string) (map[string]interface{}, error)
 	pending              map[string]bool
 	autoFlowsChecked     bool
 	refilterError        string
@@ -78,7 +79,7 @@ func New(configPath, stateDir string, rt xkeen.Runtime, catalog func() []models.
 	// PrepareCardProxy owns its isolated runtime namespace and still has
 	// access to the existing Xray asset directory and sibling executable.
 	rt.MihomoConf = configPath
-	c := &Controller{path: configPath, stateDir: stateDir, rt: rt, catalog: catalog, prepare: xkeen.PrepareCardProxy, probe: xkeen.CheckCardServersHTTPS, pending: map[string]bool{}}
+	c := &Controller{path: configPath, stateDir: stateDir, rt: rt, catalog: catalog, prepare: xkeen.PrepareCardProxy, probe: xkeen.CheckCardServersHTTPS, prepareMember: xkeen.PrepareProfileMember, pending: map[string]bool{}}
 	c.http = &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	c.validate = func(ctx context.Context, path string) error {
 		cmd := exec.CommandContext(ctx, "/opt/sbin/mihomo", "-t", "-d", filepath.Dir(configPath), "-f", path)
@@ -576,6 +577,7 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	}
 	peers := map[string]cardEndpoint{}
 	workers := map[string]xkeen.CardProxy{}
+	memberWorkers := map[string]bool{} // provider modes running for a pool
 	keys := []string{}
 	for service, key := range p.assigned {
 		if service == defaultID && !defaultSourceAvailable {
@@ -598,10 +600,33 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 				nodes = c.poolNodes(servers)
 			}
 			members := pool.members(nodes)
+			// A provider's mode joins a pool through its own worker. One whose
+			// worker cannot start is left out rather than failing the pool.
+			profiles := map[string]map[string]interface{}{}
+			kept := make([]models.Server, 0, len(members))
+			for _, m := range members {
+				if len(m.RawProfile) == 0 {
+					kept = append(kept, m)
+					continue
+				}
+				if c.prepareMember == nil {
+					continue
+				}
+				id := xkeen.ServiceTargetID(m)
+				out, err := c.prepareMember(c.rt, id, m, "member-"+id)
+				if err != nil {
+					continue
+				}
+				profiles[id], memberWorkers[id] = out, true
+				kept = append(kept, m)
+			}
+			members = kept
 			if len(members) == 0 {
 				continue
 			}
-			s, err = xkeen.MultiPoolProfile(members)
+			s, err = xkeen.MultiPoolProfileWith(members, func(_ models.Server, id, _ string) (map[string]interface{}, error) {
+				return profiles[id], nil
+			})
 			if err != nil {
 				return View{}, err
 			}
@@ -723,6 +748,9 @@ func (c *Controller) apply(ctx context.Context, id, target string, withListener 
 	if result.Active && !result.ActiveConnectionsPending {
 		keep := map[string]bool{}
 		for key := range workers {
+			keep[key] = true
+		}
+		for key := range memberWorkers {
 			keep[key] = true
 		}
 		c.liveWorkers = maps.Clone(keep)

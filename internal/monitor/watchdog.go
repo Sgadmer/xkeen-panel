@@ -67,6 +67,7 @@ type Watchdog struct {
 	searching       bool
 	routesDown      []string
 	routesFailing   []string // cards whose route failed the last check alone
+	defaultMisses   int      // failed checks in a row of the common route
 
 	// When the route was last reported as working. A line for every check
 	// would push the events worth reading out of the journal.
@@ -305,8 +306,17 @@ func (w *Watchdog) check(restoreSelection bool) {
 				}
 			}
 		}
-		defaultPoolDown := err != nil && result.Checked && internet && result.Pool
 		w.mu.Lock()
+		// Like a card's route, the common one counts as down only after two
+		// failed checks in a row: one miss used to put «VPN не работает» and
+		// «интернет приостановлен» on screen while every site opened.
+		if err != nil {
+			w.defaultMisses++
+		} else {
+			w.defaultMisses = 0
+		}
+		confirmed := err == nil || w.defaultMisses >= 2
+		defaultPoolDown := err != nil && confirmed && result.Checked && internet && result.Pool
 		down := confirmedDown(w.routesFailing, failed)
 		w.routesFailing = failed
 		poolDown := false
@@ -315,8 +325,10 @@ func (w *Watchdog) check(restoreSelection bool) {
 		}
 		w.lastCheck, w.mihomoName, w.mihomoProtocol = time.Now(), result.Name, result.Protocol
 		w.mihomoSelective, w.mihomoPool = result.Selective, result.Pool
-		w.connected, w.lastLatency, w.internet = err == nil, result.Latency, internet
-		w.proxyChecked = result.Checked
+		if confirmed {
+			w.connected, w.lastLatency, w.internet = err == nil, result.Latency, internet
+			w.proxyChecked = result.Checked
+		}
 		recover := w.mihomoRecovery
 		if err != nil && result.Checked && internet && w.active && recover != nil {
 			w.failCount++
@@ -341,6 +353,8 @@ func (w *Watchdog) check(restoreSelection bool) {
 		switch {
 		case err == nil:
 			w.logHealthy("[OK] VPN работает · Остальные сайты%s", routeSummary(result.Name, result.Latency))
+		case !confirmed:
+			// One miss: the next check decides.
 		case !internet:
 			w.logUnhealthy("[FAIL] Нет интернета у провайдера — VPN тут ни при чём")
 		default:

@@ -15,6 +15,13 @@ const MaxMultiPoolMembers = 256
 // MultiPoolProfile makes one isolated, probed VPN worker for the whole pool.
 // Membership order must be stable so equivalent pools share a worker.
 func MultiPoolProfile(servers []models.Server) (models.Server, error) {
+	return MultiPoolProfileWith(servers, nil)
+}
+
+// MultiPoolProfileWith also takes a provider's complete profile as a member:
+// member returns the outbound to that profile's own worker (see
+// PrepareProfileMember). Without it a profile member is refused.
+func MultiPoolProfileWith(servers []models.Server, member func(server models.Server, id, tag string) (map[string]interface{}, error)) (models.Server, error) {
 	if len(servers) == 0 || len(servers) > MaxMultiPoolMembers {
 		return models.Server{}, errors.New("недопустимое число узлов мультипула")
 	}
@@ -22,6 +29,14 @@ func MultiPoolProfile(servers []models.Server) (models.Server, error) {
 	outbounds := make([]interface{}, 0, len(servers))
 	for _, server := range servers {
 		id := ServiceTargetID(server)
+		if id != "" && len(server.RawProfile) != 0 && member != nil {
+			out, err := member(server, id, selector+id)
+			if err != nil {
+				return models.Server{}, err
+			}
+			outbounds = append(outbounds, out)
+			continue
+		}
 		out, err := BuildServerOutbound(server, selector+id, nil)
 		if err != nil || id == "" || len(server.RawProfile) != 0 || !permittedServiceOutbound(out) {
 			return models.Server{}, errors.New("в мультипуле оказался неподдерживаемый узел")

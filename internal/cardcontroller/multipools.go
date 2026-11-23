@@ -78,8 +78,12 @@ type poolNode struct {
 func (c *Controller) poolNodes(servers []models.Server) []poolNode {
 	filter := c.avoidCountries != nil && len(c.avoidCountries()) > 0
 	nodes := make([]poolNode, 0, len(servers))
+	// A provider's mode competes like any server, by its check and its
+	// location, and joins a pool through its own worker (see apply). It needs
+	// a passed check first: a mode is a whole config, and one the panel never
+	// saw working may have nothing to start.
 	for _, s := range servers {
-		if len(s.RawProfile) != 0 {
+		if len(s.RawProfile) != 0 && (s.ProbeKind != "https" || s.Latency <= 0) {
 			continue
 		}
 		id := xkeen.ServiceTargetID(s)

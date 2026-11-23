@@ -37,16 +37,19 @@ func TestMultiPoolSourceCountryComposition(t *testing.T) {
 	c := &Controller{}
 	c.SetCountryPolicy(func() []string { return []string{"RU"} }, func(s models.Server) bool { return xkeen.ServerCountry(s) != "RU" })
 	servers := []models.Server{a, b, duplicate, overridden, poolServer("A", "RU", "10004"), poolServer("B", "", "10005"),
-		{SourceID: "B", Country: "NL", RawProfile: json.RawMessage(`{"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)}}
+		{SourceID: "B", Country: "NL", ProbeKind: "https", Latency: 90, RawProfile: json.RawMessage(`{"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)},
+		// A mode the panel never saw working stays out.
+		{SourceID: "B", Country: "NL", RawProfile: json.RawMessage(`{"outbounds":[{"protocol":"freedom","tag":"unchecked"}]}`)}}
 	pool := MultiPool{PoolSpec: PoolSpec{SourceIDs: []string{"B"}, Countries: []string{"NL", "DE"}}}
+	// The provider's mode of source B in NL takes its place like any server.
 	members := pool.members(c.poolNodes(servers))
-	if len(members) != 3 {
-		t.Fatalf("wanted 3 unique allowed nodes after source and country filters, got %d", len(members))
+	if len(members) != 4 {
+		t.Fatalf("wanted 4 unique allowed nodes after source and country filters, got %d", len(members))
 	}
 	blockedAlias := duplicate
 	blockedAlias.Country = "RU"
 	members = pool.members(c.poolNodes(append(servers, blockedAlias)))
-	if len(members) != 3 {
+	if len(members) != 4 {
 		t.Fatal("excluded alias hid the subscription's allowed location")
 	}
 	pool.SourceIDs = []string{"missing"}

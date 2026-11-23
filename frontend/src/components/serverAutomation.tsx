@@ -40,7 +40,6 @@ export function ExcludedLocations() {
         const codes = new Set<string>()
         let unknown = false
         for (const server of servers.data ?? []) {
-            if (server.protocol === 'xray-profile') continue
             const code = serverCountry(server).trim()
             if (/^[A-Z]{2}$/.test(code)) codes.add(code)
             else unknown = true

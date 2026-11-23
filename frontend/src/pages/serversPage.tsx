@@ -366,6 +366,12 @@ export function ServersPage() {
                 title={withCountryFlag(server.name, serverCountry(server))}
                 chips={<>
                     <ProtocolBadge protocol={server.protocol} className='' />
+                    {!!server.pool_tag && !locationExcluded(avoidCountries, serverCountry(server)) && <Hint label='В автовыборе: роутер сам ведёт трафик через самый быстрый вариант пула'>
+                        <IconWand aria-hidden className='size-[13px]' stroke={2.2} />
+                    </Hint>}
+                    {locationExcluded(avoidCountries, serverCountry(server)) && <Hint label='Локация исключена из автовыбора. Этот режим можно выбрать только вручную'>
+                        <IconBan aria-hidden className='size-[13px]' stroke={2.2} />
+                    </Hint>}
                     {server.active && <Hint label='Выбран: через этот режим идут остальные сайты' className='text-tint'>
                         <IconCheck aria-hidden className='size-[13px]' stroke={3} />
                     </Hint>}
@@ -743,7 +749,7 @@ function AllLocationsLimit({ limit, count, eligible, disabled, mutation }: {
             </div>
             <p id='all-locations-summary' className='text-[13px] text-muted-foreground'>
                 В пуле {count} из {eligible} подходящих. Первыми попадают серверы с наименьшей задержкой из всех подписок.
-                {' '}Дубли, исключённые страны, сборные профили и узлы с неудачной HTTPS-проверкой пропускаются.
+                {' '}Режимы провайдера участвуют наравне с серверами. Дубли, исключённые локации и узлы с неудачной HTTPS-проверкой пропускаются.
             </p>
             <div id='all-locations-feedback' aria-live='polite' className='text-[13px] empty:hidden'>
                 {!valid ? 'Введите целое число от 1 до 256.' : mutation.isError
