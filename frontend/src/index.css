@@ -163,6 +163,60 @@
     }
 }
 
+/* Diagonal stripes drifting over the ping button while a check runs. */
+@keyframes probe-stripes {
+    to {
+        background-position: 28.28px 0;
+    }
+}
+
+.probe-running {
+    background-image: repeating-linear-gradient(-45deg, rgb(255 255 255 / 0.07) 0 10px, transparent 10px 20px);
+    background-size: 28.28px 28.28px;
+    animation: probe-stripes 1.2s linear infinite;
+}
+
+/* «Searching for a network»: see SignalBars, which keeps every copy in phase. */
+@keyframes signal-color {
+    0%, 100% {
+        color: #30d158;
+    }
+    33% {
+        color: #ffd60a;
+    }
+    66% {
+        color: #ff453a;
+    }
+}
+
+@keyframes signal-bar {
+    0%, 100% {
+        opacity: 0.25;
+    }
+    20%, 45% {
+        opacity: 1;
+    }
+    70% {
+        opacity: 0.25;
+    }
+}
+
+.signal-bars {
+    animation: signal-color 4.5s linear infinite;
+}
+
+.signal-bars > i {
+    animation: signal-bar 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .probe-running,
+    .signal-bars,
+    .signal-bars > i {
+        animation: none;
+    }
+}
+
 .country-filter-scroll {
     scrollbar-width: thin;
     scrollbar-color: var(--muted-foreground) transparent;

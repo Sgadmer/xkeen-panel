@@ -2,6 +2,8 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+    IconAlertTriangle,
+    IconBan,
     IconCheck,
     IconChevronLeft,
     IconChevronRight,
@@ -9,11 +11,15 @@ import {
     IconGauge,
     IconLink,
     IconLayersLinked,
-    IconPencil,
     IconPlus,
     IconSearch,
+    IconWand,
+    IconWorld,
     IconWorldWww,
 } from '@tabler/icons-react'
+import { Hint } from '@/components/hint'
+import { LatencySkeleton, SignalBars } from '@/components/probeIndicators'
+import { ExcludedLocations } from '@/components/serverAutomation'
 import {
     CircleButton,
     Group,
@@ -156,7 +162,6 @@ export function ServersPage() {
         pin,
         auto,
         refreshSubscription,
-        setCountry,
         setScope,
         setPoolLimit,
     } = useServerActions()
@@ -264,15 +269,16 @@ export function ServersPage() {
         liveLatency: routerLatency.get(s.id) ?? latencyFor(s.id),
         onCheck: () => check([s.id]),
         onSelect: () => select.mutate(s.id),
-        onSetCountry: (c: string) =>
-            setCountry.mutate({ id: s.id, country: c }),
     })
 
     const pickNode = (tag: string, serverId: number) =>
         serverId >= 0 ? select.mutate(serverId) : pin.mutate(tag)
 
-    const tiles = (
-        <div className='divide-y divide-white/10 rounded-card bg-card px-4 lg:grid lg:grid-cols-2 lg:gap-4 lg:divide-y-0 lg:bg-transparent lg:px-0'>
+    const probing = checking && !background
+    // Beside the pool list the column is narrow, so the blocks stack there.
+    const tiles = (narrow: boolean) => (
+        <div className={cn('flex flex-col gap-3 lg:gap-4', !narrow && 'lg:grid lg:grid-cols-2')}>
+        <div className='divide-y divide-white/10 rounded-card bg-card px-4 lg:contents lg:divide-y-0'>
             <div className={TILE}>
                 <Row
                     icon={
@@ -301,8 +307,13 @@ export function ServersPage() {
                     label='Мультипулы' hint={multipools?.length ? 'Пулов: ' + multipools.length : 'Объединить серверы из разных подписок'}
                     onClick={() => { setEditingPool(null); setCatalogSheet('pools') }} trailing={<IconChevronRight className='size-4 shrink-0 text-label-tertiary' />} />
             </div>}
+            <div className={TILE}>
+                <ExcludedLocations />
+            </div>
+        </div>
             {hasSubscription && (
-                <div className={TILE}>
+                // Its own card with a brighter edge; stripes drift over it while a check runs.
+                <div className={cn('rounded-card bg-card px-4 ring-1 ring-[#30d158]/70', probing && 'probe-running')}>
                     <Row
                         icon={
                             <IconTile color='#30d158'>
@@ -312,7 +323,7 @@ export function ServersPage() {
                                 />
                             </IconTile>
                         }
-                        label={checking && !background ? (stopping ? 'Останавливаю…' : 'Остановить проверку') : 'Проверить пинг'}
+                        label={probing ? (stopping ? 'Останавливаю…' : 'Остановить проверку') : 'Проверить пинг'}
                         hint={
                             background
                                 ? 'Панель сейчас проверяет серверы пула. Нажмите, чтобы проверить все.'
@@ -320,9 +331,9 @@ export function ServersPage() {
                                 ? `Проверено ${progress.completed} из ${progress.total}. Нажмите ещё раз, чтобы остановить.`
                                 : stopped
                                 ? 'Проверка остановлена. Уже измеренные серверы сохранены.'
-                                : 'Загрузка через каждый сервер, по 16 одновременно'
+                                : 'Все серверы разом, затем загрузка через ответившие'
                         }
-                        onClick={() => (checking && !background ? stop() : check())}
+                        onClick={() => (probing ? stop() : check())}
                         disabled={stopping}
                     />
                 </div>
@@ -343,7 +354,7 @@ export function ServersPage() {
         <Group title={<span className='flex min-w-0 items-center justify-between gap-2'>
             <span>Режимы провайдера</span>
             <ProbeButton label='Обновить пинг режимов провайдера' disabled={checking || routeBusy}
-                measuring={providerModes.some(server => isPendingServer(server.id))}
+                measuring={providerModes.every(server => isPendingServer(server.id))}
                 onClick={() => check(providerModes.map(server => server.id))} />
         </span>} footer='Это готовые варианты из вашей подписки. Какие серверы входят в каждый вариант и как они выбираются, решает поставщик VPN.'>
             {profiles.map(server => {
@@ -427,8 +438,13 @@ export function ServersPage() {
                             {
                                 value: 'pool',
                                 label: `Автовыбор · ${pool?.nodes?.length ?? 0}`,
+                                icon: <IconWand aria-hidden className='size-[17px] shrink-0' stroke={2} />,
                             },
-                            { value: 'all', label: `Все серверы · ${servers.length}` },
+                            {
+                                value: 'all',
+                                label: `Все серверы · ${servers.length}`,
+                                icon: <IconWorld aria-hidden className='size-[17px] shrink-0' stroke={2} />,
+                            },
                         ]}
                     />
                 </div>
@@ -592,14 +608,14 @@ export function ServersPage() {
                                 onClick={() => setAddingSite(true)}
                             />
                         </Group>}
-                        {tiles}
+                        {tiles(true)}
                     </div>
                 </div>
             )}
 
             {view === 'all' && (
                 <>
-                    {tiles}
+                    {tiles(false)}
 
                     {servers.length > 0 && (
                         <div className='flex min-w-0 max-w-full flex-col gap-3'>
@@ -637,7 +653,7 @@ export function ServersPage() {
 
                     <CountryCatalog groups={groups} rowProps={rowProps}
                         probeBusy={checking || routeBusy}
-                        isPendingGroup={code => catalogGroups.find(group => group.code === code)?.list.some(server => isPendingServer(server.id)) ?? false}
+                        isPendingGroup={code => catalogGroups.find(group => group.code === code)?.list.every(server => isPendingServer(server.id)) ?? false}
                         onCheckGroup={code => check(catalogGroups.find(group => group.code === code)?.list.map(server => server.id) ?? [])} />
 
                     {mihomo && multipools.some(item => matches(query, item.name)) && (
@@ -776,7 +792,7 @@ function PoolRow({
         shortNote(description),
         countryName(country),
         source,
-        countryExcluded && 'Страна исключена в разделе «Автоматика»',
+        countryExcluded && 'Локация исключена из автовыбора',
         excludedUntil &&
             `не отвечал, вернётся в ${new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`,
     ].filter(Boolean)
@@ -820,17 +836,20 @@ function PoolRow({
     )
 }
 
-// The last number stays while a server is checked again, faded; a server
-// without one shows «…».
+// While a server is measured its old number gives way to a grey bar until
+// the new one arrives.
 function Latency({ measuring, ms }: { measuring: boolean; ms: number }) {
     return <span aria-busy={measuring || undefined}
-        className={cn('inline-block w-[4.5rem] shrink-0 text-right text-[15px] tabular-nums transition-opacity', toneText[latencyTone(ms)], measuring && 'opacity-45')}>
-        {ms > 0 ? `${ms} мс`
+        className={cn('inline-flex w-[4.25rem] shrink-0 justify-end text-[15px] tabular-nums', toneText[latencyTone(ms)])}>
+        {measuring ? <LatencySkeleton />
+            : ms > 0 ? `${ms} мс`
             : ms < 0 ? <span aria-label='Нет ответа' title='Нет ответа'>—</span>
-            : measuring ? <span aria-label='Проверяем задержку'>…</span> : ''}
+            : <span className='text-muted-foreground' aria-label='Не проверен' title='Не проверен'>—</span>}
     </span>
 }
 
+// While its servers are measured the gauge gives way to signal bars; they stay
+// on the button until the check ends.
 function ProbeButton({ label, disabled, measuring, onClick }: {
     label: string
     disabled: boolean
@@ -839,8 +858,9 @@ function ProbeButton({ label, disabled, measuring, onClick }: {
 }) {
     return <button type='button' aria-label={label} title={label} aria-busy={measuring}
         disabled={disabled} onClick={onClick}
-        className='flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-tint hover:bg-white/8 focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default disabled:opacity-45'>
-        <IconGauge aria-hidden className={cn('size-[18px]', measuring && 'motion-safe:animate-pulse')} />
+        className={cn('pointer-events-auto relative z-10 flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-tint hover:bg-white/8 focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default',
+            !measuring && 'disabled:opacity-45')}>
+        {measuring ? <SignalBars /> : <IconGauge aria-hidden className='size-[23px]' />}
     </button>
 }
 
@@ -981,26 +1001,14 @@ function byLatency(a: Server, b: Server) {
     return la - lb
 }
 
-function statusOf(server: Server, countryExcluded: boolean) {
-	if (server.check_error) return { label: server.check_error, className: 'text-destructive' }
-    if (server.active) return { label: 'Выбран', className: 'text-tint' }
-    if (server.probe_kind !== 'https')
-        return { label: 'Не проверен', className: 'text-muted-foreground' }
-    if (server.latency_ms === -1)
-        return { label: 'Не ответил на проверку', className: 'text-destructive' }
-    if (server.pool_tag && !countryExcluded)
-        return { label: 'В автовыборе', className: 'text-muted-foreground' }
-    return null
-}
-
-function ProtocolBadge({ protocol }: { protocol: string }) {
+function ProtocolBadge({ protocol, className = 'ml-2 align-middle' }: { protocol: string; className?: string }) {
     const label = ['hysteria', 'hysteria2', 'hy2'].includes(
         protocol.toLowerCase(),
     )
         ? 'Hysteria2'
         : protocol === 'xray-profile' ? 'Профиль' : protocol.toUpperCase()
     return (
-        <Badge variant='secondary' className='ml-2 align-middle text-[11px]'>
+        <Badge variant='secondary' className={cn('text-[11px]', className)}>
             {label}
         </Badge>
     )
@@ -1044,7 +1052,6 @@ function ServerRow({
     probeBusy,
     onCheck,
     onSelect,
-    onSetCountry,
 }: {
     server: Server
     measuring: boolean
@@ -1054,111 +1061,76 @@ function ServerRow({
     probeBusy: boolean
     onCheck: () => void
     onSelect: () => void
-    onSetCountry: (country: string) => void
 }) {
-    const [editing, setEditing] = useState(false)
-    const [value, setValue] = useState(serverCountry(server))
-    const status = statusOf(liveLatency === undefined ? server : { ...server, probe_kind: 'https', latency_ms: liveLatency, check_error: undefined }, countryExcluded)
-    const measured = liveLatency ?? (server.probe_kind === 'https' ? server.latency_ms : 0)
-    // How old the number is; the router's own numbers for pool servers are live.
-    const checked = liveLatency === undefined && server.probe_kind === 'https' && isSet(server.last_checked)
-        ? 'проверен ' + agoLabel(server.last_checked) : ''
-
-    if (editing) {
-        return (
-            <form
-                className='flex min-h-12 items-center gap-2 py-2'
-                onSubmit={e => {
-                    e.preventDefault()
-                    onSetCountry(value.trim().toUpperCase())
-                    setEditing(false)
-                }}
-            >
-                <span className='min-w-0 flex-1 truncate text-[17px]'>
-                    {server.name}
-                </span>
-                <label className='sr-only' htmlFor={`country-${server.id}`}>
-                    Код страны
-                </label>
-                <input
-                    id={`country-${server.id}`}
-                    value={value}
-                    onChange={e =>
-                        setValue(
-                            e.target.value
-                                .replace(/[^a-zA-Z]/g, '')
-                                .slice(0, 2),
-                        )
-                    }
-                    placeholder='NL'
-                    autoFocus
-                    className='h-9 w-14 rounded-lg bg-fill px-2 text-center text-[15px] uppercase outline-none'
-                />
-                <button
-                    type='submit'
-                    className='min-h-9 cursor-pointer px-2 text-[15px] font-semibold text-tint'
-                >
-                    Готово
-                </button>
-            </form>
-        )
-    }
+    // A pool server shows the router's own number; it has no check time.
+    const live = liveLatency !== undefined
+    const error = !live ? server.check_error : undefined
+    const measured = liveLatency ?? (server.probe_kind === 'https' && !error ? server.latency_ms : 0)
+    const failed = !live && server.probe_kind === 'https' && (!!error || server.latency_ms < 0)
+    const checkedAt = !live && server.probe_kind === 'https' && isSet(server.last_checked) ? server.last_checked : undefined
+    const clock = checkedAt ? new Date(checkedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ''
+    const inPool = !!server.pool_tag && !countryExcluded
+    // Text on the left, one line each; the number and the check time stand in
+    // their own column under each other, the gauge centred at the edge. A row
+    // without a provider's note is two lines high.
+    const rows = 1 + (server.source_name ? 1 : 0) + (server.description ? 1 : 0)
+    const timeRow = Math.max(rows, 2)
+    const noteRow = server.source_name ? 3 : 2
 
     return (
-        <div className='flex items-center gap-1'>
-            <button
-                type='button'
-                onClick={onSelect}
-                disabled={busy || server.active}
-                className='flex min-h-[52px] min-w-0 flex-1 cursor-pointer items-center gap-3 py-2 text-left disabled:cursor-default'
-            >
-                <span className='min-w-0 flex-1'>
-                    <span className='block break-words text-[17px] tracking-[-0.43px]'>
-                        {withCountryFlag(server.name, serverCountry(server))}
-                        <ProtocolBadge protocol={server.protocol} />
+        <div className={cn('relative grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-1.5 gap-y-0.5 py-2.5',
+            server.active && '-mx-2 rounded-xl bg-[#4f46e5]/22 px-2')}>
+            {/* The whole row selects the server; the hints and the gauge above it keep their own taps. */}
+            <button type='button' aria-label={`Выбрать сервер ${server.name}`}
+                onClick={onSelect} disabled={busy || server.active}
+                className='absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default' />
+            <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1' style={{ gridColumn: 1, gridRow: 1 }}>
+                <span className='min-w-0 break-words text-[17px] leading-snug tracking-[-0.43px]'>
+                    {withCountryFlag(server.name, serverCountry(server))}
+                </span>
+                {/* One block: when the name leaves no room it moves to the next line whole. */}
+                <span className='inline-flex shrink-0 items-center gap-1'>
+                    <ProtocolBadge protocol={server.protocol} className='' />
+                    {inPool && <Hint label='В автовыборе: роутер сам ведёт трафик через самый быстрый сервер пула'>
+                        <IconWand aria-hidden className='size-[13px]' stroke={2.2} />
+                    </Hint>}
+                    {countryExcluded && <Hint label='Локация исключена из автовыбора. Этот сервер можно выбрать только вручную'>
+                        <IconBan aria-hidden className='size-[13px]' stroke={2.2} />
+                    </Hint>}
+                    {server.active && <Hint label='Выбран: через этот сервер идут остальные сайты' className='text-tint'>
+                        <IconCheck aria-hidden className='size-[13px]' stroke={3} />
+                    </Hint>}
+                </span>
+            </div>
+            {server.source_name && <span className='min-w-0 truncate text-[13px] text-muted-foreground' style={{ gridColumn: 1, gridRow: 2 }}>
+                {server.source_name}
+            </span>}
+            {server.description && <span className='min-w-0 truncate text-[13px] text-muted-foreground' title={server.description}
+                style={{ gridColumn: 1, gridRow: noteRow }}>
+                {shortNote(server.description)}
+            </span>}
+            <span className='justify-self-end' style={{ gridColumn: 2, gridRow: 1 }}>
+                {error && !measuring
+                    ? <span className='inline-flex w-[4.25rem] justify-end'>
+                        <Hint label={error} round={false} className='text-destructive'>
+                            <IconAlertTriangle aria-hidden className='size-[18px]' stroke={2.2} />
+                        </Hint>
                     </span>
-                    {server.description && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{shortNote(server.description)}</span>}
-                    {server.source_name && <span className='mt-0.5 block text-[13px] text-muted-foreground'>{server.source_name}</span>}
-                    {!measuring && (status || checked) && (
-                        <span
-                            className={cn(
-                                'mt-0.5 block text-[13px]',
-                                status?.className ?? 'text-muted-foreground',
-                            )}
-                        >
-                            {[status?.label, checked].filter(Boolean).join(' · ')}
-                        </span>
-                    )}
-                    {countryExcluded && (
-                        <span className='mt-0.5 block text-[13px] text-muted-foreground'>
-                            Страна исключена из автовыбора · ручной выбор
-                        </span>
-                    )}
+                    : <Latency measuring={measuring} ms={measured} />}
+            </span>
+            {checkedAt && !measuring && (
+                <span className='justify-self-end' style={{ gridColumn: 2, gridRow: timeRow }}>
+                    <Hint round={false}
+                        label={`${failed ? 'Не ответил на проверку' : 'Проверен'} ${agoLabel(checkedAt)}, в ${clock}`}
+                        className={cn('text-[13px] tabular-nums', failed ? 'text-destructive' : 'text-muted-foreground')}>
+                        {timeAgo(checkedAt)}
+                    </Hint>
                 </span>
-                <Latency measuring={measuring} ms={measured} />
-                <span className='flex w-6 justify-center'>
-                    {server.active && (
-                        <IconCheck
-                            className='size-[18px] text-tint'
-                            stroke={2.8}
-                            aria-label='Выбран'
-                        />
-                    )}
-                </span>
-            </button>
-            <ProbeButton label={`Обновить пинг сервера ${server.name}`} disabled={probeBusy}
-                measuring={measuring} onClick={onCheck} />
-            <button
-                type='button'
-                aria-label={`Изменить страну для ${server.name}`}
-                onClick={() => {
-                    setValue(serverCountry(server))
-                    setEditing(true)
-                }}
-                className='flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-label-tertiary hover:text-muted-foreground'
-            >
-                <IconPencil className='size-4' />
-            </button>
+            )}
+            <span className='self-center' style={{ gridColumn: 3, gridRow: `1 / span ${timeRow}` }}>
+                <ProbeButton label={`Обновить пинг сервера ${server.name}`} disabled={probeBusy}
+                    measuring={measuring} onClick={onCheck} />
+            </span>
         </div>
     )
 }

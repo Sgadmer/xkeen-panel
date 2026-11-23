@@ -13,6 +13,73 @@ const icon = (color: string, Glyph: typeof IconBan) => (
 )
 const chevron = <IconChevronRight className='size-4 shrink-0 text-label-tertiary' stroke={2.6} />
 
+function useSaveSettings() {
+    const qc = useQueryClient()
+    return useMutation({
+        mutationFn: (next: PanelSettings) =>
+            api.put<PanelSettings>('/api/panel/settings', next),
+        onSuccess: data => {
+            qc.setQueryData(['panel-settings'], data)
+            for (const key of ['pool', 'multipools', 'servers', 'service-routes', 'status']) {
+                void qc.invalidateQueries({ queryKey: [key] })
+            }
+        },
+    })
+}
+
+const avoidedOf = (settings?: PanelSettings) =>
+    [...new Set((settings?.avoid_countries ?? []).map(code => code.trim().toUpperCase()))]
+
+// The locations automatic choice and replacement skip. Shown both in the
+// automation settings and on the servers screen; a location is the country
+// label a subscription gives its server.
+export function ExcludedLocations() {
+    const servers = useServers()
+    const countries = useMemo(() => {
+        const codes = new Set<string>()
+        for (const server of servers.data ?? []) {
+            const code = serverCountry(server).trim()
+            if (server.protocol !== 'xray-profile' && /^[A-Z]{2}$/.test(code)) codes.add(code)
+        }
+        return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
+    }, [servers.data])
+    const [open, setOpen] = useState(false)
+    const settings = usePanelSettings()
+    const saveSettings = useSaveSettings()
+    const avoid = avoidedOf(settings.data)
+    const visibleAvoid = countries.filter(code => avoid.includes(code))
+    const countryStatus = !servers.data && (servers.isError ? 'Каталог недоступен' : 'Загрузка…')
+
+    return (
+        <>
+            <Row
+                icon={icon('#ff453a', IconBan)}
+                label='Исключенные локации'
+                hint={countryStatus || (settings.data
+                    ? visibleAvoid.map(code => countryName(code)).join(', ') || 'Нет: автовыбор берёт все локации'
+                    : '—')}
+                onClick={() => setOpen(true)}
+                disabled={!settings.data}
+                trailing={chevron}
+            />
+            <CountriesSheet
+                open={open}
+                onClose={() => setOpen(false)}
+                value={avoid}
+                candidates={countries}
+                catalogStatus={countryStatus || undefined}
+                onRetry={servers.isError ? () => { void servers.refetch() } : undefined}
+                onSave={avoid_countries =>
+                    saveSettings.mutateAsync({
+                        avoid_countries,
+                        subscription_refresh_minutes: settings.data?.subscription_refresh_minutes ?? 0,
+                    })
+                }
+            />
+        </>
+    )
+}
+
 export function ServerAutomation() {
     const qc = useQueryClient()
     const status = useStatus().data
@@ -26,30 +93,9 @@ export function ServerAutomation() {
         onSettled: () => qc.invalidateQueries({ queryKey: ['status'] }),
     })
 
-    const servers = useServers()
-    const countries = useMemo(() => {
-        const codes = new Set<string>()
-        for (const server of servers.data ?? []) {
-            const code = serverCountry(server).trim()
-            if (server.protocol !== 'xray-profile' && /^[A-Z]{2}$/.test(code)) codes.add(code)
-        }
-        return [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
-    }, [servers.data])
-    const [sheet, setSheet] = useState<'countries' | 'refresh' | null>(null)
+    const [sheet, setSheet] = useState<'refresh' | null>(null)
     const settings = usePanelSettings()
-    const saveSettings = useMutation({
-        mutationFn: (next: PanelSettings) =>
-            api.put<PanelSettings>('/api/panel/settings', next),
-        onSuccess: data => {
-            qc.setQueryData(['panel-settings'], data)
-            for (const key of ['pool', 'multipools', 'servers', 'service-routes', 'status']) {
-                void qc.invalidateQueries({ queryKey: [key] })
-            }
-        },
-    })
-    const avoid = [...new Set((settings.data?.avoid_countries ?? []).map(code => code.trim().toUpperCase()))]
-    const visibleAvoid = countries.filter(code => avoid.includes(code))
-    const countryStatus = !servers.data && (servers.isError ? 'Каталог недоступен' : 'Загрузка…')
+    const saveSettings = useSaveSettings()
     const refresh = settings.data?.subscription_refresh_minutes ?? 0
 
     return (
@@ -72,15 +118,7 @@ export function ServerAutomation() {
                         />
                     }
                 />
-                <Row
-                    icon={icon('#ff453a', IconBan)}
-                    label='Не выбирать страны'
-                    hint='Исключить из автовыбора и автоматической замены'
-                    detail={countryStatus || (settings.data ? visibleAvoid.join(', ') || 'Нет' : '—')}
-                    onClick={() => setSheet('countries')}
-                    disabled={!settings.data}
-                    trailing={chevron}
-                />
+                <ExcludedLocations />
                 <Row
                     icon={icon('#ff9f0a', IconRefresh)}
                     label='Обновлять подписки'
@@ -91,27 +129,13 @@ export function ServerAutomation() {
                 />
             </Group>
 
-            <CountriesSheet
-                open={sheet === 'countries'}
-                onClose={() => setSheet(null)}
-                value={avoid}
-                candidates={countries}
-                catalogStatus={countryStatus || undefined}
-                onRetry={servers.isError ? () => { void servers.refetch() } : undefined}
-                onSave={avoid_countries =>
-                    saveSettings.mutateAsync({
-                        avoid_countries,
-                        subscription_refresh_minutes: refresh,
-                    })
-                }
-            />
             <RefreshSheet
                 open={sheet === 'refresh'}
                 onClose={() => setSheet(null)}
                 value={refresh}
                 onSave={subscription_refresh_minutes =>
                     saveSettings.mutateAsync({
-                        avoid_countries: avoid,
+                        avoid_countries: avoidedOf(settings.data),
                         subscription_refresh_minutes,
                     })
                 }

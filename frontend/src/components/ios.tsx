@@ -207,7 +207,7 @@ export function Segmented<T extends string>({
     onChange,
     label,
 }: {
-    options: { value: T; label: string }[]
+    options: { value: T; label: string; icon?: ReactNode }[]
     value: T
     onChange: (value: T) => void
     label: string
@@ -229,12 +229,13 @@ export function Segmented<T extends string>({
                     aria-checked={o.value === value}
                     onClick={() => onChange(o.value)}
                     className={cn(
-                        'min-h-9 cursor-pointer rounded-[10px] px-2 text-[15px] tracking-[-0.24px]',
+                        'flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-[10px] px-2 text-[15px] tracking-[-0.24px]',
                         o.value === value
                             ? 'bg-[#4f46e5] font-semibold shadow-sm'
                             : 'font-medium',
                     )}
                 >
+                    {o.icon}
                     {o.label}
                 </button>
             ))}

@@ -106,7 +106,7 @@ func (t *TransferHandler) ownSections(file settingsFile) ([]cardcontroller.Impor
 				if len(next.AvoidCountries) > 0 {
 					list = strings.Join(next.AvoidCountries, ", ")
 				}
-				section.Changes = append(section.Changes, "Не выбирать страны: "+list)
+				section.Changes = append(section.Changes, "Исключенные локации: "+list)
 			}
 		}
 		if len(section.Changes) > 0 || len(section.Skipped) > 0 {
