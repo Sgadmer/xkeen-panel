@@ -52,7 +52,9 @@ import {
     isSet,
     latencyTone,
     locationExcluded,
+    PROVIDER_MODES,
     scopeLabel,
+    serverExcluded,
     serverCountry,
     timeAgo,
     toneText,
@@ -265,7 +267,7 @@ export function ServersPage() {
     const updated = timeAgo(subscription?.last_updated)
     const rowProps = (s: Server) => ({
         server: s,
-        countryExcluded: locationExcluded(avoidCountries, serverCountry(s)),
+        countryExcluded: serverExcluded(avoidCountries, s),
         busy: routeBusy,
         probeBusy: checking || routeBusy,
         measuring: isPendingServer(s.id),
@@ -366,10 +368,12 @@ export function ServersPage() {
                 title={withCountryFlag(server.name, serverCountry(server))}
                 chips={<>
                     <ProtocolBadge protocol={server.protocol} className='' />
-                    {!!server.pool_tag && !locationExcluded(avoidCountries, serverCountry(server)) && <Hint label='В автовыборе: роутер сам ведёт трафик через самый быстрый вариант пула'>
+                    {!!server.pool_tag && !serverExcluded(avoidCountries, server) && <Hint label='В автовыборе: роутер сам ведёт трафик через самый быстрый вариант пула'>
                         <IconWand aria-hidden className='size-[13px]' stroke={2.2} />
                     </Hint>}
-                    {locationExcluded(avoidCountries, serverCountry(server)) && <Hint label='Локация исключена из автовыбора. Этот режим можно выбрать только вручную'>
+                    {serverExcluded(avoidCountries, server) && <Hint label={avoidCountries.includes(PROVIDER_MODES)
+                        ? 'Режимы провайдера исключены из автовыбора. Этот режим можно выбрать только вручную'
+                        : 'Локация исключена из автовыбора. Этот режим можно выбрать только вручную'}>
                         <IconBan aria-hidden className='size-[13px]' stroke={2.2} />
                     </Hint>}
                     {server.active && <Hint label='Выбран: через этот режим идут остальные сайты' className='text-tint'>
@@ -565,7 +569,7 @@ export function ServersPage() {
                                     // like any other, and the router's number returns afterwards.
                                     measuring={r.node.server_id >= 0 && isPendingServer(r.node.server_id)}
                                     current={r.current}
-                                    countryExcluded={locationExcluded(avoidCountries, r.country)}
+                                    countryExcluded={r.server ? serverExcluded(avoidCountries, r.server) : locationExcluded(avoidCountries, r.country)}
                                     busy={routeBusy}
                                     probeBusy={checking || routeBusy}
                                     onCheck={r.node.server_id >= 0 ? () => check([r.node.server_id]) : undefined}

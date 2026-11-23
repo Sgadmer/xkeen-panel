@@ -28,6 +28,7 @@ import {
     countryName,
     countryFlag,
     isSet,
+    latencyTone,
     panelEvents,
     routesDownText,
     serverCountry,
@@ -87,10 +88,13 @@ export function HomePage() {
     // The same number as in the server list: the pool's own measurement, or the last check of the server.
     const routerMs = node?.router_latency_ms !== undefined && node.router_latency_ms > 0 ? node.router_latency_ms : 0
     const checkedMs = current?.probe_kind === 'https' && current.latency_ms > 0 ? current.latency_ms : 0
-    const latency = direct || blocked || awaitingMember ? ''
-        : routerMs ? `${routerMs} мс`
-        : checkedMs ? `${checkedMs} мс` + (isSet(current?.last_checked) ? ' · ' + agoLabel(current?.last_checked) : '')
-        : ''
+    // Coloured like the number in the server list.
+    const shownMs = direct || blocked || awaitingMember ? 0 : routerMs || checkedMs
+    const ago = !routerMs && shownMs && isSet(current?.last_checked) ? agoLabel(current?.last_checked) : ''
+    const latency = shownMs > 0 && <>
+        <span className={toneText[latencyTone(shownMs)]}>{shownMs} мс</span>
+        {ago && ' · ' + ago}
+    </>
 
     const inVpn = devices?.devices.filter(d => d.vpn).length ?? 0
     const online = devices?.devices.filter(d => d.active).length ?? 0
@@ -146,7 +150,9 @@ export function HomePage() {
                                         'Сервер не выбран'}
                                 </div>
                                 <div className='truncate text-[15px] tracking-[-0.24px] text-muted-foreground'>
-                                    {[sameName ? '' : endpoint, latency].filter(Boolean).join(' · ')}
+                                    {!sameName && endpoint}
+                                    {!sameName && endpoint && latency && ' · '}
+                                    {latency}
                                 </div>
                                 {current?.description && <div className='truncate text-[13px] text-muted-foreground'>{current.description}</div>}
                             </div>

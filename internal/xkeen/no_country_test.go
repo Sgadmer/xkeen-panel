@@ -18,3 +18,15 @@ func TestServersWithoutLocationCanBeExcluded(t *testing.T) {
 		t.Fatal("an excluded location must take its servers out")
 	}
 }
+
+// «Режимы провайдера» takes out every complete profile and nothing else.
+func TestProviderModesCanBeExcludedTogether(t *testing.T) {
+	mode := models.Server{Name: "Самый быстрый", Country: "DE", Protocol: "xray-profile", RawProfile: []byte(`{"outbounds":[]}`)}
+	server := models.Server{Name: "Германия", Country: "DE"}
+	if !CountryExcluded(mode, []string{ProviderModesCode}) || CountryExcluded(server, []string{ProviderModesCode}) {
+		t.Fatal("XP must take out the provider's modes and only them")
+	}
+	if CountryExcluded(mode, []string{"RU"}) || !CountryExcluded(mode, []string{"DE"}) {
+		t.Fatal("a mode is still judged by its own location too")
+	}
+}

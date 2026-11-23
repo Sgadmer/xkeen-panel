@@ -4,7 +4,7 @@ import { IconArrowsExchange, IconBan, IconChevronRight, IconRefresh } from '@tab
 import { Group, IconTile, Row, Switch } from '@/components/ios'
 import { CountriesSheet, RefreshSheet, intervalLabel } from '@/components/settingsSheets'
 import { usePanelSettings, useServers, useStatus } from '@/hooks/usePanelData'
-import { NO_COUNTRY, countryName, locationName, serverCountry } from '@/lib/format'
+import { NO_COUNTRY, PROVIDER_MODES, countryName, locationName, serverCountry } from '@/lib/format'
 import { api } from '@/lib/api'
 import type { PanelSettings, Status } from '@/types'
 
@@ -35,17 +35,19 @@ const avoidedOf = (settings?: PanelSettings) =>
 // label a subscription gives its server.
 export function ExcludedLocations() {
     const servers = useServers()
-    // Every location group of the servers list, «Без страны» last.
+    // Every location group of the servers list; «Режимы провайдера» and
+    // «Без страны» first.
     const countries = useMemo(() => {
         const codes = new Set<string>()
-        let unknown = false
+        let unknown = false, modes = false
         for (const server of servers.data ?? []) {
+            modes = modes || server.protocol === 'xray-profile'
             const code = serverCountry(server).trim()
             if (/^[A-Z]{2}$/.test(code)) codes.add(code)
             else unknown = true
         }
         const sorted = [...codes].sort((a, b) => countryName(a).localeCompare(countryName(b), 'ru'))
-        return unknown ? [...sorted, NO_COUNTRY] : sorted
+        return [...(modes ? [PROVIDER_MODES] : []), ...(unknown ? [NO_COUNTRY] : []), ...sorted]
     }, [servers.data])
     const [open, setOpen] = useState(false)
     const settings = usePanelSettings()

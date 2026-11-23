@@ -21,21 +21,29 @@ export function countryLabel(code?: string) {
     return [countryFlag(code), countryName(code)].filter(Boolean).join(' ')
 }
 
-// «Без страны» among the excluded locations: ZZ, the code of an unknown region.
+// Two entries of the excluded locations are not countries, both codes ISO
+// leaves for private use: «Без страны» (ZZ) and «Режимы провайдера» (XP).
 export const NO_COUNTRY = 'ZZ'
-
-export function locationLabel(code: string) {
-    return code === NO_COUNTRY ? 'Без страны' : countryLabel(code)
-}
+export const PROVIDER_MODES = 'XP'
 
 export function locationName(code: string) {
-    return code === NO_COUNTRY ? 'Без страны' : countryName(code)
+    return code === NO_COUNTRY ? 'Без страны' : code === PROVIDER_MODES ? 'Режимы провайдера' : countryName(code)
+}
+
+export function locationLabel(code: string) {
+    return code === NO_COUNTRY || code === PROVIDER_MODES ? locationName(code) : countryLabel(code)
 }
 
 // Whether automatic choice skips a server of this location; a server without
 // one is skipped when «Без страны» is excluded.
 export function locationExcluded(avoid: string[], code?: string) {
     return avoid.includes((code || NO_COUNTRY).toUpperCase())
+}
+
+// Whether automatic choice skips this server: by its location, and a
+// provider's mode also when «Режимы провайдера» is excluded.
+export function serverExcluded(avoid: string[], server: Server) {
+    return (server.protocol === 'xray-profile' && avoid.includes(PROVIDER_MODES)) || locationExcluded(avoid, serverCountry(server))
 }
 
 export function withCountryFlag(name: string, code?: string) {

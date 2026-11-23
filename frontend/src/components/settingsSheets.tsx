@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { IconCheck } from '@tabler/icons-react'
+import { IconCheck, IconQuestionMark, IconRobot } from '@tabler/icons-react'
 import { Group, Row } from '@/components/ios'
 import { Sheet } from '@/components/sheet'
-import { locationLabel } from '@/lib/format'
+import { NO_COUNTRY, PROVIDER_MODES, locationLabel } from '@/lib/format'
 
 const check = <IconCheck className='size-5 shrink-0 text-tint' stroke={2.6} />
 
@@ -78,7 +78,14 @@ export function CountriesSheet({
                 {candidates.map(code => (
                     <Row
                         key={code}
-                        label={locationLabel(code)}
+                        label={code === PROVIDER_MODES || code === NO_COUNTRY
+                            ? <span className='inline-flex items-center gap-2'>
+                                {code === PROVIDER_MODES
+                                    ? <IconRobot aria-hidden className='size-[18px] text-muted-foreground' stroke={2} />
+                                    : <IconQuestionMark aria-hidden className='size-[18px] text-muted-foreground' stroke={2.2} />}
+                                {locationLabel(code)}
+                            </span>
+                            : locationLabel(code)}
                         disabled={saving}
                         onClick={() => setEdits(prev => ({ ...prev, [code]: !(prev[code] ?? value.includes(code)) }))}
                         trailing={

@@ -227,6 +227,13 @@ func checkPoolLatencies(servers []models.Server, timeout time.Duration, concurre
 
 // CountryExcluded compares only the subscription label (or the user's correction).
 func CountryExcluded(server models.Server, excluded []string) bool {
+	if len(server.RawProfile) != 0 {
+		for _, code := range excluded {
+			if strings.EqualFold(strings.TrimSpace(code), ProviderModesCode) {
+				return true
+			}
+		}
+	}
 	country := ServerCountry(server)
 	if country == "" {
 		// A server its subscription gives no location is excluded as the
@@ -241,8 +248,14 @@ func CountryExcluded(server models.Server, excluded []string) bool {
 	return false
 }
 
-// NoCountryCode stands for «no location» in the excluded locations.
-const NoCountryCode = "ZZ"
+// Two entries of the excluded locations are not countries. Both are codes
+// ISO 3166 leaves for private use, so no real country can collide with them.
+const (
+	// NoCountryCode takes out the servers their subscription gives no location.
+	NoCountryCode = "ZZ"
+	// ProviderModesCode takes out every provider's mode (complete profile).
+	ProviderModesCode = "XP"
+)
 
 // PoolSelectionFromConfig builds the selection rules out of the panel config.
 func PoolSelectionFromConfig(cfg *models.Config) PoolSelection {
