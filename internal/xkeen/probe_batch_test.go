@@ -3,9 +3,19 @@ package xkeen
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"xkeen-panel/internal/models"
 )
+
+// The settings of the old TCP ping must not slow the server check down: a
+// router installed long ago kept 3 at a time and 8 s per try.
+func TestServerCheckIgnoresTheOldPingSettings(t *testing.T) {
+	got := nodeProbeOptions(ProbeOptions{Concurrency: 3, Timeout: 8 * time.Second, StateDir: "kept"})
+	if got.Concurrency != MaxProbeConcurrency || got.Timeout != probeAttempt || got.StateDir != "kept" {
+		t.Fatalf("server check runs at %d nodes, %v per try", got.Concurrency, got.Timeout)
+	}
+}
 
 func TestProbeIndependentNodesIsolatesInvalidOutbound(t *testing.T) {
 	nodes := []models.Server{{ID: 11}, {ID: 12}, {ID: 13}}

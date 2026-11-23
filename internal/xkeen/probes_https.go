@@ -116,7 +116,7 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 		}
 	}
 	if len(ordinary) > 0 {
-		result, err := probeIndependentNodes(rt, ordinary, options, checkServersHTTPSBatch)
+		result, err := probeIndependentNodes(rt, ordinary, nodeProbeOptions(options), checkServersHTTPSBatch)
 		if err != nil {
 			return nil, err
 		}
@@ -147,6 +147,18 @@ func CheckServersHTTPS(rt Runtime, servers []models.Server, options ProbeOptions
 		checked[i] = result[0]
 	}
 	return checked, nil
+}
+
+// nodeProbeOptions sets the pace of a check of single servers.
+//
+// probe_concurrency and probe_timeout_ms belong to the old TCP ping. Older
+// installs wrote 3 and 8 s there, and a check of 135 servers took eight
+// minutes: 55 silent ones cost 16 s each, three at a time. One core
+// downloading a few KB per node is light, so the check always runs
+// MaxProbeConcurrency nodes at once and gives each file probeAttempt.
+func nodeProbeOptions(options ProbeOptions) ProbeOptions {
+	options.Timeout, options.Concurrency = probeAttempt, MaxProbeConcurrency
+	return options
 }
 
 // A provider can publish one invalid outbound alongside healthy configurations.
