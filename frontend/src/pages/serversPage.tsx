@@ -7,6 +7,7 @@ import {
     IconCheck,
     IconChevronLeft,
     IconChevronRight,
+    IconClockPause,
     IconCloudDownload,
     IconGauge,
     IconLink,
@@ -234,6 +235,7 @@ export function ServersPage() {
                 const server = byId.get(n.server_id)
                 return {
                     node: n,
+                    server,
                     country: server ? serverCountry(server) : n.country,
                     protocol: server?.protocol,
                     source: server?.source_name,
@@ -542,12 +544,18 @@ export function ServersPage() {
                                     protocol={r.protocol}
                                     source={r.source}
                                     description={r.description}
+                                    server={r.server}
+                                    routerMeasured={r.routerMeasured}
                                     latency={r.routerMeasured ? r.latency : latencyFor(r.node.server_id) ?? r.latency}
-                                    measuring={!r.routerMeasured && isPendingServer(r.node.server_id)}
+                                    // The panel checks pool servers too; while it does, the row shows it
+                                    // like any other, and the router's number returns afterwards.
+                                    measuring={r.node.server_id >= 0 && isPendingServer(r.node.server_id)}
                                     current={r.current}
                                     excludedUntil={r.node.excluded_until}
                                     countryExcluded={avoidCountries.includes(r.country ?? '')}
                                     busy={routeBusy}
+                                    probeBusy={checking || routeBusy}
+                                    onCheck={r.node.server_id >= 0 ? () => check([r.node.server_id]) : undefined}
                                     onSelect={() =>
                                         pickNode(r.node.tag, r.node.server_id)
                                     }
@@ -767,12 +775,16 @@ function PoolRow({
     protocol,
     source,
     description,
+    server,
+    routerMeasured,
     latency,
     measuring,
     current,
     excludedUntil,
     countryExcluded,
     busy,
+    probeBusy,
+    onCheck,
     onSelect,
 }: {
     name: string
@@ -780,59 +792,47 @@ function PoolRow({
     protocol?: string
     source?: string
     description?: string
+    server?: Server
+    routerMeasured: boolean
     latency: number
     measuring: boolean
     current: boolean
     excludedUntil?: string
     countryExcluded: boolean
     busy: boolean
+    probeBusy: boolean
+    onCheck?: () => void
     onSelect: () => void
 }) {
-    const notes = [
-        shortNote(description),
-        countryName(country),
-        source,
-        countryExcluded && 'Локация исключена из автовыбора',
-        excludedUntil &&
-            `не отвечал, вернётся в ${new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}`,
-    ].filter(Boolean)
-
+    const back = excludedUntil && new Date(excludedUntil).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
     return (
-        <div className='flex min-w-0 items-center gap-1'>
-            <button
-                type='button'
-                onClick={onSelect}
-                disabled={busy || current}
-                className='flex min-h-[52px] min-w-0 flex-1 cursor-pointer items-center gap-3 py-2 text-left disabled:cursor-default'
-            >
-                <span className='min-w-0 flex-1'>
-                    <span
-                        className={cn(
-                            'block break-words text-[17px] tracking-[-0.43px]',
-                            excludedUntil && 'text-muted-foreground',
-                        )}
-                    >
-                        {withCountryFlag(name, country)}
-                        {protocol && <ProtocolBadge protocol={protocol} />}
-                    </span>
-                    {notes.length > 0 && (
-                        <span className='mt-0.5 block text-[13px] text-muted-foreground'>
-                            {notes.join(' · ')}
-                        </span>
-                    )}
-                </span>
-                <Latency measuring={measuring} ms={latency} />
-                <span className='flex w-6 justify-center'>
-                    {current && (
-                        <IconCheck
-                            className='size-[18px] text-tint'
-                            stroke={2.8}
-                            aria-label='Сейчас используется'
-                        />
-                    )}
-                </span>
-            </button>
-        </div>
+        <ServerCard
+            title={withCountryFlag(name, country)}
+            titleMuted={!!excludedUntil}
+            chips={<>
+                {protocol && <ProtocolBadge protocol={protocol} className='' />}
+                {excludedUntil && <Hint label={`Не отвечал роутеру. Вернётся в пул в ${back}`} className='text-warning'>
+                    <IconClockPause aria-hidden className='size-[13px]' stroke={2.2} />
+                </Hint>}
+                {countryExcluded && <Hint label='Локация исключена из автовыбора'>
+                    <IconBan aria-hidden className='size-[13px]' stroke={2.2} />
+                </Hint>}
+                {current && <Hint label='Сейчас роутер ведёт трафик через этот сервер' className='text-tint'>
+                    <IconCheck aria-hidden className='size-[13px]' stroke={3} />
+                </Hint>}
+            </>}
+            source={source}
+            note={shortNote(description) || undefined}
+            noteTitle={description}
+            latency={latency}
+            measuring={measuring}
+            {...panelCheck(server, routerMeasured)}
+            highlighted={current}
+            selectLabel={`Выбрать сервер ${name}`}
+            onSelect={onSelect}
+            selectDisabled={busy || current}
+            probe={onCheck && { label: `Обновить пинг сервера ${name}`, disabled: probeBusy, onCheck }}
+        />
     )
 }
 
@@ -1043,6 +1043,90 @@ function SearchField({
     )
 }
 
+// One server in a list: the name with its protocol and status chips, the
+// subscription and the provider's note on their own lines; the number and the
+// check time under each other on the right, the gauge centred at the edge.
+// The whole row selects the server; hints and the gauge keep their own taps.
+function ServerCard({ title, titleMuted, chips, source, note, noteTitle, latency, measuring, error, checkedAt, failed,
+    highlighted, selectLabel, onSelect, selectDisabled, probe }: {
+    title: React.ReactNode
+    titleMuted?: boolean
+    chips: React.ReactNode
+    source?: string
+    note?: string
+    noteTitle?: string
+    latency: number
+    measuring: boolean
+    error?: string
+    checkedAt?: string
+    failed?: boolean
+    highlighted?: boolean
+    selectLabel: string
+    onSelect: () => void
+    selectDisabled: boolean
+    probe?: { label: string; disabled: boolean; onCheck: () => void }
+}) {
+    const clock = checkedAt ? new Date(checkedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ''
+    // A row without a provider's note is two lines high.
+    const rows = 1 + (source ? 1 : 0) + (note ? 1 : 0)
+    const timeRow = Math.max(rows, 2)
+    const noteRow = source ? 3 : 2
+
+    return (
+        <div className={cn('relative grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-1.5 gap-y-0.5 py-2.5',
+            highlighted && '-mx-2 rounded-xl bg-[#4f46e5]/22 px-2')}>
+            <button type='button' aria-label={selectLabel} onClick={onSelect} disabled={selectDisabled}
+                className='absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default' />
+            <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1' style={{ gridColumn: 1, gridRow: 1 }}>
+                <span className={cn('min-w-0 break-words text-[17px] leading-snug tracking-[-0.43px]', titleMuted && 'text-muted-foreground')}>
+                    {title}
+                </span>
+                {/* One block: when the name leaves no room it moves to the next line whole. */}
+                <span className='inline-flex shrink-0 items-center gap-1'>{chips}</span>
+            </div>
+            {source && <span className='min-w-0 truncate text-[13px] text-muted-foreground' style={{ gridColumn: 1, gridRow: 2 }}>
+                {source}
+            </span>}
+            {note && <span className='min-w-0 truncate text-[13px] text-muted-foreground' title={noteTitle}
+                style={{ gridColumn: 1, gridRow: noteRow }}>
+                {note}
+            </span>}
+            <span className='justify-self-end' style={{ gridColumn: 2, gridRow: 1 }}>
+                {error && !measuring
+                    ? <span className='inline-flex w-[4.25rem] justify-end'>
+                        <Hint label={error} round={false} className='text-destructive'>
+                            <IconAlertTriangle aria-hidden className='size-[18px]' stroke={2.2} />
+                        </Hint>
+                    </span>
+                    : <Latency measuring={measuring} ms={latency} />}
+            </span>
+            {checkedAt && !measuring && (
+                <span className='justify-self-end' style={{ gridColumn: 2, gridRow: timeRow }}>
+                    <Hint round={false}
+                        label={`${failed ? 'Не ответил на проверку' : 'Проверен'} ${agoLabel(checkedAt)}, в ${clock}`}
+                        className={cn('text-[13px] tabular-nums', failed ? 'text-destructive' : 'text-muted-foreground')}>
+                        {timeAgo(checkedAt)}
+                    </Hint>
+                </span>
+            )}
+            {probe && <span className='self-center' style={{ gridColumn: 3, gridRow: `1 / span ${timeRow}` }}>
+                <ProbeButton label={probe.label} disabled={probe.disabled} measuring={measuring} onClick={probe.onCheck} />
+            </span>}
+        </div>
+    )
+}
+
+// What the panel's own check found for a server, unless the router's live
+// number stands in for it.
+function panelCheck(server: Server | undefined, live: boolean) {
+    if (!server || live || server.probe_kind !== 'https') return {}
+    return {
+        error: server.check_error || undefined,
+        failed: !!server.check_error || server.latency_ms < 0,
+        checkedAt: isSet(server.last_checked) ? server.last_checked : undefined,
+    }
+}
+
 function ServerRow({
     server,
     liveLatency,
@@ -1064,73 +1148,36 @@ function ServerRow({
 }) {
     // A pool server shows the router's own number; it has no check time.
     const live = liveLatency !== undefined
-    const error = !live ? server.check_error : undefined
-    const measured = liveLatency ?? (server.probe_kind === 'https' && !error ? server.latency_ms : 0)
-    const failed = !live && server.probe_kind === 'https' && (!!error || server.latency_ms < 0)
-    const checkedAt = !live && server.probe_kind === 'https' && isSet(server.last_checked) ? server.last_checked : undefined
-    const clock = checkedAt ? new Date(checkedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ''
+    const check = panelCheck(server, live)
+    const measured = liveLatency ?? (server.probe_kind === 'https' && !check.error ? server.latency_ms : 0)
     const inPool = !!server.pool_tag && !countryExcluded
-    // Text on the left, one line each; the number and the check time stand in
-    // their own column under each other, the gauge centred at the edge. A row
-    // without a provider's note is two lines high.
-    const rows = 1 + (server.source_name ? 1 : 0) + (server.description ? 1 : 0)
-    const timeRow = Math.max(rows, 2)
-    const noteRow = server.source_name ? 3 : 2
 
     return (
-        <div className={cn('relative grid min-h-[52px] grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-1.5 gap-y-0.5 py-2.5',
-            server.active && '-mx-2 rounded-xl bg-[#4f46e5]/22 px-2')}>
-            {/* The whole row selects the server; the hints and the gauge above it keep their own taps. */}
-            <button type='button' aria-label={`Выбрать сервер ${server.name}`}
-                onClick={onSelect} disabled={busy || server.active}
-                className='absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-2 focus-visible:outline-tint disabled:cursor-default' />
-            <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1' style={{ gridColumn: 1, gridRow: 1 }}>
-                <span className='min-w-0 break-words text-[17px] leading-snug tracking-[-0.43px]'>
-                    {withCountryFlag(server.name, serverCountry(server))}
-                </span>
-                {/* One block: when the name leaves no room it moves to the next line whole. */}
-                <span className='inline-flex shrink-0 items-center gap-1'>
-                    <ProtocolBadge protocol={server.protocol} className='' />
-                    {inPool && <Hint label='В автовыборе: роутер сам ведёт трафик через самый быстрый сервер пула'>
-                        <IconWand aria-hidden className='size-[13px]' stroke={2.2} />
-                    </Hint>}
-                    {countryExcluded && <Hint label='Локация исключена из автовыбора. Этот сервер можно выбрать только вручную'>
-                        <IconBan aria-hidden className='size-[13px]' stroke={2.2} />
-                    </Hint>}
-                    {server.active && <Hint label='Выбран: через этот сервер идут остальные сайты' className='text-tint'>
-                        <IconCheck aria-hidden className='size-[13px]' stroke={3} />
-                    </Hint>}
-                </span>
-            </div>
-            {server.source_name && <span className='min-w-0 truncate text-[13px] text-muted-foreground' style={{ gridColumn: 1, gridRow: 2 }}>
-                {server.source_name}
-            </span>}
-            {server.description && <span className='min-w-0 truncate text-[13px] text-muted-foreground' title={server.description}
-                style={{ gridColumn: 1, gridRow: noteRow }}>
-                {shortNote(server.description)}
-            </span>}
-            <span className='justify-self-end' style={{ gridColumn: 2, gridRow: 1 }}>
-                {error && !measuring
-                    ? <span className='inline-flex w-[4.25rem] justify-end'>
-                        <Hint label={error} round={false} className='text-destructive'>
-                            <IconAlertTriangle aria-hidden className='size-[18px]' stroke={2.2} />
-                        </Hint>
-                    </span>
-                    : <Latency measuring={measuring} ms={measured} />}
-            </span>
-            {checkedAt && !measuring && (
-                <span className='justify-self-end' style={{ gridColumn: 2, gridRow: timeRow }}>
-                    <Hint round={false}
-                        label={`${failed ? 'Не ответил на проверку' : 'Проверен'} ${agoLabel(checkedAt)}, в ${clock}`}
-                        className={cn('text-[13px] tabular-nums', failed ? 'text-destructive' : 'text-muted-foreground')}>
-                        {timeAgo(checkedAt)}
-                    </Hint>
-                </span>
-            )}
-            <span className='self-center' style={{ gridColumn: 3, gridRow: `1 / span ${timeRow}` }}>
-                <ProbeButton label={`Обновить пинг сервера ${server.name}`} disabled={probeBusy}
-                    measuring={measuring} onClick={onCheck} />
-            </span>
-        </div>
+        <ServerCard
+            title={withCountryFlag(server.name, serverCountry(server))}
+            chips={<>
+                <ProtocolBadge protocol={server.protocol} className='' />
+                {inPool && <Hint label='В автовыборе: роутер сам ведёт трафик через самый быстрый сервер пула'>
+                    <IconWand aria-hidden className='size-[13px]' stroke={2.2} />
+                </Hint>}
+                {countryExcluded && <Hint label='Локация исключена из автовыбора. Этот сервер можно выбрать только вручную'>
+                    <IconBan aria-hidden className='size-[13px]' stroke={2.2} />
+                </Hint>}
+                {server.active && <Hint label='Выбран: через этот сервер идут остальные сайты' className='text-tint'>
+                    <IconCheck aria-hidden className='size-[13px]' stroke={3} />
+                </Hint>}
+            </>}
+            source={server.source_name}
+            note={shortNote(server.description) || undefined}
+            noteTitle={server.description}
+            latency={measured}
+            measuring={measuring}
+            {...check}
+            highlighted={server.active}
+            selectLabel={`Выбрать сервер ${server.name}`}
+            onSelect={onSelect}
+            selectDisabled={busy || server.active}
+            probe={{ label: `Обновить пинг сервера ${server.name}`, disabled: probeBusy, onCheck }}
+        />
     )
 }
