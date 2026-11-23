@@ -50,8 +50,8 @@ type profileRenderer struct {
 	// Groups another group falls back to (see fallbackLoop).
 	fallbackLoops map[string]bool
 	syntheticDNS  map[string]bool
-	ownedTags    []string
-	graph        map[string][]string
+	ownedTags     []string
+	graph         map[string][]string
 }
 
 func profileError() error {

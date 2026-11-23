@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/boombuler/barcode"
@@ -23,8 +24,13 @@ import (
 
 type object = map[string]interface{}
 
+var (
+	serversViewMu sync.Mutex
+	serversView   = object{"tab": "pool", "country_order": "name-asc", "country": "all", "only_responding": false}
+)
+
 func Handler(frontend fs.FS) http.Handler {
-	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.2", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
+	status := object{"connected": true, "internet": true, "proxy_checked": true, "xray_running": true, "restarting": false, "current_server": "Нидерланды · основной", "protocol": "vless", "latency_ms": 48, "uptime": "2 д 4 ч", "last_check": time.Now().UTC().Format(time.RFC3339), "watchdog_active": true, "panel_version": "v3.0.3", "core": "xray", "mode": "TProxy", "xkeen_version": "2.1 Stable", "generation": 2}
 	mihomo := os.Getenv(mihomoCoreEnv) == "mihomo"
 	if mihomo {
 		status = demoMihomoStatus(status)
@@ -45,6 +51,20 @@ func Handler(frontend fs.FS) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			if r.Method == http.MethodPost && r.URL.Path == "/api/components/preview" {
 				demoSettingsPreview(w, r)
+				return
+			}
+			// The servers screen keeps its tab and filters on the router; the
+			// demo keeps them in memory, so its tabs can be switched.
+			if r.URL.Path == "/api/ui/servers" {
+				serversViewMu.Lock()
+				defer serversViewMu.Unlock()
+				if r.Method == http.MethodPut {
+					var next object
+					if json.NewDecoder(r.Body).Decode(&next) == nil {
+						serversView = next
+					}
+				}
+				json.NewEncoder(w).Encode(serversView)
 				return
 			}
 			if r.Method != "GET" {
@@ -87,7 +107,7 @@ func Handler(frontend fs.FS) http.Handler {
 			case "/api/account":
 				data = object{"username": "admin", "recovery_codes_left": 8, "passkeys": 0, "remember": true}
 			case "/api/update":
-				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "channel": "stable", "current": "v3.0.2", "latest": object{"tag": "v3.0.2", "prerelease": false, "url": "https://github.com/Sgadmer/xkeen-panel/releases/tag/v3.0.2"}, "versions": []object{{"tag": "v3.0.2", "prerelease": false}, {"tag": "v3.0.1", "prerelease": false}, {"tag": "v3.0.0", "prerelease": false}}, "supported": true, "available": false, "auto": true, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
+				data = object{"locked": false, "repository": "Sgadmer/xkeen-panel", "channel": "stable", "current": "v3.0.3", "latest": object{"tag": "v3.0.3", "prerelease": false, "url": "https://github.com/Sgadmer/xkeen-panel/releases/tag/v3.0.3"}, "versions": []object{{"tag": "v3.0.3", "prerelease": false}, {"tag": "v3.0.2", "prerelease": false}, {"tag": "v3.0.1", "prerelease": false}}, "supported": true, "available": false, "auto": true, "auto_hour": 4, "last_check": time.Now().UTC().Format(time.RFC3339)}
 			case "/api/setup/state":
 				data = object{"xkeen_installed": true, "xkeen_version": "2.1 Stable", "core": "xray", "core_running": true, "autostart": true, "subscription": true, "servers": 3, "configured": true, "pool_nodes": 2, "router_api": true, "policy_found": true, "devices_in_vpn": 2, "new_devices_vpn": false, "watchdog": true, "complete": true, "routing_mode_configured": true}
 			case "/api/logs":

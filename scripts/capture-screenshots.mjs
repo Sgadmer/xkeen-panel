@@ -25,10 +25,10 @@ const wide = [1280, 720], tall = [1440, 1360], phone = [375, 812]
 // click: the visible text of a button or link; scroll: the text of a heading to bring into view.
 const shots = [
     { file: 'overview', core: 'mihomo', path: '/', size: wide },
-    { file: 'servers', core: 'mihomo', path: '/servers', size: wide, storage: { servers_tab: 'pool' } },
-    { file: 'all-servers', core: 'mihomo', path: '/servers', size: wide, storage: { servers_tab: 'all' } },
+    { file: 'servers', core: 'mihomo', path: '/servers', size: wide, steps: [{ click: 'Автовыбор ·' }] },
+    { file: 'all-servers', core: 'mihomo', path: '/servers', size: wide, steps: [{ click: 'Все серверы ·' }] },
     { file: 'sources', core: 'mihomo', path: '/servers?sources=1', size: wide },
-    { file: 'multipools', core: 'mihomo', path: '/servers', size: wide, storage: { servers_tab: 'all' }, steps: [{ click: 'Мультипулы' }] },
+    { file: 'multipools', core: 'mihomo', path: '/servers', size: wide, steps: [{ click: 'Все серверы ·' }, { click: 'Мультипулы' }] },
     { file: 'services', core: 'mihomo', path: '/services', size: tall },
     { file: 'service-picker', core: 'mihomo', path: '/services', size: wide, steps: [{ scroll: 'YouTube' }, { click: 'Маршрут · YouTube' }, { click: 'Северный ветер' }] },
     { file: 'ai-route-warning', core: 'mihomo', path: '/services', size: tall, steps: [{ click: 'Маршрут · Claude' }, { click: 'Северный ветер' }, { click: 'Франкфурт' }], settle: 1200 },

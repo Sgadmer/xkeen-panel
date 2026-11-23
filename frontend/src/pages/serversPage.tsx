@@ -91,8 +91,12 @@ function useServersView() {
         mutationFn: (view: ServersView) => api.put<ServersView>('/api/ui/servers', view),
         onMutate: view => { qc.setQueryData(viewKey, view) },
     })
+    // A missing or unknown value falls back to the default, so the screen is
+    // never left without a list.
+    const stored = { ...defaultView, ...query.data }
+    if (stored.tab !== 'pool' && stored.tab !== 'all') stored.tab = defaultView.tab
     return {
-        view: query.data ?? defaultView,
+        view: stored,
         change: (next: Partial<ServersView>) => save.mutate({ ...(qc.getQueryData<ServersView>(viewKey) ?? defaultView), ...next }),
     }
 }

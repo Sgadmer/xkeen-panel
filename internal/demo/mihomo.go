@@ -36,7 +36,10 @@ func demoServerRows() []object {
 	rows := []object{}
 	for i, server := range demoMihomoServers {
 		row := object{"id": i, "name": server.name, "address": "server.example.com", "port": 443, "protocol": "vless", "active": i == 0, "latency_ms": server.latency,
-			"country": server.country, "probe_kind": "https", "source_name": server.source, "source_id": map[string]string{"Северный ветер": "north", "Южный мост": "south"}[server.source], "target_id": "srv-" + server.country + "-" + string(rune('a'+i))}
+			"country": server.country, "probe_kind": "https", "source_name": server.source, "source_id": map[string]string{"Северный ветер": "north", "Южный мост": "south"}[server.source], "target_id": "srv-" + server.country + "-" + string(rune('a'+i)),
+			// Measured by the router a minute ago, like a pool member.
+			"last_checked": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+			"ping_samples": []object{{"ms": server.latency + 6, "at": time.Now().Add(-3 * time.Minute).UTC().Format(time.RFC3339)}, {"ms": server.latency - 3, "at": time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)}, {"ms": server.latency, "at": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)}}}
 		if i < 8 {
 			row["pool_tag"] = "pool-" + string(rune('a'+i))
 		}
