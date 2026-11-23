@@ -47,7 +47,9 @@ type profileRenderer struct {
 	balancerTags map[string]string
 	inboundTags  map[string]string
 	loopbackTags map[string]string
-	syntheticDNS map[string]bool
+	// Groups another group falls back to (see fallbackLoop).
+	fallbackLoops map[string]bool
+	syntheticDNS  map[string]bool
 	ownedTags    []string
 	graph        map[string][]string
 }
@@ -484,10 +486,10 @@ func (r *profileRenderer) balancer(balancer map[string]interface{}) error {
 	balancer["selector"] = mapped
 	if fallback, ok := balancer["fallbackTag"].(string); ok && fallback != "" {
 		target := r.outboundTags[fallback]
+		if target == "" && r.balancerTags[fallback] != "" {
+			target = r.fallbackLoop(fallback)
+		}
 		if target == "" {
-			if r.balancerTags[fallback] != "" {
-				return profileDetail("fallback-is-balancer")
-			}
 			return profileDetail("fallback-unknown")
 		}
 		balancer["fallbackTag"] = target
@@ -521,6 +523,33 @@ func (r *profileRenderer) balancer(balancer map[string]interface{}) error {
 	}
 	r.bundle.Balancers = append(r.bundle.Balancers, balancer)
 	return nil
+}
+
+// fallbackLoop lets a group fall back to another group. Xray takes a
+// balancer's fallback for an outbound tag only: given a group's name it finds
+// no such outbound. So the fallback becomes an internal loopback, and a rule
+// of its own hands what comes back through it to the other group. A chain of
+// groups that leads back to itself is refused as a routing cycle.
+func (r *profileRenderer) fallbackLoop(balancer string) string {
+	group := r.balancerTags[balancer]
+	tag := r.bundle.Namespace + "fallback-" + balancer
+	inbound := r.bundle.Namespace + "fallback-in-" + balancer
+	if r.fallbackLoops == nil {
+		r.fallbackLoops = map[string]bool{}
+	}
+	if !r.fallbackLoops[balancer] {
+		r.fallbackLoops[balancer] = true
+		r.bundle.InternalOutbounds = append(r.bundle.InternalOutbounds, map[string]interface{}{
+			"tag": tag, "protocol": "loopback", "settings": map[string]interface{}{"inboundTag": inbound},
+		})
+		r.bundle.Rules = append(r.bundle.Rules, map[string]interface{}{
+			"type": "field", "ruleTag": r.bundle.Namespace + "fallback-rule-" + balancer,
+			"inboundTag": []interface{}{inbound}, "balancerTag": group,
+		})
+		r.edge("o:"+tag, "i:"+inbound)
+		r.edge("i:"+inbound, "b:"+group)
+	}
+	return tag
 }
 
 func (r *profileRenderer) rules(rules []interface{}) error {
