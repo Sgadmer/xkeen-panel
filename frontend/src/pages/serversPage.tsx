@@ -377,7 +377,8 @@ export function ServersPage() {
                     </Hint>}
                 </>}
                 source={[server.source_name, `${server.profile_nodes ?? 0} серверов`].filter(Boolean).join(' · ')}
-                check={checkInfo(server, undefined, latencyFor(server.id))}
+                // In a pool the mode shows the router's own number, like any server.
+                check={checkInfo(server, routerNodes.get(server.id), latencyFor(server.id))}
                 measuring={isPendingServer(server.id)}
                 highlighted={server.active}
                 selectLabel={`Выбрать режим ${server.name}`}
