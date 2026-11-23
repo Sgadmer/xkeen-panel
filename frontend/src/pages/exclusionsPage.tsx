@@ -63,7 +63,7 @@ export function ExclusionsPage() {
     }
 
     const add = useMutation({
-        mutationFn: (entry: { value: string; comment: string }) =>
+        mutationFn: (entry: { value: string; comment: string; disabled?: boolean }) =>
             api.post<Exclusions>('/api/exclusions', entry),
         onSuccess: (data, entry) => {
             applied(data, 'Исключение добавлено и применено.')
@@ -122,7 +122,9 @@ export function ExclusionsPage() {
         const entry = removed
         reset()
         setRemoved(null)
-        add.mutate({ value: entry.value, comment: entry.comment })
+        // A switched-off entry comes back switched off: its address never goes
+        // direct on the way back.
+        add.mutate({ value: entry.value, comment: entry.comment, ...(entry.disabled ? { disabled: true } : {}) })
     }
 
     function edit(entry: ExclusionEntry) {

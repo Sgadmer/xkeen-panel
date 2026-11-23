@@ -117,7 +117,8 @@ export function JournalPage() {
     const window_ = capture ? { since: capture.since, before: capture.until } : undefined
     const frozen = paused || !!capture?.until
 
-    const known = useDevices().data?.devices ?? []
+    // A device that is away reports 0.0.0.0, which is no address at all.
+    const known = (useDevices().data?.devices ?? []).map(device => device.ip === '0.0.0.0' ? { ...device, ip: undefined } : device)
     const settings = useQuery({ queryKey: historySettingsKey, queryFn: () => api.get<HistorySettings>(historySettingsPath), refetchInterval: 15000, retry: false })
     const meta = useQuery({ queryKey: ['journal-meta'], queryFn: () => api.get<Live>('/api/diagnostics?connections=0&load=0'), staleTime: Infinity })
     const recentOn = settings.data?.recent_enabled !== false
@@ -248,7 +249,7 @@ export function JournalPage() {
                 <option value='connection'>Соединения</option><option value='kill_switch'>Kill switch</option><option value='quic'>QUIC</option><option value='error'>Ошибки</option>
             </select>
             <div className='relative'>
-                <input type='search' aria-label='Поиск' placeholder='Домен, IP, правило или сервер' value={searchDraft} onChange={event => setSearchDraft(event.target.value)} className={field} />
+                <input type='search' aria-label='Поиск' placeholder='Домен, IP или сервер' value={searchDraft} onChange={event => setSearchDraft(event.target.value)} className={field} />
             </div>
         </div>
 

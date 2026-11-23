@@ -33,11 +33,12 @@ import { refreshSession } from '@/lib/api'
 
 type Tab = { to: string; label: string; icon: Icon; active: Icon }
 
-// Every section, as the sidebar of a wide screen lists them.
+// Every section, as the sidebar of a wide screen lists them: in the order of
+// the phone's tab bar, so both screens look alike.
 export const SECTIONS: Tab[] = [
     { to: '/', label: 'Главная', icon: IconShield, active: IconShieldFilled },
-    { to: '/servers', label: 'Серверы', icon: IconWorld, active: IconWorld },
     { to: '/services', label: 'Сервисы', icon: IconLayoutGrid, active: IconLayoutGridFilled },
+    { to: '/servers', label: 'Серверы', icon: IconWorld, active: IconWorld },
     { to: '/journal', label: 'Журнал', icon: IconListSearch, active: IconListSearch },
     {
         to: '/devices',

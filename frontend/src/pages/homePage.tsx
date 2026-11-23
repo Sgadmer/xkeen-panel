@@ -77,12 +77,13 @@ export function HomePage() {
         ? 'Автовыбор · ' + (scope ? scopeLabel(scope) : pool?.selection_name || 'Общий пул')
         : mode === 'replacement' ? 'Автоматическая замена · сервер той же страны'
         : mode === 'native' ? 'Группа провайдера · ' + (pool?.selection_name || 'По правилам подписки')
-        : mode === 'profile' || !pool?.selection_kind && current?.protocol === 'xray-profile' ? 'Профиль провайдера · ' + (pool?.selection_name || current?.name || '')
+        : mode === 'profile' || !pool?.selection_kind && current?.protocol === 'xray-profile' ? 'Режим провайдера · ' +(pool?.selection_name || current?.name || '')
         : 'Сервер выбран вручную'
     const events = panelEvents(logs, 5)
     // A server named after its country would otherwise be printed twice.
     const place = countryName(code)
-    const sameName = !!place && !!endpoint && endpoint.replace(/[^\p{L}\p{N} ]/gu, '').trim().toLowerCase() === place.toLowerCase()
+    // Without a country the title is the server's name already.
+    const sameName = !place || !!endpoint && endpoint.replace(/[^\p{L}\p{N} ]/gu, '').trim().toLowerCase() === place.toLowerCase()
     // The server's one number, the same as in the server list and coloured alike.
     const shownMs = direct || blocked || awaitingMember || current?.probe_kind !== 'https' ? 0 : Math.max(current.latency_ms, 0)
     const latency = shownMs > 0 && <span className={toneText[latencyTone(shownMs)]}>{shownMs} мс</span>
@@ -252,7 +253,7 @@ export function HomePage() {
                                 update?.available && update.latest
                                     ? `доступна ${update.latest.tag}`
                                     : update?.auto
-                                      ? `обновится в ${String(update.auto_hour).padStart(2, '0')}:00`
+                                      ? `последняя · автообновление в ${String(update.auto_hour).padStart(2, '0')}:00`
                                       : 'версия панели'
                             }
                         />
@@ -282,7 +283,10 @@ export function HomePage() {
                                 <span className='shrink-0 tabular-nums text-muted-foreground'>
                                     {e.time}
                                 </span>
-                                <span className='min-w-0'>{e.text}</span>
+                                <span className='min-w-0'>
+                                    {e.text}
+                                    {e.count > 1 && <span className='ml-1.5 whitespace-nowrap text-muted-foreground'>×{e.count}</span>}
+                                </span>
                             </div>
                         ))}
                     </div>

@@ -130,10 +130,13 @@ func (h *Handlers) logMoves(source string, tx *subscriptionApplySnapshot) {
 	if len(tx.moves) == 0 {
 		return
 	}
-	note := fmt.Sprintf("%s: провайдер обновил ключи серверов (%d), названия прежние", source, len(tx.moves))
-	if len(tx.fields) > 0 {
-		note += "; изменились настройки: " + strings.Join(tx.fields, ", ")
+	// The changed settings themselves mean nothing to the owner; only whether
+	// the choices survived does.
+	servers := "серверов"
+	if n := len(tx.moves); n%10 == 1 && n%100 != 11 {
+		servers = "сервера"
 	}
+	note := fmt.Sprintf("%s: провайдер обновил ключи %d %s, названия прежние", source, len(tx.moves), servers)
 	// Providers that rotate keys every hour would fill the events with the
 	// same line. The selections follow their servers either way.
 	key := source + "\x00" + strings.Join(tx.fields, ",")

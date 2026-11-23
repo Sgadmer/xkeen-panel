@@ -56,7 +56,10 @@ export function observeTabNotification(status?: Status, update?: UpdateState) {
     if (status && !status.restarting) {
         const route = [status.current_server,status.protocol].join('|')
         if (status.current_server) {
-            if (prefs.server && last.route && last.route !== route) send('Смена VPN-сервера', 'Изменился сервер для остальных сайтов.', '/servers', 'server')
+            // Inside an automatic pool the router moves to the server with the
+            // best number by itself; that is routine and not worth a message.
+            // An outage is announced by the «Связь через VPN» notice instead.
+            if (prefs.server && !status.pool && last.route && last.route !== route) send('Смена VPN-сервера', 'Изменился сервер для остальных сайтов.', '/servers', 'server')
             last.route = route
         }
         if (status.proxy_checked && Date.parse(status.last_check) > 0) {

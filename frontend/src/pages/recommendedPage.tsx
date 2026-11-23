@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { IconShieldCheckFilled } from '@tabler/icons-react'
 import { Group, PageTitle, Row } from '@/components/ios'
 import { serviceKillSwitch, useKillSwitch } from '@/components/killSwitch'
+import { usePortsThroughVPN } from '@/components/protectionSummary'
 import { usePanelSettings, useStatus } from '@/hooks/usePanelData'
 import { aiServiceIds, isAiService } from '@/lib/aiServiceGroup'
 import { api } from '@/lib/api'
@@ -40,6 +41,7 @@ export function RecommendedPage() {
     const dns = useQuery({ queryKey: ['mihomo-dns'], queryFn: () => api.get<Dns>('/api/dns'), enabled: mihomo }).data
     const refilter = useQuery({ queryKey: ['refilter-files'], queryFn: () => api.get<Refilter>('/api/components/refilter'), enabled: mihomo }).data
     const journal = useQuery({ queryKey: historySettingsKey, queryFn: () => api.get<HistorySettings>(historySettingsPath), enabled: mihomo, retry: false }).data
+    const ports = usePortsThroughVPN(mihomo)
     const [busy, setBusy] = useState('')
     const [problem, setProblem] = useState('')
 
@@ -53,6 +55,9 @@ export function RecommendedPage() {
                 now: state.mode === 'off' ? 'Всегда выключен' : 'Как в настройках', advice: 'Всегда включён.', restore: () => policy.saveAsync({ service_id: service.id, mode: 'on' }) })
         }
     }
+    if (mihomo && ports.length > 0) items.push({ id: 'port-proxying', group: 'Защита', title: 'Порты через VPN',
+        now: 'Только ' + ports.join(', '), advice: 'Все порты. Список меняется в «Исключения → Полный обход VPN» и действует после перезапуска XKeen.',
+        link: '/exclusions' })
     if (mihomo && mode && mode.mode !== 'protected') items.push({ id: 'routing-mode', group: 'Защита', title: 'Неопознанный трафик',
         now: mode.mode === 'blocklist' ? 'Только по списку блокировок' : 'По правилам профиля', advice: 'Защищённый режим: всё неопознанное идёт через VPN.',
         restore: () => api.put('/api/routing/blocklist', { enabled: false }) })
@@ -129,7 +134,7 @@ export function RecommendedPage() {
                     <Row label={busy ? 'Возвращаем…' : `Вернуть всё (${restorable.length})`} tone='tint' disabled={!!busy} onClick={() => void run(restorable)} />
                 </Group>}
                 <Group title='Что считается рекомендованным' footer='Маршруты карточек, выбранные серверы, исключения и свои сервисы — ваш выбор; здесь они не оцениваются, кроме прямого выхода.'>
-                    <Row label='Защита' hint='Общий kill switch включён, у карточек — «Всегда включён», неопознанный трафик идёт через VPN, AI-карточки на одном сервере.' />
+                    <Row label='Защита' hint='Общий kill switch включён, у карточек — «Всегда включён», неопознанный трафик идёт через VPN, через VPN идут все порты, AI-карточки на одном сервере.' />
                     <Row label='Автоматика' hint='Подписки обновляются каждый час, упавший сервер заменяется, ядро спрашивает адреса у роутера.' />
                     <Row label='Журнал и списки' hint='Недавние соединения запоминаются, список блокировок обновляется раз в сутки.' />
                 </Group>

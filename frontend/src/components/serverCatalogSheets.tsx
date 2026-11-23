@@ -52,7 +52,7 @@ function SourceList() {
             {sources.isLoading && <Row label='Загружаем источники…' />}
             {sources.data?.map(item => <Row key={item.id} label={<span className='break-words'>{item.name}</span>}
                 hint={[kinds[item.kind], item.host !== item.name && item.host, 'Записей: ' + item.server_count, item.imported_profiles && `Режимов провайдера: ${item.imported_profiles}`,
-                    item.skipped_composite && `Пропущено составных профилей: ${item.skipped_composite}`,
+                    item.skipped_composite && `Пропущено режимов провайдера: ${item.skipped_composite}`,
                     item.native_provider && 'Используется профилем Mihomo', usageText(item.usage)].filter(Boolean).join(' · ')}
                 onClick={() => select(item.id)} trailing={arrow} />)}
             <Row label='Добавить источник' tone='tint' onClick={() => select('add')} />
@@ -91,8 +91,8 @@ function SourceEditor({ source, onBack, onDone }: { source: ServerSource; onBack
             {!!usageText(source.usage) && <Row label='По данным провайдера' hint={usageText(source.usage)} />}
             {usageWarnings([source]).map(text => <Row key={text} label={<span className='text-warning'>{text.slice(source.name.length + 2)}</span>} hint='Продлите подписку у провайдера' />)}
             {!!source.imported_profiles && <Row label='Доступные режимы провайдера' detail={String(source.imported_profiles)} />}
-            {!!source.skipped_composite && <Row label='Пропущено составных профилей' detail={String(source.skipped_composite)}
-                hint='Эти профили используют функции, которые панель не может перенести.' />}
+            {!!source.skipped_composite && <Row label='Пропущено режимов провайдера' detail={String(source.skipped_composite)}
+                hint='Эти режимы используют функции, которые панель не может перенести.' />}
             {!!source.skipped_unsupported && <Row label='Прочие неподдерживаемые записи' detail={String(source.skipped_unsupported)} />}
             <form className='space-y-2 py-3' onSubmit={event => { event.preventDefault(); if (name.trim() && !action.isPending) action.mutate('rename') }}>
                 <label className='flex flex-col gap-1 text-sm'>Название источника

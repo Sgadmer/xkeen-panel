@@ -118,6 +118,7 @@ const INTERVALS = [
 export function intervalLabel(minutes: number) {
     if (minutes === 0) return 'Выкл.'
     if (minutes === 1440) return 'раз в сутки'
+    if (minutes === 60) return 'каждый час'
     if (minutes % 60 === 0) return `каждые ${minutes / 60} ч`
     return `каждые ${minutes} мин`
 }

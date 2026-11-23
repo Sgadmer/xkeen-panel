@@ -6,8 +6,11 @@ const canHover = () => typeof window !== 'undefined' && window.matchMedia?.('(ho
 // A small control that explains itself: on a computer the text shows on
 // hover, on a phone a tap opens it. The tap never reaches the row beneath, so
 // reading a hint does not select a server.
-export function Hint({ label, children, round = true, className }: {
+export function Hint({ label, content, children, round = true, className }: {
     label: string
+    // What the bubble shows when it needs more than plain text; label stays
+    // the text for screen readers.
+    content?: ReactNode
     children: ReactNode
     round?: boolean
     className?: string
@@ -60,7 +63,7 @@ export function Hint({ label, children, round = true, className }: {
                         align === 'center' && 'left-1/2 -translate-x-1/2',
                         align === 'left' && 'left-0',
                         align === 'right' && 'right-0')}>
-                    {label}
+                    {content ?? label}
                 </span>
             )}
         </span>

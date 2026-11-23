@@ -459,7 +459,7 @@ func runSubscriptionRefresh(ctx context.Context, cfg *models.Config, sm *xkeen.S
 				continue
 			}
 			bus.Publish(sse.Event{Type: "subscription", Data: map[string]bool{"updated": true}})
-			wd.Log("[AUTO-UPDATE] Подписка обновлена (%d серверов)", len(sm.GetServers()))
+			wd.Log("[AUTO-UPDATE] Подписка обновлена: %s", xkeen.ServersCount(len(sm.GetServers())))
 		}
 	}
 }

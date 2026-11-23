@@ -159,7 +159,9 @@ export const toneDot: Record<Tone, string> = {
     idle: 'bg-muted-foreground',
 }
 
-export type PanelEvent = { time: string; text: string }
+export type PanelEvent = { time: string; text: string; count: number }
+
+const pad = (n: number) => String(n).padStart(2, '0')
 
 const routine = [
     /\[OK\]/,
@@ -168,27 +170,36 @@ const routine = [
     /\[WARN\]/,
 ]
 
-// The panel log doubles as an event feed once routine heartbeat lines are dropped
+// The panel log doubles as an event feed once routine heartbeat lines are
+// dropped. The same event repeated in a row is shown once, with its count.
 export function panelEvents(lines: string[], limit: number): PanelEvent[] {
     const events: PanelEvent[] = []
-    for (let i = lines.length - 1; i >= 0 && events.length < limit; i--) {
+    // The log is written in the router's time, the same as the owner's.
+    const now = new Date()
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i]
         if (routine.some(re => re.test(line))) continue
         const m = line.match(
-            /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):\d{2} (?:\[[^\]]+\] )?(.*)$/,
+            /^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2}):\d{2} (?:\[[^\]]+\] )?(.*)$/,
         )
         if (!m) continue
-        const today = new Date().toISOString().slice(0, 10) === m[1]
-        const day = today
+        const text = m[5]
+            .replace(/\s*\((manual|sub-\d+)\)/g, '')
+            .replace(/:\s*(manual|sub-\d+)$/, '')
+        const last = events[events.length - 1]
+        if (last?.text === text) {
+            last.count++
+            continue
+        }
+        if (events.length >= limit) break
+        const day = `${m[1]}-${m[2]}-${m[3]}` === today
             ? ''
-            : new Date(m[1]).toLocaleDateString('ru-RU', {
+            : new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('ru-RU', {
                   day: 'numeric',
                   month: 'short',
               }) + ' '
-        const text = m[3]
-            .replace(/\s*\((manual|sub-\d+)\)/g, '')
-            .replace(/:\s*(manual|sub-\d+)$/, '')
-        events.push({ time: day + m[2], text })
+        events.push({ time: day + m[4], text, count: 1 })
     }
     return events
 }

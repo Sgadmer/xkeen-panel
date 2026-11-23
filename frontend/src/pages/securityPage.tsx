@@ -48,7 +48,7 @@ export function SecurityPage() {
     const [codes, setCodes] = useState<string[] | null>(null)
     const [notice, setNotice] = useState('')
     const [ending, setEnding] = useState(false)
-    const [removing, setRemoving] = useState(false)
+    const [removing, setRemoving] = useState<string | null>(null)
 
     const account = useQuery({ queryKey: ['account'], queryFn: () => api.get<Account>('/api/account') })
     const passkeys = useQuery({ queryKey: ['passkeys'], queryFn: () => api.get<{ passkeys: string[] }>('/api/account/passkey') })
@@ -86,11 +86,12 @@ export function SecurityPage() {
     })
     const removePasskey = useMutation({
         mutationFn: (id: string) => api.del('/api/account/passkey', { id }),
-        onSuccess: () => setRemoving(false),
+        onSuccess: () => setRemoving(null),
         onSettled: () => qc.invalidateQueries({ queryKey: ['passkeys'] }),
     })
 
-    const passkey = passkeys.data?.passkeys?.[0]
+    // Every device keeps a key of its own; each can be removed apart.
+    const keys = passkeys.data?.passkeys ?? []
     const keyName = isIOSDevice() ? 'Face ID' : 'Ключ доступа'
     const left = account.data?.recovery_codes_left ?? 0
     const confirmReady = confirm.current_password.length > 0 && confirm.code.length >= 6
@@ -111,12 +112,13 @@ export function SecurityPage() {
             </Group>
 
             <Group title={keyName} footer={<Problem>{(addPasskey.error ?? passkeys.error)?.message}</Problem>}>
-                {passkey ? <Row icon={icon('#30d158', IconFingerprint)} label={isIOSDevice() ? 'Вход по Face ID включён' : 'Ключ доступа сохранён'} hint='Вход без пароля и кода.'
-                    trailing={<button type='button' onClick={() => { removePasskey.reset(); setRemoving(true) }} className='min-h-9 cursor-pointer px-1 text-[15px] text-destructive'>Удалить</button>} />
-                    : passkeySupported() ? <Row icon={icon('#30d158', IconFingerprint)} tone='tint' disabled={addPasskey.isPending || !passkeys.isSuccess}
-                        label={addPasskey.isPending ? 'Создаю ключ…' : isIOSDevice() ? 'Включить вход по Face ID' : 'Создать ключ доступа'}
-                        hint='Вход по отпечатку, лицу или PIN-коду устройства.' onClick={() => addPasskey.mutate()} />
-                        : <Row icon={icon('#30d158', IconFingerprint)} label='Нужен защищённый адрес' hint='Ключ доступа создаётся только на HTTPS-адресе панели.' to='/settings/access' />}
+                {keys.map((id, i) => <Row key={id} icon={icon('#30d158', IconFingerprint)}
+                    label={keys.length > 1 ? `Ключ доступа ${i + 1}` : isIOSDevice() ? 'Вход по Face ID включён' : 'Ключ доступа сохранён'} hint='Вход без пароля и кода.'
+                    trailing={<button type='button' onClick={() => { removePasskey.reset(); setRemoving(id) }} className='min-h-9 cursor-pointer px-1 text-[15px] text-destructive'>Удалить</button>} />)}
+                {passkeySupported() ? <Row icon={keys.length ? undefined : icon('#30d158', IconFingerprint)} tone='tint' disabled={addPasskey.isPending || !passkeys.isSuccess}
+                    label={addPasskey.isPending ? 'Создаю ключ…' : keys.length ? 'Добавить ключ на этом устройстве' : isIOSDevice() ? 'Включить вход по Face ID' : 'Создать ключ доступа'}
+                    hint={keys.length ? 'Для входа без пароля с ещё одного телефона или компьютера.' : 'Вход по отпечатку, лицу или PIN-коду устройства.'} onClick={() => addPasskey.mutate()} />
+                    : keys.length === 0 && <Row icon={icon('#30d158', IconFingerprint)} label='Нужен защищённый адрес' hint='Ключ доступа создаётся только на HTTPS-адресе панели.' to='/settings/access' />}
                 <Row label='Адрес панели и QR-код' to='/settings/access' />
             </Group>
 
@@ -192,10 +194,12 @@ export function SecurityPage() {
             onCancel={() => setEnding(false)} onConfirm={() => endSessions.mutate()}>
             <p>На всех телефонах и компьютерах, кроме этого, панель попросит войти заново.</p>
         </ProtectionWarning>}
-        {removing && passkey && <ProtectionWarning title='Удалить ключ доступа?' confirmLabel='Удалить ключ' delay={0}
+        {removing && <ProtectionWarning title='Удалить ключ доступа?' confirmLabel='Удалить ключ' delay={0}
             busy={removePasskey.isPending} error={removePasskey.error?.message}
-            onCancel={() => { setRemoving(false); removePasskey.reset() }} onConfirm={() => removePasskey.mutate(passkey)}>
-            <p>Вход по Face ID или ключу доступа перестанет работать на всех устройствах. Войти можно будет с паролем и кодом из приложения.</p>
+            onCancel={() => { setRemoving(null); removePasskey.reset() }} onConfirm={() => removePasskey.mutate(removing)}>
+            <p>{keys.length > 1
+                ? 'Вход этим ключом перестанет работать на устройстве, где он сохранён. Остальные ключи, пароль и код из приложения продолжат работать.'
+                : 'Вход по Face ID или ключу доступа перестанет работать. Войти можно будет с паролем и кодом из приложения.'}</p>
         </ProtectionWarning>}
     </>
 }

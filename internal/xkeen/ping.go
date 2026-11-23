@@ -2,6 +2,7 @@ package xkeen
 
 import (
 	"sort"
+	"strconv"
 	"time"
 
 	"xkeen-panel/internal/models"
@@ -87,6 +88,20 @@ func PingMedian(samples []models.PingSample) int {
 	default:
 		return answers[len(answers)/2]
 	}
+}
+
+// ServersCount says «1 сервер», «3 сервера», «134 сервера», «25 серверов».
+func ServersCount(n int) string {
+	word := "серверов"
+	if tens, units := n%100, n%10; tens < 11 || tens > 14 {
+		switch {
+		case units == 1:
+			word = "сервер"
+		case units >= 2 && units <= 4:
+			word = "сервера"
+		}
+	}
+	return strconv.Itoa(n) + " " + word
 }
 
 // PingSilent reports a server whose two latest checks both got no answer.

@@ -19,27 +19,29 @@ import { api } from '@/lib/api'
 import { plural } from '@/lib/format'
 import type { Device, DevicesResponse } from '@/types'
 
+// The icon is guessed from the name the device gave itself. Smart-home gear
+// comes before TV boxes: «Hue Sync Box» is a lamp controller, not a TV.
 const KINDS: { re: RegExp; icon: Icon; color: string }[] = [
     { re: /watch|часы/i, icon: IconDeviceWatch, color: '#8e8e93' },
     {
-        re: /iphone|phone|телефон|фон|android|pixel|galaxy/i,
+        re: /iphone|phone|телефон|фон|android|pixel|galaxy|poco|oneplus|redmi|xiaomi|samsung|\bs2\d|honor|huawei|realme|vivo|oppo|nokia|motorola/i,
         icon: IconDeviceMobile,
         color: '#30d158',
     },
     {
-        re: /mac|book|laptop|air|ноут/i,
+        re: /macbook|book|laptop|ноут/i,
         icon: IconDeviceLaptop,
         color: '#0a84ff',
     },
     {
-        re: /tv|телевиз|ящик|box|приставк/i,
-        icon: IconDeviceTv,
-        color: '#6366f1',
-    },
-    {
-        re: /хаб|hub|станц|пол|lamp|ламп|розетк|датчик/i,
+        re: /хаб|hub|hue|bridge|sync|станц|lamp|ламп|розетк|датчик|esp-|tuya|yeelight|aqara/i,
         icon: IconHome,
         color: '#ff9f0a',
+    },
+    {
+        re: /\btv|tv\b|телевиз|ящик|box|приставк/i,
+        icon: IconDeviceTv,
+        color: '#6366f1',
     },
 ]
 

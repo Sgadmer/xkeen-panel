@@ -133,7 +133,7 @@ export function ComponentsPage() {
     }
 
     return <>
-        <PageTitle title='Роутер и XKeen' subtitle='Версии, списки адресов, порты' back={{ to: '/settings', label: 'Настройки' }} />
+        <PageTitle title='Роутер и XKeen' subtitle='Версии, списки адресов, DNS' back={{ to: '/settings', label: 'Настройки' }} />
         {query.isPending ? <p className='px-4 text-muted-foreground'>Проверяем установку…</p> : query.error ? <p role='alert' className='px-4 text-destructive'>{query.error.message}</p> : null}
         {state && <>
             <Group title='Установлено' footer={state.core === 'mihomo' ? 'Выбор версий XKeen и Xray доступен при активном ядре Xray.' : state.reason}>

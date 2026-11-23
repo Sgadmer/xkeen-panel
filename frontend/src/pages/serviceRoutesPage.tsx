@@ -56,6 +56,9 @@ interface ServiceRoutes {
     targets: ServiceTarget[]
 }
 
+type Notice = { text: string; service?: string }
+const noNotice: Notice = { text: '' }
+
 function currentRoute(route: InheritedRoute) {
     if (route.kind === 'conditional') {
         return 'По списку блокировок'
@@ -75,7 +78,8 @@ function routeSummary(service: Service) {
     if (current?.kind === 'reject' || service.blocked) return 'Соединение заблокировано'
     if (current?.kind === 'direct') return 'Напрямую'
     if (current?.kind === 'server') {
-        const location = countryLabel(current.country) || 'Локация неизвестна'
+        // A server without a country is named instead.
+        const location = countryLabel(current.country) || current.name || 'Локация неизвестна'
         return current.source ? current.source + ' → ' + location : location
     }
     if (!service.target && service.inherited_route) {
@@ -230,7 +234,9 @@ function ClientProxy({service}: {service: Service}) {
 export function ServiceRoutesPage() {
     const qc = useQueryClient()
     const avoidCountries = usePanelSettings().data?.avoid_countries
-    const [notice, setNotice] = useState('')
+    // A saved route is confirmed in the card it was chosen in, not at the end
+    // of a long page; other news stays above the cards.
+    const [notice, setNotice] = useState<Notice>(noNotice)
     const [search, setSearch] = useState('')
     const [custom, setCustom] = useState<CustomDraft | null>(null)
     const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null)
@@ -253,8 +259,9 @@ export function ServiceRoutesPage() {
             qc.setQueryData(key, view)
             const service = selection !== 'auto-default' && view.services.find(item => item.id === selection.service_id)
             setWarning(null)
-            const saved = selection !== 'auto-default' && selection.ai_group ? 'Один маршрут сохранён для AI и аналитики' : selection === 'auto-default' ? 'Автовыбор включён' : 'Маршрут сохранён' + (service ? ' · ' + service.name : '')
-            setNotice(view.active_connections_pending ? saved + '. Проверяем прежние соединения.' : saved)
+            const saved = selection !== 'auto-default' && selection.ai_group ? 'Один маршрут сохранён для AI и аналитики' : selection === 'auto-default' ? 'Автовыбор включён' : 'Маршрут сохранён'
+            const where = selection === 'auto-default' ? undefined : selection.ai_group ? 'ai-group' : service ? service.id : undefined
+            setNotice({ text: view.active_connections_pending ? saved + '. Проверяем прежние соединения.' : saved, service: where })
         },
         onError: () => { void qc.invalidateQueries({ queryKey: key }) },
     })
@@ -311,7 +318,7 @@ export function ServiceRoutesPage() {
                     disabled={change.isPending || !(view.guard_ready || (view.scope === 'mihomo' && view.controller_ready))}
                     onSelect={targetId => {
                         if (targetId === service.target) return
-                        setNotice('')
+                        setNotice(noNotice)
                         change.reset()
                         if (isAiService(service.id)) {
                             const target = view?.targets.find(item => item.id === targetId)
@@ -322,13 +329,14 @@ export function ServiceRoutesPage() {
                 <p className='mt-1 min-h-5 truncate text-sm leading-5 text-muted-foreground' title={summary || undefined}>
                     {busy ? 'Меняем маршрут…' : summary}
                 </p>
+                {!busy && notice.text && notice.service === service.id && <p role='status' className='mt-1 text-sm text-success'>{notice.text}</p>}
                 {!busy && routesDown.includes(service.name) && <p role='status' className='mt-1 text-sm text-destructive'>
                     VPN этой карточки не отвечает{killSwitch.data ? serviceKillSwitch(killSwitch.data, service.id).enabled ? ' · kill switch не выпускает сервис напрямую' : ' · сервис идёт напрямую' : ''}
                 </p>}
                 {view.scope === 'mihomo' && <ServiceKillSwitch policy={killSwitch} id={service.id} name={service.name} direct={service.target === 'direct'} />}
                 <ServiceDetails service={service} selected={selected} fresh={!query.isError} mihomo={view.scope === 'mihomo'} firewall={firewall}
                     protectionEnabled={claudeProtection}
-                    onEdit={() => { setNotice(''); setCustom(customDraft(service)) }} onDelete={() => { setNotice(''); setRemoving({ id: service.id, name: service.name }) }} />
+                    onEdit={() => { setNotice(noNotice); setCustom(customDraft(service)) }} onDelete={() => { setNotice(noNotice); setRemoving({ id: service.id, name: service.name }) }} />
             </section>
         )
     }
@@ -341,6 +349,7 @@ export function ServiceRoutesPage() {
             </div>
             {query.isPending && <p role='status'>Загружаем маршруты…</p>}
             {error && <p role='alert' className='rounded-xl bg-card p-4 text-destructive'>{error.message}</p>}
+            {notice.text && !notice.service && <p role='status' className='px-1 text-sm text-success'>{notice.text}</p>}
             {warning && <AiRouteWarning key={warning.serviceId + ':' + warning.targetId}
                 serviceName={warning.serviceName} targetLabel={warning.targetLabel} targetKind={warning.targetKind}
                 canApplyGroup={!!mihomo && warning.targetId !== 'direct' && !!warning.targetId && aiServiceIds.every(id => view?.services.some(service => service.id === id))}
@@ -374,7 +383,7 @@ export function ServiceRoutesPage() {
                         </p>
                         <button type='button' disabled={change.isPending || !view.controller_ready || !defaultServiceTarget}
                             className='mt-3 min-h-11 rounded-xl bg-primary px-4 font-semibold text-primary-foreground disabled:opacity-50'
-                            onClick={() => { setNotice(''); change.mutate('auto-default') }}>
+                            onClick={() => { setNotice(noNotice); change.mutate('auto-default') }}>
                             {change.isPending && change.variables === 'auto-default' ? 'Применяем…' : 'Применить'}
                         </button>
                     </div>}
@@ -393,6 +402,7 @@ export function ServiceRoutesPage() {
                                     <p><strong className='font-semibold text-warning'>Голосовой чат.</strong> Для голоса Claude и ChatGPT подходят не все VPN-локации, даже если переписка работает. Иногда нужно попробовать несколько серверов.</p>
                                 </div>
                             </details>
+                            {notice.text && notice.service === 'ai-group' && <p role='status' className='mt-1 text-sm text-success'>{notice.text}</p>}
                         </header>
                         <div className='grid gap-3 sm:grid-cols-2 2xl:grid-cols-4'>
                             {aiServiceIds.flatMap(id => { const service = view.services.find(item => item.id === id); return service ? [renderService(service)] : [] })}
@@ -405,7 +415,7 @@ export function ServiceRoutesPage() {
                             <input type='search' value={search} onChange={event => setSearch(event.target.value)} placeholder='Найти сервис'
                                 className='min-w-0 flex-1 bg-transparent text-[16px] outline-none placeholder:text-muted-foreground' />
                         </label>}
-                        {mihomo && <button type='button' onClick={() => { setNotice(''); setCustom({ name: '', addresses: '' }) }}
+                        {mihomo && <button type='button' onClick={() => { setNotice(noNotice); setCustom({ name: '', addresses: '' }) }}
                             className='flex min-h-11 shrink-0 cursor-pointer items-center gap-1.5 rounded-xl bg-fill px-3 text-[15px] text-tint'>
                             <IconPlus aria-hidden className='size-4' stroke={2.4} />Свой сервис
                         </button>}
@@ -414,11 +424,10 @@ export function ServiceRoutesPage() {
                         {found.map(renderService)}
                     </div>
                     {others.length > 0 && found.length === 0 && <p className='px-1 text-sm text-muted-foreground'>Такого сервиса нет в списке.</p>}
-                    <p role='status' className='text-sm text-muted-foreground'>{notice}</p>
                 </>
             )}
-            <CustomServiceSheet draft={custom} onClose={() => setCustom(null)} onSaved={message => { setCustom(null); setNotice(message) }} />
-            <DeleteCustomService service={removing} onClose={() => setRemoving(null)} onDeleted={message => { setRemoving(null); setNotice(message) }} />
+            <CustomServiceSheet draft={custom} onClose={() => setCustom(null)} onSaved={message => { setCustom(null); setNotice({ text: message }) }} />
+            <DeleteCustomService service={removing} onClose={() => setRemoving(null)} onDeleted={message => { setRemoving(null); setNotice({ text: message }) }} />
         </>
     )
 }

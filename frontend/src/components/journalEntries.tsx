@@ -31,7 +31,9 @@ export function outcome(entry: ViewEntry) {
     if (entry.kind === 'error') return { label: 'Ошибка', className: 'bg-destructive/10 text-destructive' }
     if (entry.exit?.kind === 'direct' || entry.route.includes('Напрямую')) return { label: 'Напрямую', className: 'bg-fill text-muted-foreground' }
     if (entry.exit?.kind === 'reject' || entry.route.includes('Блокировка')) return { label: 'Блокировка', className: 'bg-warning/10 text-warning' }
-    const proxy = entry.exit?.kind === 'server' || !!entry.pool_current
+    // A route that is neither direct nor a block goes through a VPN server or
+    // pool, even when the server itself was not reported.
+    const proxy = entry.exit?.kind === 'server' || !!entry.pool_current || entry.route.length > 0
     return { label: proxy ? 'VPN' : 'Маршрут', className: proxy ? 'bg-tint/10 text-tint' : 'bg-fill text-muted-foreground' }
 }
 

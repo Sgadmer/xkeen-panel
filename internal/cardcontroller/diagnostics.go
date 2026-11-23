@@ -134,7 +134,8 @@ func (c *Controller) connectionRows(ctx context.Context, p profile, flows []conn
 		names[cardPrefix+custom.ID] = custom.Name
 		names[cardPrefix+"guard-"+custom.ID] = "Kill switch"
 	}
-	metricsCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	// A busy router answers over the pool sockets in well under a second.
+	metricsCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	workers := newWorkerSnapshot(metricsCtx, c.rt, p, c.catalog, readMember)
 	leaves := map[string]bool{}

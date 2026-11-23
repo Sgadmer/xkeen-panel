@@ -279,6 +279,8 @@ func (c *Controller) MountExclusions(r chi.Router, dir string) {
 		var req struct {
 			Value   string `json:"value"`
 			Comment string `json:"comment"`
+			// «Вернуть» brings back a switched-off entry switched off.
+			Disabled bool `json:"disabled"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
 		dec.DisallowUnknownFields()
@@ -291,6 +293,7 @@ func (c *Controller) MountExclusions(r chi.Router, dir string) {
 			send(w, exclusionsView{}, err)
 			return
 		}
+		entry.Disabled = req.Disabled
 		v, e := c.updateExclusions(r.Context(), dir, func(p profile, s *xkeen.Exclusions) error {
 			if len(s.Entries) >= xkeen.MaxExclusions {
 				return errors.New("достигнут предел в 500 исключений")

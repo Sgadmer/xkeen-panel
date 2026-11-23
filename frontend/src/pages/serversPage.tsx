@@ -13,6 +13,8 @@ import {
     IconLink,
     IconLayersLinked,
     IconPlus,
+    IconQuestionMark,
+    IconRobot,
     IconSearch,
     IconWand,
     IconWorld,
@@ -188,6 +190,9 @@ export function ServersPage() {
     const hasSubscription = Boolean(
         subscription?.configured || (subscription?.server_count ?? 0) > 0,
     )
+    // Until the subscription is read the screen says nothing about it, rather
+    // than asking for a subscription that is there.
+    const subscriptionKnown = subscription !== undefined
     const warnings = importWarnings(
         subscription?.import_report ??
             refreshSubscription.data?.import_report,
@@ -285,9 +290,10 @@ export function ServersPage() {
                         </IconTile>
                     }
                     label='Подписки и источники'
-                    tone={hasSubscription ? undefined : 'tint'}
+                    tone={hasSubscription || !subscriptionKnown ? undefined : 'tint'}
                     hint={
-                        sources?.length
+                        sources === undefined ? 'Загрузка…'
+                            : sources.length
                             ? sources.length === 1 ? sources[0].name : 'Источников: ' + sources.length
                             : 'Добавить подписку, ссылку сервера или файл'
                     }
@@ -350,7 +356,10 @@ export function ServersPage() {
     const profiles = providerModes.filter(s => matches(query, s.name, serverCountry(s), s.source_name))
     const providerCard = profiles.length > 0 && (
         <Group title={<span className='flex min-w-0 items-center justify-between gap-2'>
-            <span>Режимы провайдера</span>
+            <span className='inline-flex items-center gap-1.5'>
+                <IconRobot aria-hidden className='size-[17px] shrink-0' stroke={2} />
+                Режимы провайдера
+            </span>
             <ProbeButton label='Обновить пинг режимов провайдера' disabled={checking || routeBusy}
                 measuring={providerModes.every(server => isPendingServer(server.id))}
                 onClick={() => check(providerModes.map(server => server.id))} />
@@ -390,7 +399,7 @@ export function ServersPage() {
                 subtitle={
                     hasSubscription
                         ? `Серверов: ${subscription?.server_count ?? servers.length}${isPool ? ` · В автовыборе ${pool?.nodes?.length ?? 0}` : ''}${updated ? ` · обновлено ${updated}${updated === 'только что' ? '' : ' назад'}` : ''}`
-                        : 'Добавьте ссылку на подписку'
+                        : subscriptionKnown ? 'Добавьте ссылку на подписку' : ' '
                 }
                 action={
                     <div className='flex items-center gap-2'>
@@ -907,7 +916,9 @@ function CountryFilter({ groups, value, onChange }: {
                 aria-pressed={code === value} onClick={() => onChange(code)}
                 className={cn('min-h-9 shrink-0 cursor-pointer select-none rounded-full px-4 text-[15px] tracking-[-0.24px] transition-colors',
                     code === value ? 'bg-white font-semibold text-black' : 'border border-white/12 bg-white/6 font-medium hover:bg-white/10')}>
-                {code === 'all' ? 'Все' : countryLabel(code) || 'Без страны'}
+                {code === 'all' ? 'Все' : countryLabel(code) || <span className='inline-flex items-center gap-1'>
+                    <IconQuestionMark aria-hidden className='size-4 shrink-0' stroke={2.2} />Без страны
+                </span>}
             </button>)}
         </div>
         <button type='button' aria-label='Страны правее' title='Страны правее'
@@ -956,7 +967,10 @@ function CountryCatalog({ groups, rowProps, probeBusy, isPendingGroup, onCheckGr
         {groups.map(group => <Group key={group.code}
             className='[&>h2]:text-[15px] [&>h2]:font-semibold [&>h2]:normal-case [&>h2]:text-foreground'
             title={<span className='flex min-w-0 items-center justify-between gap-2'>
-                <span>{countryLabel(group.code) || 'Страна не определена'} · {group.list.length}</span>
+                <span className='inline-flex items-center gap-1.5'>
+                    {group.code === OTHER && <IconQuestionMark aria-hidden className='size-[17px] shrink-0 text-muted-foreground' stroke={2.2} />}
+                    {countryLabel(group.code) || 'Без страны'} · {group.list.length}
+                </span>
                 <ProbeButton label={`Обновить пинг группы ${countryLabel(group.code) || 'Без страны'}`}
                     disabled={probeBusy} measuring={isPendingGroup(group.code)} onClick={() => onCheckGroup(group.code)} />
             </span>}>
@@ -1008,7 +1022,7 @@ function ProtocolBadge({ protocol, className = 'ml-2 align-middle' }: { protocol
         protocol.toLowerCase(),
     )
         ? 'Hysteria2'
-        : protocol === 'xray-profile' ? 'Профиль' : protocol.toUpperCase()
+        : protocol === 'xray-profile' ? 'Режим' : protocol.toUpperCase()
     return (
         <Badge variant='secondary' className={cn('text-[11px]', className)}>
             {label}
@@ -1074,6 +1088,21 @@ function checkHint(check: CheckInfo) {
     return `${what} ${agoLabel(check.at)}, в ${clock}${recent}`
 }
 
+// The same hint with each measurement coloured like the number it makes.
+function CheckHintContent({ check }: { check: CheckInfo }) {
+    const text = checkHint(check)
+    const at = text.indexOf('. Последние замеры:')
+    if (at < 0) return <>{text}</>
+    return <>
+        {text.slice(0, at)}. Последние замеры:{' '}
+        {check.answers.map((ms, i) => <span key={i}>
+            {i > 0 && ', '}
+            <span className={toneText[latencyTone(ms)]}>{ms}</span>
+        </span>)}
+        {' '}мс — показан средний из них
+    </>
+}
+
 // One server in a list: the name with its protocol and status chips, the
 // subscription and the provider's note on their own lines; the number and the
 // check time under each other on the right, the gauge centred at the edge.
@@ -1129,7 +1158,7 @@ function ServerCard({ title, titleMuted, chips, source, note, noteTitle, check, 
             </span>
             {!measuring && (
                 <span className='justify-self-end' style={{ gridColumn: 2, gridRow: timeRow }}>
-                    <Hint round={false} label={checkHint(check)}
+                    <Hint round={false} label={checkHint(check)} content={<CheckHintContent check={check} />}
                         className={cn('text-[13px] tabular-nums', check.failed ? 'text-destructive' : 'text-muted-foreground')}>
                         {check.at ? timeAgo(check.at) : 'не проверен'}
                     </Hint>

@@ -13,7 +13,7 @@ type PolicyResponse = { policy: Policy; services: { id: string; name: string; do
 const choices: { id: Mode; title: string; hint: string }[] = [
     { id: 'selected', title: 'VPN для выбранных сервисов', hint: 'Выбранные сервисы и адреса через VPN, остальное напрямую.' },
     { id: 'all', title: 'VPN для всего, кроме исключений', hint: 'Трафик выбранных устройств через VPN. Ваши исключения и локальная сеть остаются напрямую.' },
-    { id: 'preserve', title: 'Сохранить текущую / провайдерскую политику', hint: 'Сохранить прежние правила роутера или маршрутизацию составного профиля подписки.' },
+    { id: 'preserve', title: 'Сохранить текущую / провайдерскую политику', hint: 'Сохранить прежние правила роутера или маршрутизацию режима провайдера.' },
 ]
 
 export function RoutingModeForm({ onApplied }: { onApplied?: () => void }) {
