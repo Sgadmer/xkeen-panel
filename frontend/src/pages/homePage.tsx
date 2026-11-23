@@ -24,8 +24,10 @@ import {
 } from '@/hooks/usePanelData'
 import { useServerActions } from '@/hooks/useServerActions'
 import {
+    agoLabel,
     countryName,
     countryFlag,
+    isSet,
     panelEvents,
     routesDownText,
     serverCountry,
@@ -82,7 +84,13 @@ export function HomePage() {
     // A server named after its country would otherwise be printed twice.
     const place = countryName(code)
     const sameName = !!place && !!endpoint && endpoint.replace(/[^\p{L}\p{N} ]/gu, '').trim().toLowerCase() === place.toLowerCase()
-    const latency = !direct && !blocked && !awaitingMember && status && status.latency_ms > 0 ? `${status.latency_ms} мс` : ''
+    // The same number as in the server list: the pool's own measurement, or the last check of the server.
+    const routerMs = node?.router_latency_ms !== undefined && node.router_latency_ms > 0 ? node.router_latency_ms : 0
+    const checkedMs = current?.probe_kind === 'https' && current.latency_ms > 0 ? current.latency_ms : 0
+    const latency = direct || blocked || awaitingMember ? ''
+        : routerMs ? `${routerMs} мс`
+        : checkedMs ? `${checkedMs} мс` + (isSet(current?.last_checked) ? ' · ' + agoLabel(current?.last_checked) : '')
+        : ''
 
     const inVpn = devices?.devices.filter(d => d.vpn).length ?? 0
     const online = devices?.devices.filter(d => d.active).length ?? 0
